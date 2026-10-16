@@ -217,6 +217,50 @@ describe("local Runtime installation", () => {
     },
   );
 
+  it("ignores Finder metadata without weakening payload verification", async () => {
+    const value = await distribution();
+    const plan = await planLocalInstall({
+      source: value.source,
+      installRoot: value.installRoot,
+      platform: process.platform,
+      arch: process.arch,
+    });
+    const first = await applyLocalInstall(plan);
+    await writeFile(path.join(plan.version_directory, ".DS_Store"), "finder");
+
+    await expect(
+      verifyInstalledDistribution(
+        plan.version_directory,
+        process.platform,
+        process.arch,
+      ),
+    ).resolves.toMatchObject({ version: plan.version });
+    const repeated = await applyLocalInstall(plan);
+    expect(first.created_version).toBe(true);
+    expect(repeated.created_version).toBe(false);
+
+    await writeFile(
+      path.join(plan.version_directory, "unexpected-runtime-file"),
+      "not metadata",
+    );
+    await expect(
+      verifyInstalledDistribution(
+        plan.version_directory,
+        process.platform,
+        process.arch,
+      ),
+    ).rejects.toThrow("distribution_manifest_incomplete");
+  });
+
+  it("does not let a non-file masquerade as Finder metadata", async () => {
+    const value = await distribution();
+    await symlink("../outside", path.join(value.source, ".DS_Store"));
+
+    await expect(
+      verifyInstalledDistribution(value.source, process.platform, process.arch),
+    ).rejects.toThrow("distribution_path_invalid");
+  });
+
   it.each(["extra", "hash"])(
     "same-version reuse still rejects %s changes to installed canonical trees",
     async (change) => {

@@ -1404,7 +1404,7 @@ if (desktopVersion !== null) {
             component: "desktop.lifecycle",
             event: "desktop.runtime_stop",
             outcome: event.outcome,
-            details: { runtime: event.detail },
+            details: { runtime_state: event.detail },
           });
         },
       });

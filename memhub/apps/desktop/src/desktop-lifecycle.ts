@@ -108,7 +108,9 @@ export function startDesktopLifecycle(options: LifecycleOptions): void {
     shutdown = startup
       .catch(() => {})
       .then(options.stop)
-      .catch(options.onError)
+      // Quit-time failures are logged by stop itself. A second modal here can
+      // only obscure the startup error that initiated this shutdown.
+      .catch(report)
       .finally(() => {
         stopped = true;
         app.quit();

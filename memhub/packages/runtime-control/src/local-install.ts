@@ -622,6 +622,12 @@ async function treeFiles(root: string, current = root): Promise<string[]> {
   entries.sort((left, right) => left.name.localeCompare(right.name));
   const result: string[] = [];
   for (const entry of entries) {
+    // Finder may add this metadata file after installation. It is not Runtime
+    // payload and must not make an otherwise verified install unreusable.
+    if (entry.name === ".DS_Store") {
+      if (!entry.isFile()) throw new Error("distribution_path_invalid");
+      continue;
+    }
     const target = path.join(current, entry.name);
     const relative = path.relative(root, target);
     if (!safeRelative(relative)) throw new Error("distribution_path_invalid");

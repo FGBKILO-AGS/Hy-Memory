@@ -234,7 +234,9 @@ describe("desktop lifecycle failure paths", () => {
     await f.flush();
     expect(f.createWindow).not.toHaveBeenCalled();
     expect(f.quit().preventDefault).toHaveBeenCalled();
-    f.stopping.resolve();
+    // Teardown can fail after the startup error (for example, while writing a
+    // diagnostic). It must not replace the useful error with a second dialog.
+    f.stopping.reject(new Error("diagnostic_detail_key_invalid"));
     await f.flush();
     // Whatever did come up before the failure still has to be torn down.
     expect(f.stop).toHaveBeenCalledTimes(1);

@@ -256,6 +256,7 @@ describe("installPackagedRuntime", () => {
     });
     const selectedBefore = await readlink(current);
     const inodeBefore = (await lstat(current)).ino;
+    await writeFile(path.join(current, ".DS_Store"), "finder metadata");
     await expect(
       installPackagedRuntime({
         resourcesPath: resources,

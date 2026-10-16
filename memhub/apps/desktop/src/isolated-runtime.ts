@@ -124,9 +124,10 @@ export function hourlyRuntimeInstanceId(): string {
  * `build_number` is the only ordering authority the installer compares, so a
  * package that omits it defaults to 0 and can never outrank an earlier install:
  * R->R.1 would be refused as a downgrade. The value is baked into the bundle's
- * `LSEnvironment` at pack time (`apps/desktop/scripts/after-pack.cjs`); this
- * reads it back and never invents one, so a source checkout that did not pass a
- * build number stays undefined rather than fabricating order.
+ * `LSEnvironment` at pack time (`apps/desktop/scripts/after-pack.cjs`) and is
+ * also compiled from the canonical root release contract. This reader accepts
+ * either source so Finder launches still carry ordering even when an external
+ * packaging pipeline omitted the plist field.
  */
 export function resolvePackagedBuildNumber(
   environmentValue: unknown,
