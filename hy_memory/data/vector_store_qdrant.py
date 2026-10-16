@@ -16,11 +16,10 @@ Agent Memory V2 - VectorStore (Qdrant)
 - 简化运维，后续可按需拆分
 """
 
-import asyncio
 import concurrent.futures
 import os
 import threading
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Callable
 from pathlib import Path
 import logging
 
@@ -30,11 +29,9 @@ from ..models.memory import (
 from ..config import MemoryConfig
 from ..utils.async_executor import run_in_executor_guarded
 from .vector_store_base import VectorStoreBase
+from .vector_store_chroma import _vdb_executor
 
 logger = logging.getLogger(__name__)
-
-# VDB 独立线程池（与 Chroma 共享同一策略）
-from .vector_store_chroma import _vdb_executor
 
 
 def _run_in_vdb_pool(func, *args, **kwargs):
@@ -42,6 +39,70 @@ def _run_in_vdb_pool(func, *args, **kwargs):
     import functools
     call = functools.partial(func, *args, **kwargs) if args or kwargs else func
     return run_in_executor_guarded(_vdb_executor, call)
+
+
+class _LocalQdrantOwner:
+    """Keep one local Qdrant client and its SQLite state on one owner thread.
+
+    Local Qdrant may enable SQLite's ``check_same_thread`` on environments
+    compiled with ``THREADSAFE=2``. The public async surface still uses the
+    shared VDB pool, but every actual client access is forwarded to this
+    instance's single owner thread.
+    """
+
+    def __init__(self, factory: Callable[[], Any]):
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="qdrant-local-owner",
+        )
+        self._lifecycle_lock = threading.Lock()
+        self._closed = False
+        try:
+            self._client = self._executor.submit(factory).result()
+        except BaseException:
+            self._closed = True
+            self._executor.shutdown(wait=True, cancel_futures=True)
+            raise
+
+    def _submit(self, callback: Callable[[], Any]) -> Any:
+        with self._lifecycle_lock:
+            if self._closed:
+                raise RuntimeError("Local Qdrant client is closed")
+            future = self._executor.submit(callback)
+        return future.result()
+
+    def __getattr__(self, name: str) -> Any:
+        is_callable, value = self._submit(
+            lambda: (
+                callable(attribute := getattr(self._client, name)),
+                None if callable(attribute) else attribute,
+            )
+        )
+        if not is_callable:
+            return value
+
+        def invoke(*args: Any, **kwargs: Any) -> Any:
+            return self._submit(
+                lambda: getattr(self._client, name)(*args, **kwargs)
+            )
+
+        return invoke
+
+    def close(self) -> None:
+        def close_owned_client() -> None:
+            client, self._client = self._client, None
+            if client is not None:
+                client.close()
+
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closed = True
+            future = self._executor.submit(close_owned_client)
+        try:
+            future.result()
+        finally:
+            self._executor.shutdown(wait=True, cancel_futures=True)
 
 
 class QdrantVectorStore(VectorStoreBase):
@@ -113,8 +174,8 @@ class QdrantVectorStore(VectorStoreBase):
             self._is_local = True
             # 兼容性处理: 清理高版本 qdrant-client 写入的 meta.json 中的未知字段
             self._patch_local_meta(vs_config.persist_directory)
-            self._client = QdrantClient(
-                path=vs_config.persist_directory,
+            self._client = _LocalQdrantOwner(
+                lambda: QdrantClient(path=vs_config.persist_directory)
             )
 
         # 确保集合存在（同步调用，在 to_thread 中执行）
@@ -217,7 +278,13 @@ class QdrantVectorStore(VectorStoreBase):
                     has_sparse = False
             return has_sparse
 
-        has_sparse = await _run_in_vdb_pool(_ensure_collection)
+        try:
+            has_sparse = await _run_in_vdb_pool(_ensure_collection)
+        except BaseException:
+            client, self._client = self._client, None
+            if client is not None:
+                await _run_in_vdb_pool(client.close)
+            raise
         self._supports_fulltext = bool(has_sparse and bm25_fastembed.is_available())
         logger.info(
             f"[qdrant] fulltext(BM25 sparse)={'on' if self._supports_fulltext else 'off'}"
@@ -1043,7 +1110,10 @@ class QdrantVectorStore(VectorStoreBase):
                 FieldCondition(key="status", match=MatchAny(any=status_values))
             )
         if layers:
-            layer_values = [l.value if hasattr(l, 'value') else str(l) for l in layers]
+            layer_values = [
+                layer.value if hasattr(layer, "value") else str(layer)
+                for layer in layers
+            ]
             if not allow_raw_layer:
                 layer_values = [v for v in layer_values if v != MemoryLayer.L1_RAW.value]
             if layer_values:
@@ -1372,9 +1442,9 @@ class QdrantVectorStore(VectorStoreBase):
 
     async def close(self) -> None:
         """关闭客户端"""
-        if self._client:
-            self._client.close()
-            self._client = None
+        client, self._client = self._client, None
+        if client is not None:
+            await _run_in_vdb_pool(client.close)
 
     # ================================================================
     # Keyword Search (Full-text)
@@ -1412,8 +1482,6 @@ class QdrantVectorStore(VectorStoreBase):
             except Exception as e:
                 logger.debug(f"[qdrant] inspect search_text index failed (will try create anyway): {e}")
 
-            target_tokenizer_value = getattr(TokenizerType.WHITESPACE, "value", "whitespace")
-
             if existing_tokenizer is not None:
                 if str(existing_tokenizer).lower().endswith("whitespace") or str(existing_tokenizer).lower() == "whitespace":
                     return  # 已经是新格式，啥都不做
@@ -1436,7 +1504,9 @@ class QdrantVectorStore(VectorStoreBase):
                     max_token_len=20,
                 ),
             )
-            logger.info(f"[qdrant] Created search_text text index (whitespace) on existing collection")
+            logger.info(
+                "[qdrant] Created search_text text index (whitespace) on existing collection"
+            )
         except Exception as e:
             # 兜底：未支持或并发竞争，静默
             logger.debug(f"[qdrant] _ensure_text_index swallowed: {e}")
@@ -1510,7 +1580,10 @@ class QdrantVectorStore(VectorStoreBase):
             )
         if layers:
             must_conditions.append(
-                FieldCondition(key="layer", match=MatchAny(any=[l.value for l in layers]))
+                FieldCondition(
+                    key="layer",
+                    match=MatchAny(any=[layer.value for layer in layers]),
+                )
             )
         if status_filter:
             must_conditions.append(
@@ -1729,7 +1802,7 @@ class QdrantVectorStore(VectorStoreBase):
 
         if changed:
             meta_path.write_text(_json.dumps(meta), encoding="utf-8")
-            logger.info(f"Patched Qdrant meta.json: removed unsupported fields")
+            logger.info("Patched Qdrant meta.json: removed unsupported fields")
 
     # ================================================================
     # Tag Index（per-user tag embedding，供 reader_hybrid_tag 使用）
