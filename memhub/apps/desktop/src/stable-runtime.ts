@@ -137,3 +137,26 @@ export function stableRuntimeErrorCode(error: unknown): string {
   }
   return "desktop_start_failed";
 }
+
+/**
+ * `installUserService` reports a durable `launchctl disable` override with this
+ * exact code. It is a state to surface, not a failure to undo: the installer
+ * never re-enables a service the user or the system disabled, and the macOS
+ * platform checks assert that refusal
+ * (`install_refuses_to_re_enable_a_disabled_service`).
+ *
+ * The override outlives a re-install, so treating it as fatal leaves an
+ * affected machine with an app that exits on every launch. Desktop degrades
+ * instead, owning the Runtime as a child process, and reports the durable
+ * state rather than clearing it.
+ *
+ * Only this exact code degrades. Every other install failure keeps failing
+ * closed, so a real misconfiguration still surfaces instead of hiding behind a
+ * child process that may not serve hosts either.
+ */
+export function isDisabledServiceInstallError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message === "runtime_service_disabled_by_system"
+  );
+}
