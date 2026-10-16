@@ -103,6 +103,7 @@ import { createSourceChangeHandler } from "./source-change-handler";
 import { SourceDirectoryPicker } from "./source-directory-picker";
 import {
   installBundledCliIfNeeded,
+  isDisabledServiceInstallError,
   isInstalledApplicationsApp,
   stableRuntimeErrorCode,
   startStableRuntimeRepair,
@@ -1039,7 +1040,26 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
               await removeRuntimeServiceOwner(dataDir);
             else await writeRuntimeServiceOwner(dataDir, previousOwner);
           }
-          throw error;
+          // A durable `launchctl disable` override is a state to report, not a
+          // failure to undo: `installUserService` never re-enables a service
+          // the user or the system disabled, and the macOS platform checks
+          // assert that refusal. It must not brick startup either, so bring
+          // the Runtime up as a child process, exactly as the non-managed mode
+          // does. The login-time service stays disabled; the override is left
+          // intact and only reported.
+          if (!isDisabledServiceInstallError(error)) throw error;
+          diagnostics.log({
+            level: "warn",
+            component: "desktop.stable_runtime",
+            event: "stable_runtime.service_disabled",
+            outcome: "degraded",
+            error_code: "runtime_service_disabled_by_system",
+          });
+          await ensureRuntimeProcess({
+            dataDir,
+            launch: runtimeLaunch(),
+            attempts: app.isPackaged ? 360 : 120,
+          });
         }
       }
       if (owner?.owner === "app" && !startAtLogin) {
