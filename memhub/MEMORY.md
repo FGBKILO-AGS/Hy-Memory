@@ -15,12 +15,12 @@ write、search，并把搜索结果格式化为可交给模型的 memory text ch
 
 ```text
 distribution: hy-memory
-version:      2.0.1
+version:      2.0.2
 mode:         按运行时配置选择
 reader:       hybrid
 ```
 
-仓库 pin、lockfile 和运行时版本守卫均固定到公开的 `hy-memory==2.0.1`。
+仓库 pin、lockfile 和运行时版本守卫均固定到公开的 `hy-memory==2.0.2`。
 MemHub 在本地 Runtime 内嵌入 SDK，但不绕过自身的来源授权、模型授权、Evidence、
 Governance 和撤权边界。
 
@@ -36,6 +36,40 @@ MemHub 对 SDK 使用以下公开、可复现的本地策略：
 - 模型与远程 embedding 参数来自版本化 Model Profile；
 - API Key 进入系统安全存储，不写入仓库、安装包、日志或 HY metadata；
 - 服务端数据库、租户队列及宿主 shell 中的 ambient 凭据不会进入 SDK config。
+
+发布包固定应用以下 SDK 行为配置：
+
+| 环境变量 | 值 |
+|---|---|
+| `MEMORY_MODE` | `ultra` |
+| `MEMORY_ENABLE_GRAPH` | `true` |
+| `MEMORY_GRAPH_RERANK_ENABLED` | `false` |
+| `MEMORY_GRAPH_TEMPORAL_SPINE` | `true` |
+| `MEMORY_TOPIC_SUMMARY_ENABLED` | `false` |
+| `MEMORY_EPISODE_SUMMARY_ENABLED` | `false` |
+| `MEMORY_EPISODE_RECALL_ENABLED` | `true` |
+| `MEMORY_DYNAMIC_EPISODE_ENABLED` | `true` |
+| `MEMORY_SESSION_EPISODE_ENABLED` | `false` |
+| `MEMORY_SESSION_EPISODE_CONTEXT_ENABLED` | `false` |
+| `MEMORY_EPISODE_CAPSULE_CONTEXT_ENABLED` | `true` |
+| `MEMORY_EPISODE_CAPSULE_QUERY_MIN` | `0.65` |
+| `MEMORY_EPISODE_CAPSULE_ASSIGNMENT_MIN` | `0.60` |
+| `MEMORY_EPISODE_CAPSULE_FIRST_RANK_MAX` | `3` |
+| `MEMORY_EPISODE_CAPSULE_MEMBER_LIMIT` | `3` |
+| `MEMORY_ENABLE_INTENTION` | `false` |
+| `MEMORY_ENABLE_QUERY_REWRITE` | `false` |
+| `MEMORY_FEW_SHOT_ENABLED` | `true` |
+| `MEMORY_HYBRID_V2_QUERY_EXPAND` | `1` |
+| `MEMORY_HYBRID_V2_GEO_INTENT_PRIOR` | `0.6` |
+| `MEMORY_HYBRID_V2_DIVERSITY` | `1` |
+| `MEMORY_HYBRID_V2_TEMPORAL_ADMIT_PRIOR` | `0.55` |
+| `MEMORY_HYBRID_V2_TEMPORAL_BOOST` | `0.18` |
+| `MEMORY_CROSS_DOMAIN_CON_THRESHOLD` | `0.5` |
+| `MEMORY_READER_ENABLE_SUMMARY` | `false` |
+| `MEMORY_SUMMARY_ENABLED_IN_SYS2` | `false` |
+| `MEMORY_LOCAL_RERANK_ENABLED` | `false` |
+| `RECONCILE_ENABLED` | `true` |
+| `HY_MEMORY_READER` | `hybrid` |
 
 这些默认值集中在
 `apps/core/src/one_memory/hy_runtime_config.py`，并由发布测试和 lockfile 共同约束。

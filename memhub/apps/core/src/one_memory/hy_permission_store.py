@@ -120,7 +120,7 @@ _UPDATE_FIELDS = frozenset(
         "supersedes",
         "superseded_by",
         "source_raw_memory_id",
-        # SDK 2.0.1 sends both of these on an in-place reconcile UPDATE.
+        # SDK 2.0.2 sends both of these on an in-place reconcile UPDATE.
         # They are metadata only and must never carry identity, permission or
         # tenant state: `owner` is a provenance label whose only values are
         # "user" / "agent" (who said this line), and `custom` is the SDK's own
@@ -462,7 +462,7 @@ class HyPermissionVectorStore:
         if node.user_id != self.__user_id or node.layer not in _CHAT_LAYERS:
             return False
         if node.layer is MemoryLayer.L0_BASIC_INFO:
-            # Public SDK 2.0.1 migrates verified legacy agent-level profiles into one
+            # Public SDK 2.0.2 migrates verified legacy agent-level profiles into one
             # user-level chain. Existing nodes still require a full proof in
             # __load; accepting their historical agent id does not authorize
             # unproven cross-agent memories.
@@ -819,7 +819,7 @@ class HyPermissionVectorStore:
                 ):
                     self.__deny("update_fields")
                 allowed |= {"custom"}
-            # `custom` is an allowed field name (SDK 2.0.1 sends it on a
+            # `custom` is an allowed field name (SDK 2.0.2 sends it on a
             # reconcile UPDATE), but the System 2 evidence counter it can hold
             # stays digest-only: only the digest scope may advance it, and only
             # by one per write. Letting the name through must not let an

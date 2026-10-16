@@ -325,7 +325,7 @@ def grant_records(supervisor, records, expected_revision=0):
 
 @asynccontextmanager
 async def raw_client(tmp_path, *, tool=None, conversation_id="raw-session"):
-    assert hy_memory_version() == "2.0.1"
+    assert hy_memory_version() == "2.0.2"
     root = tmp_path / "source"
     root.mkdir()
     database = tmp_path / "one-memory.sqlite3"
@@ -627,7 +627,7 @@ async def assert_outputs(supervisor, task, records, client, *, raw_records=None)
         memory = by_content[record.verbatim]
         output = next(output for output in outputs if output.memory_id == memory.memory_id)
         assert output.owner == CLAIMS[record.verbatim]
-        assert output.engine == "hy-memory" and output.engine_version == "2.0.1"
+        assert output.engine == "hy-memory" and output.engine_version == "2.0.2"
         assert output.hy_memory_id == memory.memory_id
         assert output.memory_revision == memory.revision
         assert output.support_refs == (evidence_ref(record),)
@@ -819,7 +819,7 @@ def test_approved_native_candidates_are_reused_without_disclosing_denied_nodes(t
             assert not oracle.errors, oracle.errors
             assert await node_snapshots(client, DENIED_IDS) == before
             assert result.status == "completed", (result.last_error_code, oracle.stages)
-            # SDK 2.0.1 keeps the `limit=1` pre-check removed, so
+            # SDK 2.0.2 keeps the `limit=1` pre-check removed, so
             # skip reconcile, so the second write now compares against the
             # already-approved candidates instead of blindly ADDing them. The
             # contract is the reuse itself, not the absence of the call: one

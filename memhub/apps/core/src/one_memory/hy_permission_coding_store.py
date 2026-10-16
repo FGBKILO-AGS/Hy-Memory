@@ -43,7 +43,7 @@ _NATIVE_WRITES = frozenset(
 
 _TIMESTAMPS = frozenset({"created_at", "updated_at"})
 
-# SDK 2.0.1 reads `config` off the coding store while routing a coding
+# SDK 2.0.2 reads `config` off the coding store while routing a coding
 # turn. The wrapper must answer it, but the native `MemoryConfig` carries
 # credentials (llm/embedder api keys, graph and cache passwords) and is a live
 # handle into the backend, so it is never handed out. Only this redacted
@@ -199,7 +199,7 @@ class HyPermissionCodingStore:
     def config(self) -> Any:
         """Read-only, redacted view of the native coding config.
 
-        SDK 2.0.1 reads `config` when it routes a coding turn. Answering
+        SDK 2.0.2 reads `config` when it routes a coding turn. Answering
         it is safe only as a projection: the native MemoryConfig is a live
         backend handle and carries credentials, so callers get plain values
         with every credential-bearing key collapsed to None. This carries no
@@ -543,7 +543,7 @@ class HyPermissionCodingStore:
     ) -> list[Any]:
         """Read recent raw trace rows, still bounded by this lease.
 
-        Public SDK 2.0.1 asks for recent history before a coding write. The native call is
+        Public SDK 2.0.2 asks for recent history before a coding write. The native call is
         scoped to the lease's own user and agent, and rows this lease cannot
         attest are filtered out, so unapproved conversations never reach a
         coding prompt through this path.

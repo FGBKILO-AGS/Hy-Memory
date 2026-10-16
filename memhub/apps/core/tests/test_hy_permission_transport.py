@@ -258,7 +258,7 @@ def test_native_entry_points_preserve_payload_response_and_restore_instances():
 def test_permission_transport_pins_the_public_sdk_identity():
     """The transport fails closed unless the audited SDK identity is installed."""
     assert HY_MEMORY_DISTRIBUTION == "hy-memory"
-    assert HY_MEMORY_VERSION == "2.0.1"
+    assert HY_MEMORY_VERSION == "2.0.2"
 
 
 @pytest.mark.parametrize("entry", ["complete", "complete_messages", "embed"])
@@ -445,7 +445,7 @@ def test_config_drift_or_overrides_deny_before_send(change):
                 elif change == "model":
                     provider._llm_config.model = "not-approved"
                 elif change == "backend":
-                    # Public SDK 2.0.1 keeps LLMBackend narrowed to OPENAI, so the
+                    # Public SDK 2.0.2 keeps LLMBackend narrowed to OPENAI, so the
                     # drifted-backend case uses an illegal sentinel value
                     # instead. It must differ from the approved openai backend,
                     # otherwise no drift is constructed at all.

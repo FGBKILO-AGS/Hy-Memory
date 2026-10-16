@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "one-memory"
-version = "1.0.0"
+version = "1.0.1"
 description = "MemHub local-first memory core"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -12,7 +12,7 @@ dependencies = [
     "fastapi>=0.141.1",
     "filelock>=3.32.4",
     # Public SDK version validated against MemHub's permission and recall contracts.
-    "hy-memory==2.0.1",
+    "hy-memory==2.0.2",
     # Retrieval's derived vector index directly consumes these locked versions.
     "chromadb==1.5.9",
     "numpy==2.5.2",
@@ -24,7 +24,7 @@ dependencies = [
     # transitive version we do not ask for is one an unrelated upgrade could
     # drop. Deliberately NOT sentence-transformers or torch: those would take
     # the installer past 2GB, and onnxruntime alone runs the exported model.
-    "onnxruntime>=1.22.0",
+    "onnxruntime==1.23.2",
     "tokenizers>=0.21.0",
     "pydantic-settings>=2.15.0",
     "uvicorn[standard]>=0.52.4",

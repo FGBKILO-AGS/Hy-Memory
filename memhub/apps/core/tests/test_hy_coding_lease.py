@@ -328,7 +328,7 @@ def test_revoking_during_coding_extraction_stops_the_route(tmp_path):
 
 
 def test_exposed_coding_config_is_a_redacted_projection_not_the_native_handle(tmp_path):
-    """Public SDK 2.0.1 reads `config` off the coding store; it must not hand out secrets.
+    """Public SDK 2.0.2 reads `config` off the coding store; it must not hand out secrets.
 
     The wrapper answers `config` so the SDK's routing works, but the native
     MemoryConfig is a live backend handle carrying api keys and passwords. This

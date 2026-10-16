@@ -2,6 +2,12 @@
 
 Hy Memory and MemHub are versioned and released independently.
 
+## Hy Memory 2.0.2 — 2026-10-17
+
+- Published
+  [`hy-memory==2.0.2`](https://pypi.org/project/hy-memory/2.0.2/) with the
+  current SDK fixes and Apache-2.0 package metadata.
+
 ## Hy Memory 2.0.1 — 2026-10-16
 
 - Published the Python distribution as
@@ -10,13 +16,13 @@ Hy Memory and MemHub are versioned and released independently.
   Because PyPI release metadata is immutable, the next SDK patch release must
   carry the updated license metadata; `2.0.1` retains its published metadata.
 
-## MemHub
+## MemHub 1.0.1 — Unreleased
 
-MemHub has no public release yet. The source version is `1.0.0` (build 4), the
-selected npm package is `memhub-cli`, and both npm publication and GitHub
-Release artifacts are still pending. Internal release-candidate builds are not
-public releases.
+- Updated the source version to `1.0.1` (build 5).
+- Pinned the public SDK to `hy-memory==2.0.2`.
+- Pinned `onnxruntime==1.23.2` to retain macOS x64 packaging support.
 
-No compatibility or deprecation policy has been adopted beyond the explicit
-CLI/Runtime protocol ranges stored in the release manifests. Future public
-releases must record user-visible changes and supported platforms here.
+## MemHub 1.0.0
+
+- Published the initial GitHub Release with macOS arm64 and Linux Runtime
+  artifacts.

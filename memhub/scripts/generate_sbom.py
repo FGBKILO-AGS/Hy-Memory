@@ -36,7 +36,7 @@ MEMMY_LICENSE = (
 MEMMY_PROVENANCE = MEMMY_LICENSE.with_name("PROVENANCE.md")
 MEMMY_PIN = "25acd5f29fc7df73b943713abe61f1b2f9839887"
 HY_MEMORY_NAME = "hy-memory"
-HY_MEMORY_VERSION = "2.0.1"
+HY_MEMORY_VERSION = "2.0.2"
 
 
 class SbomError(RuntimeError):
@@ -78,14 +78,14 @@ def hy_memory_notice(dist_info: Path | None = None) -> dict[str, str]:
         or license_name is None
         or name.group(1).strip() != HY_MEMORY_NAME
         or version.group(1).strip() != HY_MEMORY_VERSION
-        or license_name.group(1).strip() != "MIT"
+        or license_name.group(1).strip() != "Apache-2.0"
         or copyright_match is None
     ):
         raise SbomError("hy-memory license metadata is incomplete")
     return {
         "name": HY_MEMORY_NAME,
         "version": HY_MEMORY_VERSION,
-        "license": "MIT",
+        "license": "Apache-2.0",
         "copyright": copyright_match.group(0).strip(),
         "text": text,
     }

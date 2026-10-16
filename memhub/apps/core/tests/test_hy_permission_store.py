@@ -592,7 +592,7 @@ def test_update_cannot_retarget_identity_or_add_denied_chain():
         {"user_id": "other"},
         {"node_id": "other"},
         {"supersedes": ["outside"]},
-        # `custom` remains an allowed field name for SDK 2.0.1; the field it
+        # `custom` remains an allowed field name for SDK 2.0.2; the field it
         # must not smuggle through is the digest-only System 2 counter.
         {"custom": {"s2_evidence_count": 1}},
         {"tag_ners": "not-a-list"},
