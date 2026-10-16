@@ -160,3 +160,21 @@ export function isDisabledServiceInstallError(error: unknown): boolean {
     error.message === "runtime_service_disabled_by_system"
   );
 }
+
+export async function installServiceWithDisabledFallback(options: {
+  install(): Promise<void>;
+  restoreOwner(): Promise<void>;
+  reportDisabled(): Promise<void>;
+  startTransient(): Promise<void>;
+}): Promise<"managed" | "transient"> {
+  try {
+    await options.install();
+    return "managed";
+  } catch (error) {
+    await options.restoreOwner();
+    if (!isDisabledServiceInstallError(error)) throw error;
+    await options.reportDisabled();
+    await options.startTransient();
+    return "transient";
+  }
+}
