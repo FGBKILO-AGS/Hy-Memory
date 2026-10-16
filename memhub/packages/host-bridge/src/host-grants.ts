@@ -374,25 +374,33 @@ export class HostGrantStore {
   }
 
   async #read(): Promise<StoreData> {
-    await this.#checkDirectory();
-    const file = path.join(this.#directory, FILE_NAME);
-    checkPrivate(await lstat(file), "file");
-    const handle = await open(
-      file,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
-    let raw: string;
-    try {
-      const info = await handle.stat();
-      checkPrivate(info, "file");
-      if (info.size > MAX_STORE_BYTES) fail("host_grant_store_corrupt");
-      raw = await handle.readFile("utf8");
-    } finally {
-      await handle.close();
+    const deadline = performance.now() + this.#lockTimeoutMs;
+    for (;;) {
+      await this.#checkDirectory();
+      const file = path.join(this.#directory, FILE_NAME);
+      checkPrivate(await lstat(file), "file");
+      const handle = await open(
+        file,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
+      try {
+        const info = await handle.stat();
+        // On Linux an atomic rename over this path sets the old, still-open
+        // inode's link count to zero. That is a normal concurrent commit, not
+        // an unsafe store. Close this stale handle and validate the new path.
+        if (info.nlink === 0) {
+          if (performance.now() >= deadline) fail("host_grant_store_busy");
+          continue;
+        }
+        checkPrivate(info, "file");
+        if (info.size > MAX_STORE_BYTES) fail("host_grant_store_corrupt");
+        const data = parseStore(await handle.readFile("utf8"));
+        this.#observe(data);
+        return data;
+      } finally {
+        await handle.close();
+      }
     }
-    const data = parseStore(raw);
-    this.#observe(data);
-    return data;
   }
 
   #observe(data: StoreData): void {
