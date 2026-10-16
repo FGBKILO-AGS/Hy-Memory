@@ -97,4 +97,29 @@ describe("Linux runtime scripts", () => {
     assert.match(script, /cleanup-uninstall/);
     assert.doesNotMatch(script, /install:\s*["']blocked["']/);
   });
+
+  it("uploads successful tagged builds only to a draft release", async () => {
+    const workflow = await readFile(
+      path.join(directory, "../../../../.github/workflows/linux-lifecycle.yml"),
+      "utf8",
+    );
+
+    assert.match(
+      workflow,
+      /publish-draft-release:[\s\S]*startsWith\(github\.ref, 'refs\/tags\/v'\)/,
+    );
+    assert.match(
+      workflow,
+      /publish-draft-release:[\s\S]*permissions:\s*\n\s*contents: write/,
+    );
+    assert.match(workflow, /actions\/download-artifact@[a-f0-9]{40}/);
+    assert.match(
+      workflow,
+      /verify-release-version\.mjs[\s\S]*--channel stable/,
+    );
+    assert.match(workflow, /sha256sum -c/);
+    assert.match(workflow, /--json isDraft[\s\S]*--jq \.isDraft/);
+    assert.match(workflow, /gh release create[\s\S]*--draft/);
+    assert.match(workflow, /gh release upload[\s\S]*--clobber/);
+  });
 });

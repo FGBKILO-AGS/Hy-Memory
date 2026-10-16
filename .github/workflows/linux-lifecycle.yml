@@ -102,3 +102,65 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+
+  publish-draft-release:
+    if: ${{ inputs.run_lifecycle && startsWith(github.ref, 'refs/tags/v') }}
+    needs: matrix
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: memhub-runtime-linux-*
+          path: memhub/release-assets
+          merge-multiple: true
+      - name: Verify tag and Linux release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p 'require("./package.json").version')
+          node scripts/verify-release-version.mjs \
+            --channel stable \
+            --version "$version" \
+            --build-number "$(node -p 'require("./package.json").release.build_number')" \
+            --tag "$GITHUB_REF_NAME"
+          for arch in x64 arm64; do
+            archive="release-assets/memhub-runtime-v${version}-linux-${arch}.tar.gz"
+            test -f "$archive"
+            test -f "$archive.sha256"
+            (
+              cd release-assets
+              sha256sum -c "$(basename "$archive.sha256")"
+            )
+          done
+      - name: Upload Linux assets to a draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            test "$(
+              gh release view "$GITHUB_REF_NAME" \
+                --repo "$GITHUB_REPOSITORY" \
+                --json isDraft \
+                --jq .isDraft
+            )" = "true"
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --draft \
+              --generate-notes \
+              --title "$GITHUB_REF_NAME"
+          fi
+          gh release upload "$GITHUB_REF_NAME" \
+            release-assets/memhub-runtime-v*-linux-*.tar.gz \
+            release-assets/memhub-runtime-v*-linux-*.tar.gz.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber

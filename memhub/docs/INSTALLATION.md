@@ -12,8 +12,10 @@ MemHub `v1.0.1`（build 5）的发行目标如下：
 
 正式支持以对应 GitHub Release 的 `release-manifest.json` 为准。Manifest 记录版本、
 build、Git commit、协议范围、文件大小和 SHA-256；缺少条目的平台不属于该版本支持范围。
-Linux Runtime 可通过仓库的 `Linux lifecycle` GitHub Actions 手动构建和下载。macOS
-制品由发行流水线完成签名与公证后上传；GitHub 不保存 Apple 私钥。
+在 `v*` tag 上手动运行仓库的 `Linux lifecycle` GitHub Actions 后，Linux Runtime
+和 SHA-256 文件会自动上传到对应的 Draft Release；普通分支运行只保留 Actions
+Artifact。macOS 制品由发行流水线完成签名与公证后上传到同一个 Draft Release；
+GitHub 不保存 Apple 私钥。所有平台制品核对完成后再发布 Release。
 
 最低支持 macOS 13。当前更新方式是从 GitHub Releases 手动下载新版本，不包含
 auto-updater。
