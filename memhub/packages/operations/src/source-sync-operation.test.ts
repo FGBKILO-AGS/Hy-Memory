@@ -47,9 +47,9 @@ describe("source sync operation", () => {
   });
 
   it("refuses a missing source id", () => {
-    expect(() => buildSourceSyncRequest(source({ source_id: "" }), true)).toThrow(
-      SourceSyncInputError,
-    );
+    expect(() =>
+      buildSourceSyncRequest(source({ source_id: "" }), true),
+    ).toThrow(SourceSyncInputError);
   });
 
   it("requires authorization and an implemented live-sync capability", () => {

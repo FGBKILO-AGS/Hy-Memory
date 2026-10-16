@@ -1,13 +1,12 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
-
-import { CORE_READINESS_DEFAULTS, CoreSupervisor } from "./core-supervisor.js";
-import type { DiagnosticInput } from "./diagnostic-log.js";
-import { DiagnosticLogger } from "./diagnostic-log.js";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { CORE_READINESS_DEFAULTS, CoreSupervisor } from "./core-supervisor.js";
+import type { DiagnosticInput } from "./diagnostic-log.js";
+import { DiagnosticLogger } from "./diagnostic-log.js";
 
 /** A child that only exits when the test drives it, so we can simulate an
  * unexpected Core crash (not a deliberate stop). */
@@ -362,7 +361,11 @@ describe("Core crash recovery (macOS launchd Runtime)", () => {
     }
     // The streak has to end in a circuit, not in an endless retry: relaunching
     // is what wears the heap down.
-    for (let crash = 0; crash < 6 && !events.includes("core.restart_circuit_opened"); crash += 1) {
+    for (
+      let crash = 0;
+      crash < 6 && !events.includes("core.restart_circuit_opened");
+      crash += 1
+    ) {
       const child = children[children.length - 1];
       child?.emit("exit", 1, null);
       const seen = events.length;

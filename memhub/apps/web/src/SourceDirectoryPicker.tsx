@@ -8,8 +8,8 @@ import { createPortal } from "react-dom";
 import { previewSourceDirectory } from "./api";
 import { saveSourceRoot } from "./source-state";
 import { traceUiAction } from "./ui-trace";
-import { useMediaPreference } from "./use-media-preference";
 import { isDefiniteJobRejection } from "./use-import-sources";
+import { useMediaPreference } from "./use-media-preference";
 import "./source-directory-picker.css";
 
 export interface SourceDirectoryPickerProps {

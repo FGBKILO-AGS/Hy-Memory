@@ -1,5 +1,4 @@
-import { chmod, mkdir, rename, rm, stat } from "node:fs/promises";
-import { appendFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 /**
@@ -59,7 +58,10 @@ async function appendBounded(target: string, chunk: string): Promise<void> {
   ) {
     await rotate(target);
   }
-  await appendFile(target, chunk, { encoding: "utf8", mode: SERVICE_LOG_FILE_MODE });
+  await appendFile(target, chunk, {
+    encoding: "utf8",
+    mode: SERVICE_LOG_FILE_MODE,
+  });
   await chmod(target, SERVICE_LOG_FILE_MODE);
 }
 
@@ -74,7 +76,10 @@ export async function createServiceLogCapture(
 ): Promise<ServiceLogCapture | null> {
   const directory = path.join(dataDir, "logs");
   try {
-    await mkdir(directory, { recursive: true, mode: SERVICE_LOG_DIRECTORY_MODE });
+    await mkdir(directory, {
+      recursive: true,
+      mode: SERVICE_LOG_DIRECTORY_MODE,
+    });
     await chmod(directory, SERVICE_LOG_DIRECTORY_MODE);
   } catch {
     return null;

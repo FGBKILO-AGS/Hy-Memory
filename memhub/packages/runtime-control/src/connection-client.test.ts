@@ -1,10 +1,4 @@
-import {
-  mkdir,
-  mkdtemp,
-  readdir,
-  rename,
-  rm,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import axios, { type AxiosRequestConfig } from "axios";

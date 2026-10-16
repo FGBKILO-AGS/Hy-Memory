@@ -1,4 +1,3 @@
-import { beforeEach, describe, expect, it } from "vitest";
 import {
   chmod,
   lstat,
@@ -10,10 +9,11 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
-  buildLinuxUninstallPlan,
   applyLinuxUninstall,
+  buildLinuxUninstallPlan,
   verifyLinuxUninstallPlan,
 } from "./linux-uninstall.js";
 
@@ -24,7 +24,9 @@ async function home() {
 const HOME = home();
 const INSTALL_ROOT = HOME.then((value) => path.join(value, "install"));
 const DATA_DIR = HOME.then((value) => path.join(value, "One Memory Data"));
-const UNIT_PATH = HOME.then((value) => path.join(value, "systemd/user/one-memory.service"));
+const UNIT_PATH = HOME.then((value) =>
+  path.join(value, "systemd/user/one-memory.service"),
+);
 const UNIT_CONTENT = "[Service]\nExecStart=old\n";
 const CLI_LINK = HOME.then((value) => path.join(value, "bin/one-memory"));
 
@@ -33,15 +35,26 @@ async function fixture() {
   await mkdir(path.join(await INSTALL_ROOT, "versions/0.0.0-linux-arm64/bin"), {
     recursive: true,
   });
-  await writeFile(path.join(await INSTALL_ROOT, "versions/0.0.0-linux-arm64/bin/one-memory"), "program");
+  await writeFile(
+    path.join(await INSTALL_ROOT, "versions/0.0.0-linux-arm64/bin/one-memory"),
+    "program",
+  );
   await mkdir(path.join(await INSTALL_ROOT, "unknown"), { recursive: true });
   await writeFile(path.join(await INSTALL_ROOT, "unknown/stray"), "stray");
-  await symlink("versions/0.0.0-linux-arm64", path.join(await INSTALL_ROOT, "current"), "dir");
+  await symlink(
+    "versions/0.0.0-linux-arm64",
+    path.join(await INSTALL_ROOT, "current"),
+    "dir",
+  );
   await mkdir(path.dirname(await UNIT_PATH), { recursive: true });
   await writeFile(await UNIT_PATH, UNIT_CONTENT);
   await chmod(await UNIT_PATH, 0o600);
   await mkdir(path.dirname(await CLI_LINK), { recursive: true });
-  await symlink(path.join(await INSTALL_ROOT, "current/bin/one-memory"), await CLI_LINK, "file");
+  await symlink(
+    path.join(await INSTALL_ROOT, "current/bin/one-memory"),
+    await CLI_LINK,
+    "file",
+  );
   await mkdir(await DATA_DIR, { recursive: true });
   await writeFile(path.join(await DATA_DIR, "data"), "keep");
 }
@@ -63,8 +76,12 @@ describe("Linux product uninstall", () => {
     expect(plan.stops_service).toBe(true);
     const receipt = await applyLinuxUninstall(plan);
     expect(receipt.removed_version_directories).toHaveLength(1);
-    await expect(lstat(path.join(await DATA_DIR, "data"))).resolves.toBeTruthy();
-    await expect(lstat(path.join(await INSTALL_ROOT, "unknown/stray"))).resolves.toBeTruthy();
+    await expect(
+      lstat(path.join(await DATA_DIR, "data")),
+    ).resolves.toBeTruthy();
+    await expect(
+      lstat(path.join(await INSTALL_ROOT, "unknown/stray")),
+    ).resolves.toBeTruthy();
     await expect(lstat(await UNIT_PATH)).resolves.toBeTruthy();
     await expect(lstat(await CLI_LINK)).rejects.toThrow();
   });
@@ -85,8 +102,12 @@ describe("Linux product uninstall", () => {
     expect(receipt.removed_cli_link).toBe(true);
     await expect(lstat(await CLI_LINK)).rejects.toThrow();
     await expect(lstat(await UNIT_PATH)).resolves.toBeTruthy();
-    await expect(lstat(path.join(await DATA_DIR, "data"))).resolves.toBeTruthy();
-    await expect(lstat(path.join(await INSTALL_ROOT, "unknown/stray"))).resolves.toBeTruthy();
+    await expect(
+      lstat(path.join(await DATA_DIR, "data")),
+    ).resolves.toBeTruthy();
+    await expect(
+      lstat(path.join(await INSTALL_ROOT, "unknown/stray")),
+    ).resolves.toBeTruthy();
   });
 
   it("preserves a link that points outside the managed installation", async () => {
@@ -101,6 +122,8 @@ describe("Linux product uninstall", () => {
     });
     await unlink(await CLI_LINK);
     await symlink("/usr/bin/true", await CLI_LINK, "file");
-    await expect(verifyLinuxUninstallPlan(plan)).rejects.toThrow("linux_cli_link_unmanaged");
+    await expect(verifyLinuxUninstallPlan(plan)).rejects.toThrow(
+      "linux_cli_link_unmanaged",
+    );
   });
 });

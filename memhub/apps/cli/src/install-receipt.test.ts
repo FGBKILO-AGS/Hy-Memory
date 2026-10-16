@@ -1,15 +1,15 @@
 import {
   mkdir,
   mkdtemp,
-  readFile,
   readdir,
+  readFile,
   rm,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-
+import { resolveEntryDiagnostics } from "./entry-diagnostics.js";
 import {
   defaultInstallReceiptPath,
   readInstallReceipt,
@@ -18,7 +18,6 @@ import {
   resolveInstalledDataDir,
   writeInstallReceipt,
 } from "./install-receipt.js";
-import { resolveEntryDiagnostics } from "./entry-diagnostics.js";
 
 async function root(): Promise<string> {
   return mkdtemp(path.join(tmpdir(), "memhub-install-receipt-"));
@@ -230,9 +229,9 @@ describe("managed install receipt", () => {
       }),
     ).toBe("/tmp/env data");
     // Receipt beats default.
-    expect(
-      await resolveDiagnosticsDataDir(["install"], { HOME: home }),
-    ).toBe(path.join(home, "receipt data"));
+    expect(await resolveDiagnosticsDataDir(["install"], { HOME: home })).toBe(
+      path.join(home, "receipt data"),
+    );
     // Invalid explicit flag must not silently fall back to the receipt.
     expect(
       await resolveDiagnosticsDataDir(

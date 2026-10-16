@@ -50,9 +50,7 @@ it("OBS-18: reads the configured model before saying it is not configured", asyn
   page();
   await userEvent.click(screen.getByRole("button", { name: "添加记忆" }));
   expect(screen.getByText(/整理模型：/).textContent).toContain("正在读取");
-  expect(
-    screen.queryByRole("button", { name: "配置模型" }),
-  ).toBeNull();
+  expect(screen.queryByRole("button", { name: "配置模型" })).toBeNull();
   release([
     {
       profile_id: "p1",

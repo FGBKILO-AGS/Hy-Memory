@@ -53,7 +53,9 @@ it.skipIf(process.platform !== "darwin")(
           process: { env: {} },
           require(name: string) {
             if (name === "node:crypto")
-              return { randomUUID: () => "00000000-0000-4000-8000-000000000000" };
+              return {
+                randomUUID: () => "00000000-0000-4000-8000-000000000000",
+              };
             if (name === "node:path") return path;
             if (name === "node:child_process")
               return {

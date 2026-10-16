@@ -143,10 +143,7 @@ export function createSourceChangeHandler(options: {
         )
           throw new SourceNotificationError("source_work_unavailable", 409);
         const after = await inspect(sourceId, bounded);
-        if (
-          after.root !== before.root ||
-          after.revision !== before.revision
-        )
+        if (after.root !== before.root || after.revision !== before.revision)
           throw new SourceNotificationError(
             "source_notification_permission_changed",
             403,

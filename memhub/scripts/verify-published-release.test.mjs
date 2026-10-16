@@ -97,7 +97,10 @@ const base = {
 };
 
 test("verifies the remotely served manifest and complete artifact", async () => {
-  const receipt = await verifyPublishedRelease({ ...base, fetchImpl: fetcher() });
+  const receipt = await verifyPublishedRelease({
+    ...base,
+    fetchImpl: fetcher(),
+  });
   assert.equal(receipt.version, "0.1.0-internal.1");
   assert.equal(receipt.bytes, artifact.byteLength);
   assert.equal(receipt.sha256, digest);
@@ -119,7 +122,11 @@ test("verifies a Desktop DMG without confusing it with the Runtime", async () =>
 
 test("rejects version drift before accepting the artifact", async () => {
   await assert.rejects(
-    verifyPublishedRelease({ ...base, version: "0.1.0-internal.2", fetchImpl: fetcher() }),
+    verifyPublishedRelease({
+      ...base,
+      version: "0.1.0-internal.2",
+      fetchImpl: fetcher(),
+    }),
     /release_version_mismatch/,
   );
 });
@@ -140,7 +147,9 @@ test("rejects a redirect to a host outside the allow-list", async () => {
     if (url.endsWith("release-manifest.json")) {
       return new Response(null, {
         status: 302,
-        headers: { location: "https://objects.example.test/release-manifest.json" },
+        headers: {
+          location: "https://objects.example.test/release-manifest.json",
+        },
       });
     }
     throw new Error("unexpected request");
@@ -155,7 +164,10 @@ test("rejects an artifact whose bytes do not match the manifest digest", async (
   await assert.rejects(
     verifyPublishedRelease({
       ...base,
-      fetchImpl: fetcher(manifest(), new TextEncoder().encode("different artifact bytes\n")),
+      fetchImpl: fetcher(
+        manifest(),
+        new TextEncoder().encode("different artifact bytes\n"),
+      ),
     }),
     /release_artifact_size_mismatch|release_artifact_hash_mismatch/,
   );

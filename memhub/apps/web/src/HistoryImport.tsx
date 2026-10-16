@@ -353,9 +353,7 @@ export function HistoryImport({
       await reviewSource(next, token);
       settle("succeeded");
     } catch (reason) {
-      settle(
-        saved ? "unknown" : apiErrorCode(reason) ? "failed" : "unknown",
-      );
+      settle(saved ? "unknown" : apiErrorCode(reason) ? "failed" : "unknown");
       if (active(token))
         setError(
           saved

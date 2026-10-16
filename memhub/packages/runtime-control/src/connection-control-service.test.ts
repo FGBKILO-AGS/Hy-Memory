@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   chmod,
   mkdir,
@@ -9,7 +10,6 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -243,9 +243,7 @@ it("real preview applies direct final-state sync with no operation receipt", asy
   await service.handle(execute(plan));
   expect(f.posts).toEqual([{ enabled: true }]);
   expect(
-    await service.handle(
-      request("receipt", { operationId: plan.operationId }),
-    ),
+    await service.handle(request("receipt", { operationId: plan.operationId })),
   ).toBeNull();
   await service.stop();
   const reopened = f.service();

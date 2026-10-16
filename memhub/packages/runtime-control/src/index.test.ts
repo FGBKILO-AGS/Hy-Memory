@@ -3,10 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  discoverRuntimeAttachment,
-  RuntimeDiscoveryError,
-} from "./index.js";
+import { discoverRuntimeAttachment, RuntimeDiscoveryError } from "./index.js";
 
 async function runtimeFixture(changes: Record<string, unknown> = {}) {
   const dataDir = await mkdtemp(path.join(tmpdir(), "runtime-control-"));
@@ -77,7 +74,9 @@ describe("Runtime attachment discovery", () => {
   });
 
   it("leaves absent, stale, legacy and parent-owned receipts to the caller", async () => {
-    const missing = await mkdtemp(path.join(tmpdir(), "runtime-control-missing-"));
+    const missing = await mkdtemp(
+      path.join(tmpdir(), "runtime-control-missing-"),
+    );
     const probe = vi.fn();
     await expect(
       discoverRuntimeAttachment({

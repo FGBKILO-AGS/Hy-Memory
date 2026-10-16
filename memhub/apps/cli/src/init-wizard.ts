@@ -99,8 +99,7 @@ export async function runInitWizard(
     "开启处理？开启后会处理历史未完成会话并持续接收新会话；输入 n 保持冻结。[Y/n]: ",
   );
   const processing = parseYesNo(processingAnswer, true);
-  if (processing === null)
-    return { state: "invalid", code: "invalid_answer" };
+  if (processing === null) return { state: "invalid", code: "invalid_answer" };
 
   return {
     state: "answered",

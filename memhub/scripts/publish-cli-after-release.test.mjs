@@ -108,7 +108,11 @@ test("rejects a package identity that differs from the configured publish name",
   const root = await fixture(t);
   await assert.rejects(
     publishCliAfterRelease(
-      { ...options, root, environment: { MEMHUB_NPM_PACKAGE: "@public/memhub" } },
+      {
+        ...options,
+        root,
+        environment: { MEMHUB_NPM_PACKAGE: "@public/memhub" },
+      },
       {
         verifyVersion: async () => ({
           version: options.version,

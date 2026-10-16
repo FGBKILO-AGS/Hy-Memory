@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const workflowUrl = new URL("../../.github/workflows/release.yml", import.meta.url);
+const workflowUrl = new URL(
+  "../../.github/workflows/release.yml",
+  import.meta.url,
+);
 
 test("the optional full release workflow is manual and preserves ordering", async () => {
   const workflow = await readFile(workflowUrl, "utf8");
@@ -15,7 +18,10 @@ test("the optional full release workflow is manual and preserves ordering", asyn
   assert.match(workflow, /verify-release-version\.mjs/);
   assert.match(workflow, /release\.build_number/);
   assert.match(workflow, /source_date_epoch=.*git show -s --format=%ct/);
-  assert.match(workflow, /SOURCE_DATE_EPOCH: \$\{\{ needs\.contract\.outputs\.source_date_epoch \}\}/);
+  assert.match(
+    workflow,
+    /SOURCE_DATE_EPOCH: \$\{\{ needs\.contract\.outputs\.source_date_epoch \}\}/,
+  );
   assert.match(workflow, /run: pnpm run sbom/);
   assert.doesNotMatch(workflow, /run: pnpm sbom/);
   assert.doesNotMatch(workflow, /github\.run_number/);
@@ -59,7 +65,10 @@ test("the optional full release workflow is manual and preserves ordering", asyn
   assert.match(workflow, /core_port=.*node -e/);
   assert.match(workflow, /ONE_MEMORY_CORE_PORT=\$core_port/);
   assert.match(workflow, /GITHUB_ENV/);
-  assert.match(workflow, /needs:\s*\n\s*- contract\s*\n\s*- verify-published-release/);
+  assert.match(
+    workflow,
+    /needs:\s*\n\s*- contract\s*\n\s*- verify-published-release/,
+  );
 
   const uses = [...workflow.matchAll(/^\s*- uses:\s*([^\s]+)\s*$/gm)].map(
     (match) => match[1],

@@ -1,13 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, type Dirent, type Stats } from "node:fs";
 import {
   access,
   chmod,
+  type FileHandle,
   lstat,
   mkdir,
   open,
-  readFile,
   readdir,
+  readFile,
   realpath,
   rename,
   rm,
@@ -908,7 +909,7 @@ async function assertExecutableFile(
   target: string,
   label: string,
 ): Promise<void> {
-  let details;
+  let details: Stats;
   try {
     details = await stat(target);
   } catch (error) {
@@ -931,7 +932,7 @@ async function assertReadableFile(
   target: string,
   label: string,
 ): Promise<void> {
-  let details;
+  let details: Stats;
   try {
     details = await stat(target);
   } catch (error) {
@@ -1062,7 +1063,8 @@ export async function applyRecallInstall(
         plan.paths.mcp,
         files.mcp.after,
         await existingMode(plan.paths.mcp),
-        () => ledger.recordWrite(plan.paths.mcp!, originalMcp, files.mcp!.after),
+        () =>
+          ledger.recordWrite(plan.paths.mcp!, originalMcp, files.mcp!.after),
       );
     }
     if (plan.paths.skill !== null && plan.next.skill !== null) {
@@ -1094,7 +1096,8 @@ export async function applyRecallInstall(
         registry.path,
         registry.after,
         await existingMode(registry.path),
-        () => ledger.recordWrite(registry.path, registry.before, registry.after),
+        () =>
+          ledger.recordWrite(registry.path, registry.before, registry.after),
       );
     }
     for (const capture of files.captures) {
@@ -3020,9 +3023,7 @@ async function canonicalizeWithMissing(input: string): Promise<string> {
   for (;;) {
     try {
       const real = await realpath(current);
-      return tail.length === 0
-        ? real
-        : path.join(real, ...[...tail].reverse());
+      return tail.length === 0 ? real : path.join(real, ...[...tail].reverse());
     } catch (error) {
       if (!isNotFound(error)) throw error;
       const parent = path.dirname(current);
@@ -3086,7 +3087,10 @@ async function snapshotAncestry(
 ): Promise<AncestrySnapshot> {
   const lexicalRoot = path.resolve(layout.containmentRoot);
   const lexical = path.resolve(target);
-  if (lexical !== lexicalRoot && !lexical.startsWith(`${lexicalRoot}${path.sep}`)) {
+  if (
+    lexical !== lexicalRoot &&
+    !lexical.startsWith(`${lexicalRoot}${path.sep}`)
+  ) {
     // Preserve the historical message: the cheap lexical rejection is the
     // same refusal it always was, just no longer the only check.
     throw new Error(
@@ -3105,7 +3109,7 @@ async function snapshotAncestry(
   // A fresh host directory legitimately does not exist yet: the installer
   // creates it. Refuse only if an existing component above it is a symlink;
   // otherwise treat the whole root as a to-be-created tail.
-  let rootStats;
+  let rootStats: Stats;
   try {
     rootStats = await lstat(canonicalRoot);
   } catch (error) {
@@ -3143,7 +3147,7 @@ async function snapshotAncestry(
       missingTail.push(parts[index]!);
       continue;
     }
-    let details;
+    let details: Stats;
     try {
       details = await lstat(current);
     } catch (error) {
@@ -3284,7 +3288,9 @@ class MutationLedger {
       target,
       restore: null,
       created,
-      plannedHashes: new Map(files.map((file) => [file.path, hash(file.after)])),
+      plannedHashes: new Map(
+        files.map((file) => [file.path, hash(file.after)]),
+      ),
     });
   }
 
@@ -3363,7 +3369,7 @@ async function treeIsExactlyPlanned(record: MutationRecord): Promise<boolean> {
   if (planned === undefined) return false;
   const seen = new Set<string>();
   const walk = async (current: string): Promise<boolean> => {
-    let entries;
+    let entries: Dirent[];
     try {
       entries = await readdir(current, { withFileTypes: true });
     } catch (error) {
@@ -3533,7 +3539,7 @@ async function assertConfigContainment(
   if (!underSelectedRoot) {
     await assertNoSymlinkAncestor(operation, config);
   }
-  let details;
+  let details: Stats;
   try {
     details = await lstat(config);
   } catch (error) {
@@ -3607,7 +3613,7 @@ async function writeLeafNoFollow(
       constants.O_CREAT |
       constants.O_EXCL |
       constants.O_NOFOLLOW;
-  let handle;
+  let handle: FileHandle;
   try {
     handle = await open(target, flags, mode);
   } catch (error) {
@@ -3874,7 +3880,7 @@ async function writeLeafExternal(
       constants.O_CREAT |
       constants.O_EXCL |
       constants.O_NOFOLLOW;
-  let handle;
+  let handle: FileHandle;
   try {
     handle = await open(targetPath, flags, mode);
   } catch (error) {
@@ -3984,7 +3990,12 @@ async function restore(
     await rmdir(skillDir).catch(() => {});
     await rmdir(path.dirname(skillDir)).catch(() => {});
   } else {
-    await atomicWrite(layout, targetPath, content, await existingMode(targetPath));
+    await atomicWrite(
+      layout,
+      targetPath,
+      content,
+      await existingMode(targetPath),
+    );
   }
 }
 

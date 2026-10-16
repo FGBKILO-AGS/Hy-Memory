@@ -184,10 +184,9 @@ describe("interactive model setup", () => {
         embedding_provider_kind: "local_onnx",
       }),
     );
-    expect(api.post).toHaveBeenCalledWith(
-      "/api/v1/model-content-permission",
-      { allowed: true },
-    );
+    expect(api.post).toHaveBeenCalledWith("/api/v1/model-content-permission", {
+      allowed: true,
+    });
     expect(prompt.written.join("\n")).not.toContain("sk-do-not-print");
   });
 

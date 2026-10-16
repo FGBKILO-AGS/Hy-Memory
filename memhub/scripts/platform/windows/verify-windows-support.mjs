@@ -7,7 +7,12 @@ const execFileAsync = promisify(execFile);
 
 async function hasWindowsPowerShell() {
   try {
-    await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.Major"]);
+    await execFileAsync("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "$PSVersionTable.PSVersion.Major",
+    ]);
     return true;
   } catch {
     return false;
@@ -20,7 +25,8 @@ async function isWindowsHost() {
 
 const windowsHost = await isWindowsHost();
 const capabilities = {
-  windows_power_shell: windowsHost && (await hasWindowsPowerShell()) ? "available" : "unavailable",
+  windows_power_shell:
+    windowsHost && (await hasWindowsPowerShell()) ? "available" : "unavailable",
 };
 
 const matrix = {

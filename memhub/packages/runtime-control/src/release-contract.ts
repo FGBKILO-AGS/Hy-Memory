@@ -28,6 +28,9 @@ export function protocolRange(value: unknown): value is ProtocolRange {
   );
 }
 
-export function protocolIncludes(range: ProtocolRange, version: number): boolean {
+export function protocolIncludes(
+  range: ProtocolRange,
+  version: number,
+): boolean {
   return version >= range.min && version <= range.max;
 }

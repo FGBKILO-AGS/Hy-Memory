@@ -11,15 +11,15 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
 import * as tar from "tar";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   acquireRuntimeDistribution,
   type HttpGet,
   parseRuntimeReleaseManifest,
-  selectRuntimeReleaseArtifact,
   type RuntimeReleaseArtifact,
   type RuntimeReleaseManifest,
+  selectRuntimeReleaseArtifact,
   validateTarEntry,
 } from "./release-download.js";
 
@@ -42,7 +42,9 @@ async function fixture(
     manifestPlatform?: "darwin" | "linux";
   } = {},
 ) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "memhub-release-download-"));
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "memhub-release-download-"),
+  );
   roots.push(root);
   const distribution = path.join(root, "distribution");
   await mkdir(distribution, { mode: 0o700 });
@@ -236,8 +238,18 @@ describe("archive entry safety", () => {
     ["../outside", "File", undefined, "release_archive_path_invalid"],
     ["/absolute", "File", undefined, "release_archive_path_invalid"],
     ["safe\\windows", "File", undefined, "release_archive_path_invalid"],
-    ["safe/device", "CharacterDevice", undefined, "release_archive_type_invalid"],
-    ["safe/symlink", "SymbolicLink", "../../outside", "release_archive_link_escapes"],
+    [
+      "safe/device",
+      "CharacterDevice",
+      undefined,
+      "release_archive_type_invalid",
+    ],
+    [
+      "safe/symlink",
+      "SymbolicLink",
+      "../../outside",
+      "release_archive_link_escapes",
+    ],
     ["safe/hardlink", "Link", "../outside", "release_archive_link_escapes"],
     ["safe/hardlink", "Link", "/absolute", "release_archive_link_escapes"],
   ] as const)(
@@ -254,15 +266,20 @@ describe("archive entry safety", () => {
     ["safe/directory", "Directory", undefined],
     ["safe/symlink", "SymbolicLink", "../target"],
     ["safe/hardlink", "Link", "safe/target"],
-  ] as const)("accepts contained path=%s type=%s link=%s", (entryPath, type, linkPath) => {
-    expect(() => validateTarEntry(entryPath, type, linkPath)).not.toThrow();
-  });
+  ] as const)(
+    "accepts contained path=%s type=%s link=%s",
+    (entryPath, type, linkPath) => {
+      expect(() => validateTarEntry(entryPath, type, linkPath)).not.toThrow();
+    },
+  );
 });
 
 describe("remote Runtime acquisition", () => {
   it("downloads, hashes, safely extracts and verifies the existing distribution contract", async () => {
     const value = await fixture();
-    const temporaryParent = await mkdtemp(path.join(os.tmpdir(), "memhub-release-parent-"));
+    const temporaryParent = await mkdtemp(
+      path.join(os.tmpdir(), "memhub-release-parent-"),
+    );
     roots.push(temporaryParent);
     const acquired = await acquireRuntimeDistribution({
       manifestUrl: "https://downloads.example.test/release-manifest.json",
@@ -281,10 +298,12 @@ describe("remote Runtime acquisition", () => {
       }),
     });
 
-    expect(await readFile(path.join(acquired.distribution, "payload.txt"), "utf8"))
-      .toBe("verified runtime payload\n");
-    expect((await lstat(path.join(acquired.distribution, "launcher"))).mode & 0o111)
-      .toBe(0o100);
+    expect(
+      await readFile(path.join(acquired.distribution, "payload.txt"), "utf8"),
+    ).toBe("verified runtime payload\n");
+    expect(
+      (await lstat(path.join(acquired.distribution, "launcher"))).mode & 0o111,
+    ).toBe(0o100);
     expect(acquired.release.version).toBe("1.2.3");
     expect((await lstat(acquired.temporary_root)).mode & 0o777).toBe(0o700);
     await acquired.cleanup();
@@ -486,7 +505,9 @@ describe("remote Runtime acquisition", () => {
 
   it("rejects an archive symlink that escapes extraction root and cleans temporary state", async () => {
     const value = await fixture({ escapingLink: true });
-    const temporaryParent = await mkdtemp(path.join(os.tmpdir(), "memhub-release-parent-"));
+    const temporaryParent = await mkdtemp(
+      path.join(os.tmpdir(), "memhub-release-parent-"),
+    );
     roots.push(temporaryParent);
     await expect(
       acquireRuntimeDistribution({

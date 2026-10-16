@@ -468,7 +468,9 @@ describe("CLI-19 progress and issue reads", () => {
     );
     expect(output).toContain("[15:04:05.067] progress #1");
     expect(output).toContain("[15:04:05.067] progress #2");
-    expect(output.match(/\x1b\[2J\x1b\[H/g)).toHaveLength(2);
+    expect(output.match(new RegExp("\\x1b\\[2J\\x1b\\[H", "g"))).toHaveLength(
+      2,
+    );
   });
 
   it("keeps non-terminal watch output append-only", async () => {

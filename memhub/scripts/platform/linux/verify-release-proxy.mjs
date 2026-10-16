@@ -42,9 +42,7 @@ export async function verifyReleaseProxy(options = {}) {
     command("pnpm", ["--filter", "@one-memory/cli", "build"], root, {
       ...process.env,
       ONE_MEMORY_VERSION: version,
-      ONE_MEMORY_BUILD_NUMBER: String(
-        buildNumber,
-      ),
+      ONE_MEMORY_BUILD_NUMBER: String(buildNumber),
       ONE_MEMORY_COMMIT: gitCommit,
     });
 
@@ -261,34 +259,82 @@ function generateTlsFixture(directory) {
   const serverRequest = path.join(directory, "server.csr");
   const serverCertificate = path.join(directory, "server-cert.pem");
   const extension = path.join(directory, "server.ext");
-  command("openssl", [
-    "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-    "-subj", "/CN=MemHub Proxy Test CA",
-    "-addext", "basicConstraints=critical,CA:TRUE",
-    "-addext", "keyUsage=critical,keyCertSign,cRLSign",
-    "-keyout", caKey, "-out", caCertificate,
-  ], root);
-  command("openssl", [
-    "req", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=127.0.0.1",
-    "-keyout", serverKey, "-out", serverRequest,
-  ], root);
-  spawnSync(process.execPath, [
-    "-e",
-    "require('fs').writeFileSync(process.argv[1], process.argv[2])",
-    extension,
+  command(
+    "openssl",
     [
-      "basicConstraints=critical,CA:FALSE",
-      "keyUsage=critical,digitalSignature,keyEncipherment",
-      "extendedKeyUsage=serverAuth",
-      "subjectAltName=IP:127.0.0.1,DNS:localhost",
-      "",
-    ].join("\n"),
-  ], { stdio: "inherit" });
-  command("openssl", [
-    "x509", "-req", "-days", "1", "-CA", caCertificate, "-CAkey", caKey,
-    "-CAcreateserial", "-in", serverRequest, "-out", serverCertificate,
-    "-extfile", extension,
-  ], root);
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-days",
+      "1",
+      "-subj",
+      "/CN=MemHub Proxy Test CA",
+      "-addext",
+      "basicConstraints=critical,CA:TRUE",
+      "-addext",
+      "keyUsage=critical,keyCertSign,cRLSign",
+      "-keyout",
+      caKey,
+      "-out",
+      caCertificate,
+    ],
+    root,
+  );
+  command(
+    "openssl",
+    [
+      "req",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-subj",
+      "/CN=127.0.0.1",
+      "-keyout",
+      serverKey,
+      "-out",
+      serverRequest,
+    ],
+    root,
+  );
+  spawnSync(
+    process.execPath,
+    [
+      "-e",
+      "require('fs').writeFileSync(process.argv[1], process.argv[2])",
+      extension,
+      [
+        "basicConstraints=critical,CA:FALSE",
+        "keyUsage=critical,digitalSignature,keyEncipherment",
+        "extendedKeyUsage=serverAuth",
+        "subjectAltName=IP:127.0.0.1,DNS:localhost",
+        "",
+      ].join("\n"),
+    ],
+    { stdio: "inherit" },
+  );
+  command(
+    "openssl",
+    [
+      "x509",
+      "-req",
+      "-days",
+      "1",
+      "-CA",
+      caCertificate,
+      "-CAkey",
+      caKey,
+      "-CAcreateserial",
+      "-in",
+      serverRequest,
+      "-out",
+      serverCertificate,
+      "-extfile",
+      extension,
+    ],
+    root,
+  );
   return { caCertificate, serverCertificate, serverKey };
 }
 
@@ -364,9 +410,13 @@ function parseArguments(arguments_) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   verifyReleaseProxy(parseArguments(process.argv.slice(2)))
-    .then((receipt) => process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`))
+    .then((receipt) =>
+      process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`),
+    )
     .catch((error) => {
-      process.stderr.write(`${error instanceof Error ? error.message : error}\n`);
+      process.stderr.write(
+        `${error instanceof Error ? error.message : error}\n`,
+      );
       process.exitCode = 1;
     });
 }

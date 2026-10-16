@@ -415,8 +415,8 @@ export class ConnectionController {
       state:
         skipped.some((item) => item.state !== "unchanged") ||
         sync.some((item) => item.state !== "succeeded")
-        ? ("partial" as const)
-        : result.state,
+          ? ("partial" as const)
+          : result.state,
       items: [...result.items, ...sync],
       skipped,
     };
@@ -466,9 +466,7 @@ export class ConnectionController {
       const current = await inspect(item);
       if (current.status !== "ready")
         return { status: current.status === "denied" ? "rejected" : "unknown" };
-      if (
-        canonical(current.sources) !== canonical(item.sources)
-      )
+      if (canonical(current.sources) !== canonical(item.sources))
         return { status: "changed" };
       const { host: _host, ...binding } = context;
       if (canonical(current.host) !== canonical(context.host))
@@ -538,9 +536,7 @@ export class ConnectionController {
     if (!layout || layout.hostId === "openclaw") fail("unsupported_host");
     return structuredClone(layout);
   }
-  private async sourcesUnchanged(
-    identities: readonly SourceIdentity[],
-  ) {
+  private async sourcesUnchanged(identities: readonly SourceIdentity[]) {
     try {
       const sources = await this.trusted.getSources();
       return (

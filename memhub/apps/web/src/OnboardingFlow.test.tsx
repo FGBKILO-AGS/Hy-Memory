@@ -332,9 +332,7 @@ describe("OnboardingFlow S1.3", () => {
       connectForOnboarding: vi.fn(
         () =>
           new Promise<
-            Awaited<
-              ReturnType<ImportSourcesController["connectForOnboarding"]>
-            >
+            Awaited<ReturnType<ImportSourcesController["connectForOnboarding"]>>
           >((_resolve, reject) => {
             rejectImport = reject;
           }),
@@ -363,9 +361,9 @@ describe("OnboardingFlow S1.3", () => {
     });
 
     await act(async () => rejectImport(new Error("response lost")));
-    expect(
-      screen.getByRole("region", { name: "模型步骤边界" }),
-    ).toBe(modelBoundary);
+    expect(screen.getByRole("region", { name: "模型步骤边界" })).toBe(
+      modelBoundary,
+    );
     await user.click(screen.getByRole("button", { name: "返回导入" }));
     await waitFor(() =>
       expect(screen.getByRole("alert").textContent).toContain(

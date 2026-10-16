@@ -5,14 +5,14 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import {
   chmod,
-  cp,
   copyFile,
+  cp,
   lstat,
   mkdir,
+  readdir,
   readFile,
   readlink,
   realpath,
-  readdir,
   stat,
   writeFile,
 } from "node:fs/promises";
@@ -29,7 +29,7 @@ export async function verifyLinuxUpgradeRollback(options) {
   if (process.platform !== "linux") {
     throw new Error("linux_upgrade_rollback_requires_linux");
   }
-  if (!['x64', 'arm64'].includes(process.arch)) {
+  if (!["x64", "arm64"].includes(process.arch)) {
     throw new Error("linux_upgrade_rollback_arch_unsupported");
   }
   const previousDistribution = await distributionIdentity(
@@ -228,7 +228,8 @@ export async function verifyLinuxUpgradeRollback(options) {
       [0],
       120_000,
     );
-    if (upgrade.status !== 0) throw commandFailure("upgrade-to-current", upgrade);
+    if (upgrade.status !== 0)
+      throw commandFailure("upgrade-to-current", upgrade);
     systemctl(
       "current-active",
       ["is-active", serviceId],
@@ -342,10 +343,7 @@ export async function verifyLinuxUpgradeRollback(options) {
       evidenceDir,
       previousInstanceId: observations.current_instance_id,
     });
-    observations.rollback_instance_id = findKey(
-      rollbackStatus,
-      "instance_id",
-    );
+    observations.rollback_instance_id = findKey(rollbackStatus, "instance_id");
     const selectedAfterRollback = await selectedManifest(installRoot);
     if (
       selectedAfterRollback.version !== currentDistribution.manifest.version ||
@@ -481,7 +479,7 @@ export async function verifyLinuxUpgradeRollback(options) {
       evidenceDir,
       [0, 5],
     );
-    const cleanupCli = await exists(path.join(binDir, "memhub"))
+    const cleanupCli = (await exists(path.join(binDir, "memhub")))
       ? path.join(binDir, "memhub")
       : path.join(currentDistribution.path, "bin", "one-memory");
     run(
@@ -544,13 +542,7 @@ function run(
   return { ...document, status: result.status };
 }
 
-function systemctl(
-  name,
-  arguments_,
-  environment,
-  evidenceDir,
-  accepted = [0],
-) {
+function systemctl(name, arguments_, environment, evidenceDir, accepted = [0]) {
   return run(
     name,
     "systemctl",
@@ -755,8 +747,10 @@ function parseArguments(arguments_) {
     const flag = arguments_[index];
     const value = arguments_[++index];
     if (!value) throw new Error(`missing value for ${flag}`);
-    if (flag === "--previous-distribution") options.previousDistribution = value;
-    else if (flag === "--current-distribution") options.currentDistribution = value;
+    if (flag === "--previous-distribution")
+      options.previousDistribution = value;
+    else if (flag === "--current-distribution")
+      options.currentDistribution = value;
     else if (flag === "--verify-root") options.verifyRoot = value;
     else if (flag === "--core-port") options.corePort = Number(value);
     else if (flag === "--runtime-port") options.runtimePort = Number(value);

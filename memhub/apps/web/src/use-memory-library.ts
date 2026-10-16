@@ -232,6 +232,7 @@ export function useMemoryLibrary({
   const retryTick = stalePage ? (page?.total ?? 0) : -1;
   useEffect(() => {
     if (!stalePage) return;
+    void retryTick;
     const timer = setTimeout(() => {
       void refresh().catch(() => {});
     }, 5000);

@@ -36,10 +36,9 @@ export async function readDiscovery(
   try {
     raw = await readFile(targetPath, "utf8");
   } catch (error) {
-    throw new Error(
-      "MemHub is not running (broker discovery is unavailable)",
-      { cause: error },
-    );
+    throw new Error("MemHub is not running (broker discovery is unavailable)", {
+      cause: error,
+    });
   }
 
   let value: unknown;

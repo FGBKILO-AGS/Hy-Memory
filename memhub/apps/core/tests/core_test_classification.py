@@ -14,14 +14,13 @@ from pathlib import Path
 import pytest
 
 PRIMARY_MARKERS = ("unit", "contract", "integration", "performance", "live")
-EXPECTED_TEST_FILE_COUNT = 443
-EXPECTED_TEST_FILES_SHA256 = "6d4815ac6a76cfa3f6208672052b785c7562083cf9d122cc9ddc796b8e624d43"
+EXPECTED_TEST_FILE_COUNT = 428
+EXPECTED_TEST_FILES_SHA256 = "bd3bf4fc9cda2a8e4427d106283c40d22dad026fd452db954046b6f28d21b896"
 
 # Pure transformations, validation models, parity checks and state machines.
 # This list is intentionally small: uncertain files default to contract.
 UNIT_FILES = frozenset(
     {
-        "test_context_host_artifact.py",
         "test_context_v2_contract_parity.py",
         "test_daemon_contract.py",
         "test_diagnostic_payload_keys.py",
@@ -34,7 +33,6 @@ UNIT_FILES = frozenset(
         "test_memory_server_config_state.py",
         "test_memory_server_contracts.py",
         "test_memory_server_job_state.py",
-        "test_retrieval_models.py",
         "test_scan_roots.py",
         "test_scanner_classifier.py",
         "test_scanner_sessionizer.py",
@@ -50,7 +48,6 @@ UNIT_FILES = frozenset(
 INTEGRATION_FILES = frozenset(
     {
         "test_auth.py",
-        "test_backfill_acceptance_lifecycle.py",
         "test_backup_endpoint.py",
         "test_backup_restore_api.py",
         "test_c1_import_via_api_path.py",
@@ -58,11 +55,9 @@ INTEGRATION_FILES = frozenset(
         "test_capture_deadline.py",
         "test_chat_exports.py",
         "test_cli_lifecycle.py",
-        "test_concurrent_import_processing.py",
         "test_connection_lifetime.py",
         "test_context_api.py",
         "test_context_search_both_paths.py",
-        "test_continuous_processing_integration.py",
         "test_conversation_search.py",
         "test_credential_responsiveness.py",
         "test_d93_same_process_load.py",
@@ -75,7 +70,6 @@ INTEGRATION_FILES = frozenset(
         "test_file_import_operations.py",
         "test_four_app_live_ingest.py",
         "test_graph_width_endpoint.py",
-        "test_health.py",
         "test_home_summary.py",
         "test_hy_writeback.py",
         "test_import_api.py",
@@ -85,7 +79,6 @@ INTEGRATION_FILES = frozenset(
         "test_log_privacy.py",
         "test_loopback_origin_write.py",
         "test_main_database_entry.py",
-        "test_manual_memory_via_hy.py",
         "test_manual_transcript_import.py",
         "test_matter_collection.py",
         "test_matter_hy_integration.py",
@@ -113,7 +106,6 @@ INTEGRATION_FILES = frozenset(
         "test_model_probe_operations.py",
         "test_model_profile_api.py",
         "test_model_profile_context_reset.py",
-        "test_model_request_budget_integration.py",
         "test_onboarding_profile.py",
         "test_parent_watchdog.py",
         "test_policy_api_wiring.py",

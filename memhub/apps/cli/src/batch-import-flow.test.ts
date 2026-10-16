@@ -1,19 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
-
-import type { CoreReader, ReadOutcome } from "./core-client.js";
-import type { CoreOperations } from "./core-operations.js";
 import {
   batchScanExitCode,
   executeBatchImport,
   planBatchImport,
   renderBatchScanText,
 } from "./batch-import-flow.js";
+import type { CoreReader, ReadOutcome } from "./core-client.js";
+import type { CoreOperations } from "./core-operations.js";
 
 function readerFor(catalog: unknown): CoreReader {
   return (async (path: string) =>
     path === "/api/v1/sources"
       ? ({ state: "ok", data: catalog } as ReadOutcome<unknown>)
-      : ({ state: "not_found", code: "http_404" } as ReadOutcome<unknown>)) as CoreReader;
+      : ({
+          state: "not_found",
+          code: "http_404",
+        } as ReadOutcome<unknown>)) as CoreReader;
 }
 
 function found(source_id: string, extra: Record<string, unknown> = {}) {
@@ -81,18 +83,36 @@ describe("A19 batch execution", () => {
       readerFor([found("codex"), found("cursor")]),
     );
     if (planned.state !== "preview") throw new Error("expected preview");
-    const post = vi.fn(async (_path: string, body: Record<string, unknown>) => ({
-      state: "committed" as const,
-      data: {
-        request_id: body.request_id,
-        accepted_source_ids: ["codex", "cursor"],
-        failed_sources: {},
-        jobs: [
-          { job_id: "j1", source_id: "codex", status: "pending", discovered: 3, stored: 3, errors: 0, operation: "history" },
-          { job_id: "j2", source_id: "cursor", status: "pending", discovered: 5, stored: 5, errors: 0, operation: "history" },
-        ],
-      },
-    }));
+    const post = vi.fn(
+      async (_path: string, body: Record<string, unknown>) => ({
+        state: "committed" as const,
+        data: {
+          request_id: body.request_id,
+          accepted_source_ids: ["codex", "cursor"],
+          failed_sources: {},
+          jobs: [
+            {
+              job_id: "j1",
+              source_id: "codex",
+              status: "pending",
+              discovered: 3,
+              stored: 3,
+              errors: 0,
+              operation: "history",
+            },
+            {
+              job_id: "j2",
+              source_id: "cursor",
+              status: "pending",
+              discovered: 5,
+              stored: 5,
+              errors: 0,
+              operation: "history",
+            },
+          ],
+        },
+      }),
+    );
     const operations = { post } as unknown as CoreOperations;
     const document = await executeBatchImport(
       planned.candidates,
@@ -127,7 +147,15 @@ describe("A19 batch execution", () => {
           accepted_source_ids: ["codex"],
           failed_sources: { cursor: "source_identity_changed" },
           jobs: [
-            { job_id: "j1", source_id: "codex", status: "pending", discovered: 1, stored: 1, errors: 0, operation: "history" },
+            {
+              job_id: "j1",
+              source_id: "codex",
+              status: "pending",
+              discovered: 1,
+              stored: 1,
+              errors: 0,
+              operation: "history",
+            },
           ],
         },
       })),
@@ -242,7 +270,15 @@ describe("A19 batch execution", () => {
           accepted_source_ids: ["codex"],
           failed_sources: {},
           jobs: [
-            { job_id: "j1", source_id: "codex", status: "pending", discovered: 1, stored: 1, errors: 0, operation: "history" },
+            {
+              job_id: "j1",
+              source_id: "codex",
+              status: "pending",
+              discovered: 1,
+              stored: 1,
+              errors: 0,
+              operation: "history",
+            },
           ],
         },
       })),

@@ -105,10 +105,7 @@ describe("memhub jobs", () => {
     const output = captureStdout();
     let code: number;
     try {
-      code = await run(
-        ["jobs", "start", "--source", "codex", "--json"],
-        {},
-      );
+      code = await run(["jobs", "start", "--source", "codex", "--json"], {});
     } finally {
       output.restore();
     }
@@ -154,10 +151,7 @@ describe("memhub jobs", () => {
       const output = captureStdout();
       let code: number;
       try {
-        code = await run(
-          ["jobs", action, "--job", "job-1", "--json"],
-          {},
-        );
+        code = await run(["jobs", action, "--job", "job-1", "--json"], {});
       } finally {
         output.restore();
       }

@@ -371,13 +371,19 @@ it.each(["core-response-lost", "identity-changed-after-commit"])(
       syncSourceIds: ["cursor"],
       hostSourceIds: [],
     });
-    expect((await reopened.execute({
-      planId: retry.planId,
-      digest: retry.digest,
-      userConfirmed: true,
-    })).items[0].state).toBe("succeeded");
+    expect(
+      (
+        await reopened.execute({
+          planId: retry.planId,
+          digest: retry.digest,
+          userConfirmed: true,
+        })
+      ).items[0].state,
+    ).toBe("succeeded");
     expect(f.posts).toHaveLength(1);
-    expect(f.dispatched.filter((action) => action === "execute")).toHaveLength(2);
+    expect(f.dispatched.filter((action) => action === "execute")).toHaveLength(
+      2,
+    );
   },
 );
 

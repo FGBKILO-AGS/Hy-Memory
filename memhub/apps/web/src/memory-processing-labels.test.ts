@@ -64,7 +64,11 @@ describe("pipeline codes stay out of the reader's way", () => {
   it("separates what the reader owes attention from what Core retries", () => {
     const stages = splitBlockedStages([
       { kind: "extract", reason: "model_api_key_missing", count: 3 },
-      { kind: "extract", reason: "hy_memory_write_verification_failed", count: 1 },
+      {
+        kind: "extract",
+        reason: "hy_memory_write_verification_failed",
+        count: 1,
+      },
       {
         kind: "extract",
         reason: "hy_memory_write_verification_clause_incomplete",
@@ -87,7 +91,11 @@ describe("pipeline codes stay out of the reader's way", () => {
     // them apart learns nothing the total does not already say.
     expect(
       splitBlockedStages([
-        { kind: "extract", reason: "hy_memory_write_verification_failed", count: 2 },
+        {
+          kind: "extract",
+          reason: "hy_memory_write_verification_failed",
+          count: 2,
+        },
         { kind: "extract", reason: "failed", count: 5 },
       ]),
     ).toEqual({ named: [], retrying: 7 });
@@ -100,7 +108,9 @@ describe("pipeline codes stay out of the reader's way", () => {
         { kind: "extract", reason: "hy_memory_input_exceeds_window", count: 1 },
       ]),
     ).toEqual({
-      named: [{ kind: "extract", reason: "hy_memory_input_exceeds_window", count: 1 }],
+      named: [
+        { kind: "extract", reason: "hy_memory_input_exceeds_window", count: 1 },
+      ],
       retrying: 0,
     });
   });
@@ -116,7 +126,9 @@ describe("pipeline codes stay out of the reader's way", () => {
         { kind: "extract", reason: "some_future_code", count: 4 },
       ]),
     ).toEqual({
-      named: [{ kind: "extract", reason: "model_profile_not_active", count: 1 }],
+      named: [
+        { kind: "extract", reason: "model_profile_not_active", count: 1 },
+      ],
       retrying: 4,
     });
   });

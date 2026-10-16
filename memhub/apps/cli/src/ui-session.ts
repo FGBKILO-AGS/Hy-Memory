@@ -42,7 +42,12 @@ function isLoopbackHttpUrl(value: string): boolean {
   }
   if (parsed.protocol !== "http:") return false;
   const host = parsed.hostname.toLowerCase();
-  return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "[::1]" ||
+    host === "::1"
+  );
 }
 
 /** Validate the Core exchange document; return null when it does not match the

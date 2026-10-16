@@ -35,7 +35,9 @@ describe("the memory map request", () => {
   });
 
   it("asks again after the previous one settled", async () => {
-    const transport = { get: vi.fn(async () => ({ data: { nodes: [], edges: [] } })) };
+    const transport = {
+      get: vi.fn(async () => ({ data: { nodes: [], edges: [] } })),
+    };
 
     await getMemoryGraphWith(transport as never);
     await getMemoryGraphWith(transport as never);

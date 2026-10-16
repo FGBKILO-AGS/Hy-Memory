@@ -14,9 +14,9 @@ import {
   type CallHistoryPage,
   callDeliveryLabel,
   callDetailHeadline,
+  callReturnDeliveryLabel,
   callRowDetail,
   callRowHeadline,
-  callReturnDeliveryLabel,
   clearAllCallEvents,
   clearCallEvents,
   getCallHistory,
@@ -122,7 +122,9 @@ function CallReferences({
                         ? "待核对"
                         : "不可用"}
                 </h4>
-                {reference.source_id && <p>{sourceLabel(reference.source_id)}</p>}
+                {reference.source_id && (
+                  <p>{sourceLabel(reference.source_id)}</p>
+                )}
               </div>
               {current?.available && current.reason === null && (
                 <R6Button
@@ -511,8 +513,9 @@ export function CallHistory({
                   {stateLabels[selected.state]}
                 </p>
                 <p className="call-history-stage">
-                  找到原文 {selected.raw_count} 段 · 记忆 {selected.memory_count} 条
-                  · 用时 {(selected.elapsed_ms / 1000).toFixed(1)} 秒
+                  找到原文 {selected.raw_count} 段 · 记忆{" "}
+                  {selected.memory_count} 条 · 用时{" "}
+                  {(selected.elapsed_ms / 1000).toFixed(1)} 秒
                 </p>
                 {callDeliveryLabel(selected) && (
                   <p className="call-history-stage">
@@ -592,9 +595,7 @@ export function CallHistory({
                           {callRowHeadline(item)}
                         </button>
                       </h2>
-                      <p>
-                        {callRowDetail(item)}
-                      </p>
+                      <p>{callRowDetail(item)}</p>
                     </div>
                   </li>
                 ))}

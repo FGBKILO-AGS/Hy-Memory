@@ -102,9 +102,8 @@ export class RuntimeSupervisor {
       const health = await this.core.start();
       coreStarted = true;
       phase = "sidecar";
-      const sidecar = this.createSidecar(
-        this.currentConnection(),
-        (code) => this.recordSidecarFault(code),
+      const sidecar = this.createSidecar(this.currentConnection(), (code) =>
+        this.recordSidecarFault(code),
       );
       this.sidecar = sidecar;
       await sidecar.start();

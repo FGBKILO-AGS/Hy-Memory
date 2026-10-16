@@ -61,10 +61,9 @@ describe("UI write execution", () => {
     }));
     const plan = planOf(planCallEventsClear([EVENT]));
     if (plan.kind !== "call_events_clear") throw new Error("kind");
-    const result = await executeCallEventsClear(
-      plan,
-      { post } as unknown as CoreOperations,
-    );
+    const result = await executeCallEventsClear(plan, {
+      post,
+    } as unknown as CoreOperations);
     expect(result.state).toBe("committed");
     expect(post).toHaveBeenCalledWith("/api/v1/call-events/clear", {
       event_ids: [EVENT],
@@ -79,10 +78,9 @@ describe("UI write execution", () => {
     }));
     const plan = planOf(planCallEventsClearAll());
     if (plan.kind !== "call_events_clear_all") throw new Error("kind");
-    await executeCallEventsClearAll(
-      plan,
-      { post } as unknown as CoreOperations,
-    );
+    await executeCallEventsClearAll(plan, {
+      post,
+    } as unknown as CoreOperations);
     expect(post).toHaveBeenCalledWith("/api/v1/call-events/clear-all", {
       user_confirmed: true,
     });
@@ -107,7 +105,7 @@ describe("UI write execution", () => {
         committed: true,
       },
     }));
-    const del = vi.fn(async <T,>() => ({
+    const del = vi.fn(async <T>() => ({
       state: "committed" as const,
       data: {} as T,
     }));
@@ -118,10 +116,9 @@ describe("UI write execution", () => {
     const commit = planOf(planImportFileCommit(UPLOAD));
     if (commit.kind !== "import_file_commit") throw new Error("kind");
     await executeImportFileCommit(commit, operations);
-    expect(post).toHaveBeenCalledWith(
-      `/api/v1/import-files/${UPLOAD}/commit`,
-      { confirmed: true },
-    );
+    expect(post).toHaveBeenCalledWith(`/api/v1/import-files/${UPLOAD}/commit`, {
+      confirmed: true,
+    });
     const discard = planOf(planImportFileDiscard(UPLOAD));
     if (discard.kind !== "import_file_discard") throw new Error("kind");
     expect((await executeImportFileDiscard(discard, operations)).state).toBe(
@@ -133,15 +130,12 @@ describe("UI write execution", () => {
   it("treats a malformed success receipt as unknown", async () => {
     const plan = planOf(planCallEventsClear([EVENT]));
     if (plan.kind !== "call_events_clear") throw new Error("kind");
-    const result = await executeCallEventsClear(
-      plan,
-      {
-        post: vi.fn(async () => ({
-          state: "committed" as const,
-          data: { wrong: true },
-        })),
-      } as unknown as CoreOperations,
-    );
+    const result = await executeCallEventsClear(plan, {
+      post: vi.fn(async () => ({
+        state: "committed" as const,
+        data: { wrong: true },
+      })),
+    } as unknown as CoreOperations);
     expect(result).toMatchObject({
       state: "unknown",
       code: "ui_write_receipt_invalid",

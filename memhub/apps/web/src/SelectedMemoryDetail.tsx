@@ -173,9 +173,7 @@ export function SelectedMemoryDetail({
     } catch (reason) {
       const refused = isDefiniteRefusal(reason);
       trace.done(refused ? "failed" : "unknown", {
-        reason: refused
-          ? "memory_delete_failed"
-          : "memory_delete_unconfirmed",
+        reason: refused ? "memory_delete_failed" : "memory_delete_unconfirmed",
       });
       if (alive.current)
         setError(
@@ -445,8 +443,7 @@ export function SelectedMemoryDetail({
                 {detail.evidence.map((item) => (
                   <section key={item.evidence_id}>
                     <small>
-                      {sourceNameOr(sources, item.source_id, "来源待核对")}{" "}
-                      ·{" "}
+                      {sourceNameOr(sources, item.source_id, "来源待核对")} ·{" "}
                       {item.written_by === "person"
                         ? "你"
                         : item.written_by === "agent"

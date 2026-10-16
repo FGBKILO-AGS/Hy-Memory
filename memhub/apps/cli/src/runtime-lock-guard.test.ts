@@ -49,9 +49,9 @@ describe("runtime service lock guard", () => {
       JSON.stringify({ pid: 4321 }),
       { mode: 0o600 },
     );
-    await expect(
-      inspectRuntimeServiceLock(dataDir, () => false),
-    ).resolves.toBe("clear");
+    await expect(inspectRuntimeServiceLock(dataDir, () => false)).resolves.toBe(
+      "clear",
+    );
   });
 
   it("fails closed on a malformed lease", async () => {

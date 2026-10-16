@@ -145,9 +145,7 @@ function jobMutationResult(
 export function jobExitCode(document: JobFlowDocument): number {
   if (document.state === "preview" || document.state === "committed") return 0;
   if (document.state === "recovered") return 0;
-  return document.state === "rejected" || document.state === "unknown"
-    ? 1
-    : 2;
+  return document.state === "rejected" || document.state === "unknown" ? 1 : 2;
 }
 
 function invalid(code: string): JobFlowDocument {

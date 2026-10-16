@@ -11,12 +11,12 @@ import {
 } from "./headless-flows.js";
 import { approvalFingerprint, listHosts, readHost } from "./host-flow.js";
 import { parseSelection, type WizardPrompter } from "./init-wizard.js";
+import { setModelContentPermission } from "./model-content-permission-flow.js";
 import { executeModelProbe, planModelProbe } from "./model-probe-flow.js";
 import {
   executeModelProfileActivate,
   planModelProfileActivate,
 } from "./model-write-flows.js";
-import { setModelContentPermission } from "./model-content-permission-flow.js";
 
 type ProviderPreset = {
   id: string;

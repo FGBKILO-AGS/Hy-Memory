@@ -9,21 +9,20 @@ import {
   cp,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   readlink,
-  readdir,
   realpath,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
 import https from "node:https";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import { buildReleaseAssets } from "../../build-release-assets.mjs";
-import { createRequire } from "node:module";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -37,7 +36,7 @@ export async function verifyFakeReleaseBootstrap(options) {
   if (process.platform !== "linux") {
     throw new Error("fake_release_bootstrap_requires_linux");
   }
-  if (!['x64', 'arm64'].includes(process.arch)) {
+  if (!["x64", "arm64"].includes(process.arch)) {
     throw new Error("fake_release_bootstrap_arch_unsupported");
   }
   const distribution = await realpath(options.distribution);
@@ -112,7 +111,7 @@ export async function verifyFakeReleaseBootstrap(options) {
   };
 
   let server;
-  let managedCli = path.join(binDir, "memhub");
+  const managedCli = path.join(binDir, "memhub");
   let environment;
   try {
     const tls = generateTlsFixture(tlsRoot);
@@ -156,23 +155,24 @@ export async function verifyFakeReleaseBootstrap(options) {
       receipt.expected_cli_bundle_sha256 = options.expectedCliSha256;
       receipt.status.npm_pack = "not_applicable";
     } else {
-      const pack = await run("pack-cli", "pnpm", [
-        "--filter",
-        "@one-memory/cli",
-        "pack:publish",
-      ], {
-        cwd: sourceRoot,
-        env: {
-          ...process.env,
-          ONE_MEMORY_VERSION: distributionManifest.version,
-          ONE_MEMORY_BUILD_NUMBER: String(distributionManifest.build_number),
-          ONE_MEMORY_COMMIT: receipt.verifier_source_commit,
-          MEMHUB_NPM_PACKAGE: options.packageName,
-          MEMHUB_DEFAULT_RELEASE_MANIFEST_URL_TEMPLATE: manifestUrl,
+      const pack = await run(
+        "pack-cli",
+        "pnpm",
+        ["--filter", "@one-memory/cli", "pack:publish"],
+        {
+          cwd: sourceRoot,
+          env: {
+            ...process.env,
+            ONE_MEMORY_VERSION: distributionManifest.version,
+            ONE_MEMORY_BUILD_NUMBER: String(distributionManifest.build_number),
+            ONE_MEMORY_COMMIT: receipt.verifier_source_commit,
+            MEMHUB_NPM_PACKAGE: options.packageName,
+            MEMHUB_DEFAULT_RELEASE_MANIFEST_URL_TEMPLATE: manifestUrl,
+          },
+          evidenceDir,
+          timeout: 5 * 60_000,
         },
-        evidenceDir,
-        timeout: 5 * 60_000,
-      });
+      );
       if (pack.status !== 0) throw commandFailure("pack-cli", pack);
       const tarball = path.join(
         sourceRoot,
@@ -202,17 +202,12 @@ export async function verifyFakeReleaseBootstrap(options) {
     if (options.npmRegistry !== undefined) {
       npmInstallArguments.push("--registry", options.npmRegistry);
     }
-    const npmInstall = await run(
-      "npm-install",
-      "npm",
-      npmInstallArguments,
-      {
-        cwd: sourceRoot,
-        env: process.env,
-        evidenceDir,
-        timeout: 120_000,
-      },
-    );
+    const npmInstall = await run("npm-install", "npm", npmInstallArguments, {
+      cwd: sourceRoot,
+      env: process.env,
+      evidenceDir,
+      timeout: 120_000,
+    });
     if (npmInstall.status !== 0) {
       throw commandFailure("npm-install", npmInstall);
     }
@@ -538,7 +533,7 @@ export async function verifyFakeReleaseBootstrap(options) {
       throw new Error("fake_release_uninstall_changed_data");
     }
     if (
-      await exists(path.join(installRoot, "current")) ||
+      (await exists(path.join(installRoot, "current"))) ||
       (await readdir(binDir)).length !== 0
     ) {
       throw new Error("fake_release_uninstall_left_managed_program");
@@ -817,7 +812,9 @@ function openssl(arguments_) {
     timeout: 30_000,
   });
   if (result.status !== 0) {
-    throw new Error(`fake_release_tls_failed:${result.stderr || result.stdout}`);
+    throw new Error(
+      `fake_release_tls_failed:${result.stderr || result.stdout}`,
+    );
   }
 }
 

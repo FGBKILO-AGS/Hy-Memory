@@ -1,12 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { ImportJob, ModelProfile } from "@one-memory/contracts";
 import {
-  ModelProfileInputError,
-  SourceImportInputError,
   buildModelProfileCreateRequest,
   buildSourceImportRequest,
+  ModelProfileInputError,
   parseModelProfileReceipt,
+  SourceImportInputError,
 } from "@one-memory/operations";
-import type { ImportJob, ModelProfile } from "@one-memory/contracts";
 import type { CoreReader, ReadOutcome } from "./core-client.js";
 import type { CoreOperations } from "./core-operations.js";
 import {
@@ -117,9 +117,7 @@ function classifySourceImport(
       product: PRODUCT,
       state: "rejected",
       operation_id: operationId,
-      code: onlyBusy
-        ? "source_import_all_busy"
-        : "source_import_all_rejected",
+      code: onlyBusy ? "source_import_all_busy" : "source_import_all_rejected",
       receipt,
     };
   }

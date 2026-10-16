@@ -82,12 +82,14 @@ beforeEach(() => {
   window.localStorage.clear();
   vi.mocked(api.getModelProfiles).mockResolvedValue([]);
   vi.mocked(api.createModelProfile).mockResolvedValue(profile);
-  vi.mocked(api.abandonModelCreationOperation).mockImplementation(async (id) => ({
-    operation_id: id,
-    state: "deleted",
-    profile_id: OTHER_ID,
-    created_revision: 1,
-  }));
+  vi.mocked(api.abandonModelCreationOperation).mockImplementation(
+    async (id) => ({
+      operation_id: id,
+      state: "deleted",
+      profile_id: OTHER_ID,
+      created_revision: 1,
+    }),
+  );
   vi.mocked(api.getModelCreationOperation).mockImplementation(async (id) =>
     committed(id),
   );

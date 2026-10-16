@@ -88,25 +88,26 @@ export function MemoryArrivalPanel({
         ["failed", "unavailable", "stopped", "checking"].includes(
           arrival.phase,
         )) && <p className="memory-arrival-description">{description}</p>}
-      {showDetails && ((arrival.blockedStages?.length ?? 0) > 0 ||
-        (arrival.phase === "processing" &&
-          (arrival.backlogPending ?? 0) > 0)) && (
-        <details className="memory-feedback-details">
-          <summary>查看进度与详情</summary>
-          {arrival.phase === "processing" &&
-            (arrival.backlogPending ?? 0) > 0 && (
-              <p>存量数据较大，为保证质量，正在后台分批整理</p>
-            )}
-          <ul>
-            {arrival.blockedStages?.map((block) => (
-              <li key={`${block.kind}:${block.reason}`}>
-                {taskKindLabel(block.kind)} · {blockReasonLabel(block.reason)} ·{" "}
-                {block.count.toLocaleString("zh-CN")} 项
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
+      {showDetails &&
+        ((arrival.blockedStages?.length ?? 0) > 0 ||
+          (arrival.phase === "processing" &&
+            (arrival.backlogPending ?? 0) > 0)) && (
+          <details className="memory-feedback-details">
+            <summary>查看进度与详情</summary>
+            {arrival.phase === "processing" &&
+              (arrival.backlogPending ?? 0) > 0 && (
+                <p>存量数据较大，为保证质量，正在后台分批整理</p>
+              )}
+            <ul>
+              {arrival.blockedStages?.map((block) => (
+                <li key={`${block.kind}:${block.reason}`}>
+                  {taskKindLabel(block.kind)} · {blockReasonLabel(block.reason)}{" "}
+                  · {block.count.toLocaleString("zh-CN")} 项
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
       <div className="memory-arrival-actions">
         {arrival.phase === "model-required" && (
           <button type="button" onClick={onConfigureModel}>

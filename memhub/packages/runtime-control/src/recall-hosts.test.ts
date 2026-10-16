@@ -13,10 +13,7 @@ afterEach(async () => {
 });
 
 it("gives every DeepSeek Harness profile a matching unique layout identity", async () => {
-  const root = path.join(
-    tmpdir(),
-    `recall-hosts-${process.pid}-${Date.now()}`,
-  );
+  const root = path.join(tmpdir(), `recall-hosts-${process.pid}-${Date.now()}`);
   roots.push(root);
   const dshHome = path.join(root, ".dsh");
   for (const profile of ["web", "headless"]) {

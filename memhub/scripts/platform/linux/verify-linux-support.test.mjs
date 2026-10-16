@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
 
 const script = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -21,6 +21,8 @@ describe("Linux support matrix", () => {
       no_systemd_serve: "blocked",
     });
     expect(matrix.capabilities).toHaveProperty("systemd_user");
-    expect(matrix.conditions_to_unblock).toContain("linux_x64_arm64_runtime_or_runner");
+    expect(matrix.conditions_to_unblock).toContain(
+      "linux_x64_arm64_runtime_or_runner",
+    );
   });
 });

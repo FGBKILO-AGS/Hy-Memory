@@ -8,7 +8,9 @@ import { installEarlyStartupErrorHandler } from "./early-startup-errors";
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true })));
+  await Promise.all(
+    roots.splice(0).map((root) => rm(root, { recursive: true })),
+  );
 });
 
 describe("early desktop startup errors", () => {
@@ -31,7 +33,9 @@ describe("early desktop startup errors", () => {
   });
 
   it("writes stderr and diagnostics before showing the fatal dialog", async () => {
-    const dataDir = await mkdtemp(path.join(os.tmpdir(), "desktop-early-error-"));
+    const dataDir = await mkdtemp(
+      path.join(os.tmpdir(), "desktop-early-error-"),
+    );
     roots.push(dataDir);
     const processEvents = new EventEmitter();
     const order: string[] = [];
@@ -47,7 +51,8 @@ describe("early desktop startup errors", () => {
     processEvents.emit(
       "uncaughtException",
       Object.assign(new Error("desktop_test_real_home_mismatch"), {
-        stack: "Error: desktop_test_real_home_mismatch\n    at boot (apps/desktop/src/main.ts:80:1)",
+        stack:
+          "Error: desktop_test_real_home_mismatch\n    at boot (apps/desktop/src/main.ts:80:1)",
       }),
     );
 

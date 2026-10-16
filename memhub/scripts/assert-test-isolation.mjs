@@ -20,8 +20,10 @@ if (process.env.ONE_MEMORY_TEST_ISOLATED !== "1") {
 const realHome = process.env.ONE_MEMORY_TEST_REAL_HOME;
 const home = process.env.HOME;
 const dataDir = process.env.ONE_MEMORY_DATA_DIR;
-if (!realHome || !home || !dataDir) fail("required isolation paths are missing");
-if (path.resolve(home) === path.resolve(realHome)) fail("HOME is the real user directory");
+if (!realHome || !home || !dataDir)
+  fail("required isolation paths are missing");
+if (path.resolve(home) === path.resolve(realHome))
+  fail("HOME is the real user directory");
 if (path.resolve(dataDir).startsWith(`${path.resolve(realHome)}${path.sep}`)) {
   fail("ONE_MEMORY_DATA_DIR is inside the real user directory");
 }

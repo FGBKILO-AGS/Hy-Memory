@@ -800,9 +800,7 @@ describe("ModelSettings", () => {
     profiles = [preset];
     render(<ModelSettings />);
 
-    expect(
-      screen.getByRole("region", { name: "预配置模型服务" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("region", { name: "预配置模型服务" })).toBeTruthy();
     // 贴一个 key 就能用的时候，没理由让人先面对协议、Base URL 和超时。
     expect(screen.queryByLabelText("协议")).toBeNull();
     expect(screen.getByRole("button", { name: "自定义一个模型" })).toBeTruthy();
@@ -862,10 +860,7 @@ describe("ModelSettings", () => {
       const user = userEvent.setup();
       render(<ModelSettings />);
 
-      await user.type(
-        screen.getByLabelText("粘贴 API Key"),
-        "preset-key",
-      );
+      await user.type(screen.getByLabelText("粘贴 API Key"), "preset-key");
       await user.click(screen.getByRole("button", { name: "保存 key" }));
 
       expect(update).toHaveBeenCalledWith("preset-1", {

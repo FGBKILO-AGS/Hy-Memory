@@ -1,5 +1,5 @@
-import axios from "axios";
 import { classifyModelRemove } from "@one-memory/operations";
+import axios from "axios";
 
 /**
  * Only paths proven side-effect free by reading the Core handlers belong here.
@@ -56,7 +56,10 @@ export function createUiSessionRequest(attachment: {
       return { state: "ok" as const, data: response.data };
     }
     if (response.status === 503) {
-      return { state: "unavailable" as const, code: "ui_web_assets_unavailable" };
+      return {
+        state: "unavailable" as const,
+        code: "ui_web_assets_unavailable",
+      };
     }
     return { state: "unavailable" as const, code: `http_${response.status}` };
   };
@@ -397,18 +400,23 @@ export async function readMemoryWrite(
 
 export async function readScanRoots(
   attachment: RuntimeAttachmentLike,
-): Promise<{ schema_version: number; revision: number; roots: unknown[] } | null> {
+): Promise<{
+  schema_version: number;
+  revision: number;
+  roots: unknown[];
+} | null> {
   try {
-    const response = await axios.get<{ schema_version: number; revision: number; roots: unknown[] }>(
-      `${baseUrlOf(attachment)}/api/v1/scan-roots`,
-      {
-        headers: { Authorization: `Bearer ${attachment.apiToken}` },
-        timeout: 10_000,
-        proxy: false,
-        maxRedirects: 0,
-        maxContentLength: MAX_RESPONSE_BYTES,
-      },
-    );
+    const response = await axios.get<{
+      schema_version: number;
+      revision: number;
+      roots: unknown[];
+    }>(`${baseUrlOf(attachment)}/api/v1/scan-roots`, {
+      headers: { Authorization: `Bearer ${attachment.apiToken}` },
+      timeout: 10_000,
+      proxy: false,
+      maxRedirects: 0,
+      maxContentLength: MAX_RESPONSE_BYTES,
+    });
     return response.data;
   } catch {
     return null;
@@ -420,13 +428,17 @@ export async function addScanRoot(
   body: { root: string; source?: string; recursive?: boolean },
 ): Promise<unknown | null> {
   try {
-    const response = await axios.post<unknown>(`${baseUrlOf(attachment)}/api/v1/scan-roots`, body, {
-      headers: { Authorization: `Bearer ${attachment.apiToken}` },
-      timeout: 10_000,
-      proxy: false,
-      maxRedirects: 0,
-      maxContentLength: MAX_RESPONSE_BYTES,
-    });
+    const response = await axios.post<unknown>(
+      `${baseUrlOf(attachment)}/api/v1/scan-roots`,
+      body,
+      {
+        headers: { Authorization: `Bearer ${attachment.apiToken}` },
+        timeout: 10_000,
+        proxy: false,
+        maxRedirects: 0,
+        maxContentLength: MAX_RESPONSE_BYTES,
+      },
+    );
     return response.data;
   } catch (error) {
     return { _error: error instanceof Error ? error.message : String(error) };
@@ -438,14 +450,17 @@ export async function removeScanRoot(
   body: { root: string },
 ): Promise<unknown | null> {
   try {
-    const response = await axios.delete<unknown>(`${baseUrlOf(attachment)}/api/v1/scan-roots`, {
-      headers: { Authorization: `Bearer ${attachment.apiToken}` },
-      data: body,
-      timeout: 10_000,
-      proxy: false,
-      maxRedirects: 0,
-      maxContentLength: MAX_RESPONSE_BYTES,
-    });
+    const response = await axios.delete<unknown>(
+      `${baseUrlOf(attachment)}/api/v1/scan-roots`,
+      {
+        headers: { Authorization: `Bearer ${attachment.apiToken}` },
+        data: body,
+        timeout: 10_000,
+        proxy: false,
+        maxRedirects: 0,
+        maxContentLength: MAX_RESPONSE_BYTES,
+      },
+    );
     return response.data;
   } catch (error) {
     return { _error: error instanceof Error ? error.message : String(error) };
@@ -456,16 +471,16 @@ export async function readAdapters(
   attachment: RuntimeAttachmentLike,
 ): Promise<{ schema_version: number; adapters: unknown[] } | null> {
   try {
-    const response = await axios.get<{ schema_version: number; adapters: unknown[] }>(
-      `${baseUrlOf(attachment)}/api/v1/adapters`,
-      {
-        headers: { Authorization: `Bearer ${attachment.apiToken}` },
-        timeout: 10_000,
-        proxy: false,
-        maxRedirects: 0,
-        maxContentLength: MAX_RESPONSE_BYTES,
-      },
-    );
+    const response = await axios.get<{
+      schema_version: number;
+      adapters: unknown[];
+    }>(`${baseUrlOf(attachment)}/api/v1/adapters`, {
+      headers: { Authorization: `Bearer ${attachment.apiToken}` },
+      timeout: 10_000,
+      proxy: false,
+      maxRedirects: 0,
+      maxContentLength: MAX_RESPONSE_BYTES,
+    });
     return response.data;
   } catch {
     return null;

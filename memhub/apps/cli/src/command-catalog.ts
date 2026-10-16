@@ -282,11 +282,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
     summary: "列出来源、执行已确认的导入计划。",
     usage:
       "memhub sources list [--json]\n            memhub sources import --plan-file <path> --confirm [--json]\n            memhub sources receipt <request-id> [--json]",
-    options: [
-      PLAN_FILE_OPTION,
-      EXPLICIT_CONFIRM_OPTION,
-      JSON_OPTION,
-    ],
+    options: [PLAN_FILE_OPTION, EXPLICIT_CONFIRM_OPTION, JSON_OPTION],
     exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
   },
   {

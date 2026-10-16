@@ -45,11 +45,31 @@ describe("memhub ui session wiring", () => {
     for (const doc of [
       null,
       {},
-      { schema_version: 2, exchange_code: "x", expires_in_seconds: 60, url: "http://127.0.0.1:1/ui/login?code=x" },
+      {
+        schema_version: 2,
+        exchange_code: "x",
+        expires_in_seconds: 60,
+        url: "http://127.0.0.1:1/ui/login?code=x",
+      },
       { schema_version: 1, exchange_code: "x", expires_in_seconds: 60 },
-      { schema_version: 1, exchange_code: "", expires_in_seconds: 60, url: "http://127.0.0.1:1/ui/login?code=x" },
-      { schema_version: 1, exchange_code: "x", expires_in_seconds: 0, url: "http://127.0.0.1:1/ui/login?code=x" },
-      { schema_version: 1, exchange_code: "x", expires_in_seconds: 60, url: "http://127.0.0.1:1/" },
+      {
+        schema_version: 1,
+        exchange_code: "",
+        expires_in_seconds: 60,
+        url: "http://127.0.0.1:1/ui/login?code=x",
+      },
+      {
+        schema_version: 1,
+        exchange_code: "x",
+        expires_in_seconds: 0,
+        url: "http://127.0.0.1:1/ui/login?code=x",
+      },
+      {
+        schema_version: 1,
+        exchange_code: "x",
+        expires_in_seconds: 60,
+        url: "http://127.0.0.1:1/",
+      },
     ]) {
       expect(parseUiSessionExchange(doc)).toBeNull();
     }
@@ -59,9 +79,18 @@ describe("memhub ui session wiring", () => {
     expect(uiSessionFailure("ui_web_assets_unavailable")).toMatchObject({
       code: "ui_web_assets_unavailable",
     });
-    expect(uiExitCode({ state: "opened", url: "http://127.0.0.1:1/ui/login?code=x" })).toBe(0);
-    expect(uiExitCode({ state: "blocked", code: "ui_session_contract_unavailable" })).toBe(4);
-    expect(uiExitCode({ state: "failed", code: "ui_session_code_invalid" })).toBe(1);
+    expect(
+      uiExitCode({
+        state: "opened",
+        url: "http://127.0.0.1:1/ui/login?code=x",
+      }),
+    ).toBe(0);
+    expect(
+      uiExitCode({ state: "blocked", code: "ui_session_contract_unavailable" }),
+    ).toBe(4);
+    expect(
+      uiExitCode({ state: "failed", code: "ui_session_code_invalid" }),
+    ).toBe(1);
   });
 
   it("uses a platform-appropriate opener and reports missing openers", async () => {

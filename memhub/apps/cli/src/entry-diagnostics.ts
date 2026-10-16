@@ -28,11 +28,7 @@ export function resolveEntryDiagnostics(input: {
   // comparison would misread that as isolated and silently drop diagnostics.
   const home = resolve(input.home);
   const accountHome = resolve(input.accountHome);
-  if (
-    home === undefined ||
-    accountHome === undefined ||
-    home === accountHome
-  ) {
+  if (home === undefined || accountHome === undefined || home === accountHome) {
     return { kind: "log" };
   }
   // Isolated HOME with no explicit data dir: the fallback path would write

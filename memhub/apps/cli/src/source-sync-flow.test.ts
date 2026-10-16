@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CoreReader, ReadOutcome } from "./core-client.js";
-import type {
-  CoreOperations,
-  OperationOutcome,
-} from "./core-operations.js";
+import type { CoreOperations, OperationOutcome } from "./core-operations.js";
 import {
   renderSourceSyncText,
   setSourceSync,
@@ -320,4 +317,3 @@ describe("setSourceSync", () => {
     expect(renderSourceSyncText(invalid)).toBe("未变更：invalid_source_id\n");
   });
 });
-

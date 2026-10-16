@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { McpSession, type GrantedTools } from "./mcp-session.js";
+import { type GrantedTools, McpSession } from "./mcp-session.js";
 
 function sessionWith(granted: GrantedTools): McpSession {
   return new McpSession(

@@ -68,7 +68,8 @@ export function renderDoctorText(document: DoctorDocument): string {
   return [
     `MemHub 检查：${doctorState(document.state)}`,
     ...document.checks.map(
-      (check) => `${symbol(check.state)} ${labels[check.id]}：${checkState(check.state)}`,
+      (check) =>
+        `${symbol(check.state)} ${labels[check.id]}：${checkState(check.state)}`,
     ),
     ...(document.state === "healthy"
       ? []

@@ -19,15 +19,21 @@ import { saveConnectionPreferences } from "./connection-preferences";
 import { resetConnectionReconcile } from "./connection-reconcile";
 import { queryClient } from "./query-client";
 
-const { summary, processing, permission, history, liveSync, recentConversations } =
-  vi.hoisted(() => ({
-    summary: vi.fn(),
-    processing: vi.fn(),
-    permission: vi.fn(),
-    history: vi.fn(),
-    liveSync: vi.fn(),
-    recentConversations: vi.fn(),
-  }));
+const {
+  summary,
+  processing,
+  permission,
+  history,
+  liveSync,
+  recentConversations,
+} = vi.hoisted(() => ({
+  summary: vi.fn(),
+  processing: vi.fn(),
+  permission: vi.fn(),
+  history: vi.fn(),
+  liveSync: vi.fn(),
+  recentConversations: vi.fn(),
+}));
 vi.mock("./call-history-client", async (original) => ({
   ...(await original<typeof import("./call-history-client")>()),
   getCallHistory: history,
@@ -116,7 +122,7 @@ it("hides a debug-frame dialogue excerpt from 最近更新 and falls back to mem
         created_at: "2026-10-12T06:06:00Z",
         imported_at: "2026-10-12T06:06:00Z",
         time_basis: "conversation",
-        excerpt: '[write_stdout] {"chars":"{\\\"session_id\\":93099}',
+        excerpt: '[write_stdout] {"chars":"{\\"session_id\\":93099}',
         truncated: false,
       },
     ],
@@ -556,9 +562,7 @@ it("shows disabled model-content permission and opens settings", async () => {
     0,
   );
   expect(screen.getByText("新的对话不会再整理成记忆")).toBeTruthy();
-  fireEvent.click(
-    screen.getByRole("button", { name: "打开模型内容权限" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "打开模型内容权限" }));
   expect(onSettings).toHaveBeenCalledOnce();
 });
 afterEach(() => {

@@ -333,10 +333,7 @@ function mergeCommandHooks(
           entry &&
           typeof entry === "object" &&
           typeof (entry as { command?: unknown }).command === "string" &&
-          namesCapture(
-            (entry as { command: string }).command,
-            sourceId,
-          )
+          namesCapture((entry as { command: string }).command, sourceId)
         ) {
           entries.splice(index, 1);
         }
@@ -365,9 +362,7 @@ function mergeCommandHooks(
         const kept = group.hooks.filter((hook) => {
           if (!hook || typeof hook !== "object") return true;
           const value = (hook as { command?: unknown }).command;
-          return !(
-            typeof value === "string" && namesCapture(value, sourceId)
-          );
+          return !(typeof value === "string" && namesCapture(value, sourceId));
         });
         if (kept.length === 0) entries.splice(index, 1);
         else if (kept.length !== group.hooks.length)

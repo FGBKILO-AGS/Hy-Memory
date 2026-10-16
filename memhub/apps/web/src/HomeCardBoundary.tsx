@@ -36,7 +36,9 @@ export class HomeCardBoundary extends Component<Props, State> {
     if (this.state.crashed) {
       return (
         <section className="r6-home-auto-failure" role="status">
-          <p>{this.props.label}暂时显示不了，其他功能不受影响，稍后会自动恢复。</p>
+          <p>
+            {this.props.label}暂时显示不了，其他功能不受影响，稍后会自动恢复。
+          </p>
         </section>
       );
     }

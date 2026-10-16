@@ -403,9 +403,7 @@ export function setReaderBaseUrl(url: string | null): void {
 }
 
 function readerAvailable(): boolean {
-  return (
-    readerBaseUrl !== null && Date.now() >= readerCircuitOpenUntil
-  );
+  return readerBaseUrl !== null && Date.now() >= readerCircuitOpenUntil;
 }
 
 function openReaderCircuit(): void {
@@ -422,10 +420,7 @@ const READER_PATHS = new Set([
   "/api/v1/memories/graph",
 ]);
 
-const READER_POST_PATHS = new Set([
-  "/api/v1/recall",
-  "/api/v1/context/search",
-]);
+const READER_POST_PATHS = new Set(["/api/v1/recall", "/api/v1/context/search"]);
 
 async function tryReader<T>(
   method: "get" | "post",
@@ -433,14 +428,19 @@ async function tryReader<T>(
   config: Record<string, unknown> | undefined,
   fallback: () => Promise<T>,
 ): Promise<T> {
-  if (!readerAvailable() || !(READER_PATHS.has(url) || READER_POST_PATHS.has(url)))
+  if (
+    !readerAvailable() ||
+    !(READER_PATHS.has(url) || READER_POST_PATHS.has(url))
+  )
     return fallback();
   try {
     const response = await axios.request<T>({
       method,
       url: `${readerBaseUrl}${url}`,
       timeout: READER_TIMEOUT_MS,
-      ...(method === "post" ? { data: config?.data ?? config?.body } : { params: config?.params }),
+      ...(method === "post"
+        ? { data: config?.data ?? config?.body }
+        : { params: config?.params }),
       headers: (config?.headers as Record<string, string>) ?? {},
     });
     return response.data;
@@ -711,8 +711,7 @@ export async function getModelContentPermission(
     { signal },
   );
   const permission = parseModelContentPermission(response.data);
-  if (permission === null)
-    throw new Error("model_content_permission_invalid");
+  if (permission === null) throw new Error("model_content_permission_invalid");
   return permission;
 }
 
@@ -888,10 +887,15 @@ export async function deleteModelProfile(
 }
 
 export async function getHomeSummary(): Promise<HomeSummary> {
-  return tryReader<HomeSummary>("get", "/api/v1/home-summary", undefined, async () => {
-    const response = await client.get<HomeSummary>("/api/v1/home-summary");
-    return response.data;
-  });
+  return tryReader<HomeSummary>(
+    "get",
+    "/api/v1/home-summary",
+    undefined,
+    async () => {
+      const response = await client.get<HomeSummary>("/api/v1/home-summary");
+      return response.data;
+    },
+  );
 }
 
 export async function getLiveSyncHealth(): Promise<LiveSyncHealth[]> {
@@ -913,12 +917,17 @@ export async function getMemoryLibrary(
 }
 
 export async function getMemories(query = ""): Promise<GovernedMemory[]> {
-  return tryReader<GovernedMemory[]>("get", "/api/v1/memories", { params: query ? { query } : undefined }, async () => {
-    const response = await client.get<GovernedMemory[]>("/api/v1/memories", {
-      params: query ? { query } : undefined,
-    });
-    return response.data;
-  });
+  return tryReader<GovernedMemory[]>(
+    "get",
+    "/api/v1/memories",
+    { params: query ? { query } : undefined },
+    async () => {
+      const response = await client.get<GovernedMemory[]>("/api/v1/memories", {
+        params: query ? { query } : undefined,
+      });
+      return response.data;
+    },
+  );
 }
 
 export async function askMemories(
@@ -1089,7 +1098,9 @@ export async function getMemoryGraphWith(
 ): Promise<MemoryGraphResponse> {
   if (pendingMemoryGraph) return pendingMemoryGraph;
   pendingMemoryGraph = transport
-    .get<MemoryGraphResponse>("/api/v1/memories/graph", { params: { limit: 300 } })
+    .get<MemoryGraphResponse>("/api/v1/memories/graph", {
+      params: { limit: 300 },
+    })
     .then((response) => response.data)
     .finally(() => {
       pendingMemoryGraph = null;

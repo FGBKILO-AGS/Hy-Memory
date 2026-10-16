@@ -23,7 +23,10 @@ export async function readModelContentPermission(
   if (outcome.state !== "ok") {
     return failure("unknown", outcome.code);
   }
-  return permissionState(outcome.data, "model_content_permission_response_invalid");
+  return permissionState(
+    outcome.data,
+    "model_content_permission_response_invalid",
+  );
 }
 
 export async function setModelContentPermission(

@@ -46,8 +46,10 @@ const BLOCK_REASON_LABELS: Record<string, string> = {
   // the one thing the reader can actually go and do.
   secure_storage_authorization_required:
     "需要授权访问本机钥匙串。请重新打开 App 并完成一次授权",
-  secure_storage_read_timeout: "读取本机钥匙串超时。重新保存一遍模型配置即可恢复",
-  secure_storage_write_timeout: "写入本机钥匙串超时。重新保存一遍模型配置即可恢复",
+  secure_storage_read_timeout:
+    "读取本机钥匙串超时。重新保存一遍模型配置即可恢复",
+  secure_storage_write_timeout:
+    "写入本机钥匙串超时。重新保存一遍模型配置即可恢复",
   hy_memory_model_authentication_failed:
     "模型认证失败。更新 key 后，到设置里点一次检测，会自动接着处理",
   hy_memory_model_payment_required:

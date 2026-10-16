@@ -266,7 +266,9 @@ export function renderHostText(document: HostFlowDocument): string {
       }
       if (review.length > 12) lines.push(`    … 另有 ${review.length - 12} 处`);
       lines.push("");
-      lines.push("这些不是我们安装的内容，卸载不会替你删除；需自行处理后才能卸载。");
+      lines.push(
+        "这些不是我们安装的内容，卸载不会替你删除；需自行处理后才能卸载。",
+      );
     }
   }
   return `${lines.join("\n")}\n`;

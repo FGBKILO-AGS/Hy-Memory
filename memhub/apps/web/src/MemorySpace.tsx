@@ -284,11 +284,7 @@ export function MemorySpace({
     null,
   );
   const [arrivalSetup, setArrivalSetup] = useState<
-    | "checking"
-    | "model-required"
-    | "consent-required"
-    | "ready"
-    | "unavailable"
+    "checking" | "model-required" | "consent-required" | "ready" | "unavailable"
   >("checking");
   const [checkingSetup, setCheckingSetup] = useState(false);
   const liveLoading = useRef(false);
@@ -318,7 +314,10 @@ export function MemorySpace({
       ]);
       if (stopped || version !== request) return;
       setCheckingSetup(false);
-      if (profiles.status !== "fulfilled" || permission.status !== "fulfilled") {
+      if (
+        profiles.status !== "fulfilled" ||
+        permission.status !== "fulfilled"
+      ) {
         setArrivalSetup("unavailable");
         return;
       }
@@ -351,6 +350,8 @@ export function MemorySpace({
   // none"; not having read it yet means we do not know, and saying the first
   // when we mean the second is how 483 memories came to look like zero.
   const [loaded, setLoaded] = useState(false);
+  const loadedRef = useRef(loaded);
+  loadedRef.current = loaded;
   /** Focus targets for the mode tablist's roving arrow-key navigation. */
   const modeTabs = useRef<
     Partial<
@@ -766,7 +767,7 @@ export function MemorySpace({
     async function attemptLoad() {
       if (cancelled || loading) return;
       loading = true;
-      if (loaded) {
+      if (loadedRef.current) {
         refreshingTimer = window.setTimeout(() => {
           if (!cancelled) setRefreshing(true);
         }, 2_000);
@@ -777,7 +778,7 @@ export function MemorySpace({
       if (!cancelled) {
         // A failed refresh keeps the list on screen, so it says why the list
         // may be behind. A quick successful one never flashes the hint.
-        setRefreshing(!success && loaded);
+        setRefreshing(!success && loadedRef.current);
       }
       if (cancelled || success) return;
       attempt += 1;

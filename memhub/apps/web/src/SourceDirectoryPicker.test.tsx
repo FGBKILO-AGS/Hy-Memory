@@ -299,7 +299,11 @@ describe("SourceDirectoryPicker COLD04", () => {
     }> = [];
     vi.stubGlobal("oneMemory", {
       pickSourceDirectory: api.pick,
-      logUiTrace: (input: { phase: string; status?: string; reason?: string }) => {
+      logUiTrace: (input: {
+        phase: string;
+        status?: string;
+        reason?: string;
+      }) => {
         emitted.push(input);
         return Promise.resolve({ state: "logged" });
       },

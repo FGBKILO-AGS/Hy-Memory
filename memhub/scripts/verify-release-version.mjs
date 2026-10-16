@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { createRequire } from "node:module";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
@@ -37,7 +37,8 @@ function parseArgs(arguments_) {
       throw new Error(`unknown argument: ${flag}`);
     }
     const value = arguments_[++index];
-    if (value === undefined || value === "") throw new Error(`missing value for ${flag}`);
+    if (value === undefined || value === "")
+      throw new Error(`missing value for ${flag}`);
     options[flag.slice(2).replace("-", "_")] = value;
   }
   if (!["development", "stable", "prerelease"].includes(options.channel)) {
@@ -49,29 +50,45 @@ function parseArgs(arguments_) {
 async function packageVersions() {
   const versions = {};
   for (const relative of packageFiles) {
-    const document = JSON.parse(await readFile(path.join(root, relative), "utf8"));
+    const document = JSON.parse(
+      await readFile(path.join(root, relative), "utf8"),
+    );
     versions[relative] = assertSemver(document.version, `${relative} version`);
   }
-  const pyproject = await readFile(path.join(root, "apps/core/pyproject.toml"), "utf8");
+  const pyproject = await readFile(
+    path.join(root, "apps/core/pyproject.toml"),
+    "utf8",
+  );
   const match = /^version\s*=\s*"([^"]+)"\s*$/m.exec(pyproject);
-  if (!match) throw new Error("apps/core/pyproject.toml project version missing");
+  if (!match)
+    throw new Error("apps/core/pyproject.toml project version missing");
   versions["apps/core/pyproject.toml"] = match[1];
   const lock = await readFile(path.join(root, "apps/core/uv.lock"), "utf8");
-  const lockMatch = /\[\[package\]\]\s*\nname = "one-memory"\s*\nversion = "([^"]+)"/m.exec(lock);
-  if (!lockMatch) throw new Error("apps/core/uv.lock one-memory version missing");
+  const lockMatch =
+    /\[\[package\]\]\s*\nname = "one-memory"\s*\nversion = "([^"]+)"/m.exec(
+      lock,
+    );
+  if (!lockMatch)
+    throw new Error("apps/core/uv.lock one-memory version missing");
   versions["apps/core/uv.lock"] = lockMatch[1];
   return versions;
 }
 
-export async function verifyReleaseVersion(arguments_, environment = process.env) {
+export async function verifyReleaseVersion(
+  arguments_,
+  environment = process.env,
+) {
   const options = parseArgs(arguments_);
   const version = readReleaseVersion(root);
   const canonicalBuildNumber = readReleaseBuildNumber(root);
-  const suppliedVersion = options.version ?? environment.ONE_MEMORY_VERSION?.trim();
+  const suppliedVersion =
+    options.version ?? environment.ONE_MEMORY_VERSION?.trim();
   if (suppliedVersion !== undefined && suppliedVersion !== "") {
     assertSemver(suppliedVersion, "requested release version");
     if (suppliedVersion !== version) {
-      throw new Error(`requested version ${suppliedVersion} does not match root ${version}`);
+      throw new Error(
+        `requested version ${suppliedVersion} does not match root ${version}`,
+      );
     }
   }
   resolveBuildVersion(
@@ -92,7 +109,8 @@ export async function verifyReleaseVersion(arguments_, environment = process.env
   }
 
   const tag = options.tag ?? environment.GITHUB_REF_NAME?.trim();
-  const buildNumberRaw = options.build_number ?? environment.ONE_MEMORY_BUILD_NUMBER?.trim();
+  const buildNumberRaw =
+    options.build_number ?? environment.ONE_MEMORY_BUILD_NUMBER?.trim();
   const buildNumber =
     buildNumberRaw === undefined || buildNumberRaw === ""
       ? canonicalBuildNumber
@@ -108,14 +126,20 @@ export async function verifyReleaseVersion(arguments_, environment = process.env
   if (options.channel !== "development") {
     if (version === "0.0.0") throw new Error("0.0.0 cannot be published");
     if (tag !== `v${version}`) {
-      throw new Error(`release tag mismatch: expected v${version}, got ${tag ?? "<missing>"}`);
+      throw new Error(
+        `release tag mismatch: expected v${version}, got ${tag ?? "<missing>"}`,
+      );
     }
   }
   if (options.channel === "stable" && isPrerelease(version)) {
-    throw new Error(`stable channel cannot publish prerelease version ${version}`);
+    throw new Error(
+      `stable channel cannot publish prerelease version ${version}`,
+    );
   }
   if (options.channel === "prerelease" && !isPrerelease(version)) {
-    throw new Error(`prerelease channel requires a SemVer prerelease: ${version}`);
+    throw new Error(
+      `prerelease channel requires a SemVer prerelease: ${version}`,
+    );
   }
 
   return {

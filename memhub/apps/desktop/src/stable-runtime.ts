@@ -1,4 +1,12 @@
-import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { installCliLink, planCliLink } from "@one-memory/runtime-control";
 
@@ -36,13 +44,22 @@ async function ensureCliPath(
   binDirectory: string,
   platform: NodeJS.Platform,
 ): Promise<void> {
-  const profile = path.join(home, platform === "darwin" ? ".zprofile" : ".profile");
+  const profile = path.join(
+    home,
+    platform === "darwin" ? ".zprofile" : ".profile",
+  );
   const existingInfo = await lstat(profile).catch(() => null);
-  if (existingInfo?.isSymbolicLink() || (existingInfo && !existingInfo.isFile())) {
+  if (
+    existingInfo?.isSymbolicLink() ||
+    (existingInfo && !existingInfo.isFile())
+  ) {
     throw new Error("shell_profile_unmanaged");
   }
   const existing = existingInfo ? await readFile(profile, "utf8") : "";
-  if (existing.includes(CLI_PATH_BEGIN) || existing.split("\n").some((line) => line.includes(binDirectory))) {
+  if (
+    existing.includes(CLI_PATH_BEGIN) ||
+    existing.split("\n").some((line) => line.includes(binDirectory))
+  ) {
     return;
   }
   await mkdir(home, { recursive: true, mode: 0o700 });
@@ -50,7 +67,10 @@ async function ensureCliPath(
   const block = `${CLI_PATH_BEGIN}\nexport PATH="$HOME/.local/bin:$PATH"\n${CLI_PATH_END}\n`;
   const temporary = `${profile}.memhub-${process.pid}`;
   try {
-    await writeFile(temporary, `${existing}${separator}${block}`, { encoding: "utf8", mode: 0o600 });
+    await writeFile(temporary, `${existing}${separator}${block}`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     await chmod(temporary, existingInfo ? existingInfo.mode & 0o777 : 0o600);
     await rename(temporary, profile);
   } finally {

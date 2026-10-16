@@ -30,12 +30,16 @@ describe("managed restore over HTTP", { timeout: 15_000 }, () => {
       }
       if (request.headers.authorization === "Bearer r409") {
         response.statusCode = 409;
-        response.end(JSON.stringify({ detail: "backup_restore_runtime_running" }));
+        response.end(
+          JSON.stringify({ detail: "backup_restore_runtime_running" }),
+        );
         return;
       }
       if (request.headers.authorization === "Bearer r422") {
         response.statusCode = 422;
-        response.end(JSON.stringify({ detail: "backup_restore_source_outside_home" }));
+        response.end(
+          JSON.stringify({ detail: "backup_restore_source_outside_home" }),
+        );
         return;
       }
       response.end(
@@ -48,9 +52,12 @@ describe("managed restore over HTTP", { timeout: 15_000 }, () => {
         }),
       );
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
     const address = server.address();
-    if (address === null || typeof address === "string") throw new Error("no port");
+    if (address === null || typeof address === "string")
+      throw new Error("no port");
     port = address.port;
   });
 
@@ -137,8 +144,18 @@ describe("maintenance Core identity", { timeout: 15_000 }, () => {
 
   it("rejects a squatter, wrong service, wrong instance, and non-200", async () => {
     const cases = [
-      { status: 200, data: { status: "ok", service: "other", instance_id: "x" } },
-      { status: 200, data: { status: "ok", service: "one-memory-core", instance_id: "wrong" } },
+      {
+        status: 200,
+        data: { status: "ok", service: "other", instance_id: "x" },
+      },
+      {
+        status: 200,
+        data: {
+          status: "ok",
+          service: "one-memory-core",
+          instance_id: "wrong",
+        },
+      },
       { status: 503, data: {} },
       { status: 200, data: null },
     ];

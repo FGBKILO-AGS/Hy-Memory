@@ -18,15 +18,15 @@ import {
   changeImportJob,
   createImportJob,
   getHistoryFile,
-  getModelContentPermission,
-  getModelProfiles,
   getImportIssues,
   getImportJob,
   getImportJobs,
   getLiveSyncHealth,
   getMemoryNoteOperation,
   getMemoryNotes,
+  getModelContentPermission,
   getModelCreationOperation,
+  getModelProfiles,
   getSourceImportReceipt,
   getSources,
   setModelContentPermission,
@@ -202,7 +202,9 @@ describe("import job transport validation", () => {
     fake.post.mockResolvedValue({
       data: { ...importJob, errors: Number.POSITIVE_INFINITY },
     });
-    await expect(createImportJob("cursor")).rejects.toThrow("import_job_invalid");
+    await expect(createImportJob("cursor")).rejects.toThrow(
+      "import_job_invalid",
+    );
     await expect(changeImportJob("job-1", "pause")).rejects.toThrow(
       "import_job_invalid",
     );
@@ -256,8 +258,14 @@ describe("source list transport validation", () => {
   it.each([
     ["negative messages", { imported_messages: -1 }],
     ["NaN messages", { imported_messages: Number.NaN }],
-    ["infinite conversations", { imported_conversations: Number.POSITIVE_INFINITY }],
-    ["unsafe conversations", { imported_conversations: Number.MAX_SAFE_INTEGER + 1 }],
+    [
+      "infinite conversations",
+      { imported_conversations: Number.POSITIVE_INFINITY },
+    ],
+    [
+      "unsafe conversations",
+      { imported_conversations: Number.MAX_SAFE_INTEGER + 1 },
+    ],
   ])("rejects %s before rendering the source list", async (_name, patch) => {
     fake.get.mockResolvedValue({ data: [{ ...source, ...patch }] });
     await expect(getSources()).rejects.toThrow("invalid source list");

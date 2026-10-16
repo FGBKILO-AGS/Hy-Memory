@@ -1,10 +1,11 @@
-import { defineConfig } from "tsup";
 import { createRequire } from "node:module";
+import { defineConfig } from "tsup";
 
 const require = createRequire(import.meta.url);
-const { resolveBuildVersion } = require("../../scripts/release-version.cjs") as {
-  resolveBuildVersion(environment?: NodeJS.ProcessEnv, root?: string): string;
-};
+const { resolveBuildVersion } =
+  require("../../scripts/release-version.cjs") as {
+    resolveBuildVersion(environment?: NodeJS.ProcessEnv, root?: string): string;
+  };
 const releaseVersion = resolveBuildVersion(process.env);
 
 export default defineConfig({

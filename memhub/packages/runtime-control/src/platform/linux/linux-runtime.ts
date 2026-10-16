@@ -57,7 +57,11 @@ function sha1(value: string): string {
 }
 
 function addBackoff(content: string): string {
-  if (content.includes("RestartSec=") && content.includes("StartLimitIntervalSec=")) return content;
+  if (
+    content.includes("RestartSec=") &&
+    content.includes("StartLimitIntervalSec=")
+  )
+    return content;
   return content.replace(/Restart=on-failure\n?/, RESTART_BACKOFF_HEADER);
 }
 
@@ -89,15 +93,25 @@ export function planLinuxRuntimeControl(input: {
   plan.service_file.content = addBackoff(plan.service_file.content);
 
   const current = input.currentUnit ?? null;
-  const same = current !== null && canonicalUnit(current) === canonicalUnit(plan.service_file.content);
+  const same =
+    current !== null &&
+    canonicalUnit(current) === canonicalUnit(plan.service_file.content);
   const legacy =
-    current !== null && !same && sha1(canonicalUnit(current)) === LEGACY_CANONICAL_DIGEST;
+    current !== null &&
+    !same &&
+    sha1(canonicalUnit(current)) === LEGACY_CANONICAL_DIGEST;
   const upgradeCommands = same
     ? []
     : legacy
       ? [
           ["systemctl", "--user", "stop", "one-memory.service"] as const,
-          ["systemctl", "--user", "enable", "--now", "one-memory.service"] as const,
+          [
+            "systemctl",
+            "--user",
+            "enable",
+            "--now",
+            "one-memory.service",
+          ] as const,
         ]
       : [];
 

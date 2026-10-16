@@ -19,9 +19,7 @@ export function ModelContentConsent({
 
   useEffect(() => {
     const before = document.activeElement;
-    panel.current
-      ?.querySelector<HTMLElement>("button:not(:disabled)")
-      ?.focus();
+    panel.current?.querySelector<HTMLElement>("button:not(:disabled)")?.focus();
     return () => {
       if (before instanceof HTMLElement && before.isConnected) before.focus();
     };

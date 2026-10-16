@@ -9,8 +9,8 @@ import {
   resolveRuntimeCliConfig,
 } from "@one-memory/runtime-control";
 import { run } from "./cli.js";
-import { resolveDiagnosticsDataDir } from "./install-receipt.js";
 import { resolveEntryDiagnostics } from "./entry-diagnostics.js";
+import { resolveDiagnosticsDataDir } from "./install-receipt.js";
 
 function accountHomeDirectory(): string | undefined {
   try {

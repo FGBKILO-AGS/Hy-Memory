@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-
-import { PLUGIN_HOOKS } from "./codebuddy-plugin.js";
 import { captureFilePath, namesCapture } from "./capture-hooks.js";
+import { PLUGIN_HOOKS } from "./codebuddy-plugin.js";
 import {
   asInstalled,
   expectedPluginHooks,
@@ -227,9 +226,7 @@ function isRecognizableWorkbuddyHookFile(raw: string): boolean {
   const record = hooks as Record<string, unknown>;
   const commands = (event: string): string[] =>
     Array.isArray(record[event])
-      ? (record[event] as unknown[]).flatMap((entry) =>
-          commandValues(entry),
-        )
+      ? (record[event] as unknown[]).flatMap((entry) => commandValues(entry))
       : [];
   const start = commands("SessionStart");
   const prompt = commands("UserPromptSubmit");
@@ -238,8 +235,7 @@ function isRecognizableWorkbuddyHookFile(raw: string): boolean {
     values.some((value) => value.includes(marker));
   return (
     has(start, "--inject workbuddy") &&
-    (has(prompt, "--inject workbuddy") ||
-      has(prompt, "capture workbuddy")) &&
+    (has(prompt, "--inject workbuddy") || has(prompt, "capture workbuddy")) &&
     has(stop, "capture workbuddy")
   );
 }

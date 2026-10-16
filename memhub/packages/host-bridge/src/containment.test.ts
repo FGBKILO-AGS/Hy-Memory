@@ -12,8 +12,8 @@ import {
   lstat,
   mkdir,
   mkdtemp,
-  readFile,
   readdir,
+  readFile,
   realpath,
   rm,
   symlink,
@@ -31,15 +31,15 @@ import {
   cursorLayout,
   deepseekHarnessLayout,
   hermesLayout,
+  LOCAL_OPERATION_DISABLED_MESSAGE,
   opencodeLayout,
   piLayout,
-  qwenCodeLayout,
-  LOCAL_OPERATION_DISABLED_MESSAGE,
   planRecallInstall,
   previewRecallInstall,
-  refuseDisabledHostOperation,
+  qwenCodeLayout,
   type RecallHostLayout,
   type RecallRuntime,
+  refuseDisabledHostOperation,
   verifyRecallInstall,
   workbuddyLayout,
 } from "./recall-installer.js";
@@ -152,7 +152,9 @@ describe("symlinked ancestor containment", () => {
     await rm(linkedRoot);
     await symlink(otherRoot, linkedRoot);
 
-    await expect(applyRecallInstall(plan)).rejects.toThrow(/containment_refused/);
+    await expect(applyRecallInstall(plan)).rejects.toThrow(
+      /containment_refused/,
+    );
   });
 });
 
@@ -191,7 +193,10 @@ describe("all writing layouts refuse a symlinked ancestor", () => {
       name: "claude-code skills",
       link: "skills",
       layout: (dir) =>
-        claudeCodeLayout({ claudeDir: dir, configPath: path.join(dir, ".claude.json") }),
+        claudeCodeLayout({
+          claudeDir: dir,
+          configPath: path.join(dir, ".claude.json"),
+        }),
     },
     { name: "qwen-code skills", link: "skills", layout: qwenCodeLayout },
     { name: "hermes skills", link: "skills", layout: hermesLayout },
@@ -200,14 +205,18 @@ describe("all writing layouts refuse a symlinked ancestor", () => {
     {
       name: "deepseek profiles/headless",
       link: path.join("profiles", "headless"),
-      layout: (dir) => deepseekHarnessLayout({ dshHome: dir, profile: "headless" }),
+      layout: (dir) =>
+        deepseekHarnessLayout({ dshHome: dir, profile: "headless" }),
     },
     { name: "workbuddy plugins", link: "plugins", layout: workbuddyLayout },
   ];
 
   for (const testCase of cases) {
     it(`${testCase.name}`, async () => {
-      const hostDir = path.join(base, testCase.name.replaceAll(/[^a-z0-9]+/gi, "-"));
+      const hostDir = path.join(
+        base,
+        testCase.name.replaceAll(/[^a-z0-9]+/gi, "-"),
+      );
       await mkdir(hostDir, { recursive: true });
       const linkPath = path.join(hostDir, testCase.link);
       await mkdir(path.dirname(linkPath), { recursive: true });
@@ -229,7 +238,10 @@ describe("leaf-level attacks", () => {
     await mkdir(skillDir, { recursive: true });
     // The leaf itself is the symlink, not its parent.
     await writeFile(path.join(outside, "target.md"), "outside\n");
-    await symlink(path.join(outside, "target.md"), path.join(skillDir, "SKILL.md"));
+    await symlink(
+      path.join(outside, "target.md"),
+      path.join(skillDir, "SKILL.md"),
+    );
     const layout = cursorLayout(hostDir);
     // A symlinked leaf is refused either at plan (unmanaged skill) or apply
     // (containment); both must decline to write through it.
@@ -275,7 +287,9 @@ describe("external config path", () => {
       configPath: path.join(linkedParent, ".claude.json"),
     });
     const plan = await planRecallInstall(layout, runtime());
-    await expect(applyRecallInstall(plan)).rejects.toThrow(/containment_refused/);
+    await expect(applyRecallInstall(plan)).rejects.toThrow(
+      /containment_refused/,
+    );
     // Nothing was written through the linked parent.
     expect(await readdir(outsideDir)).toEqual([]);
   });

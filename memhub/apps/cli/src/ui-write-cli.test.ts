@@ -80,7 +80,13 @@ describe("calls clear", () => {
   });
 
   it("previews without contacting Core", async () => {
-    const result = await capturedRun(["calls", "clear", "--event", EVENT, "--json"]);
+    const result = await capturedRun([
+      "calls",
+      "clear",
+      "--event",
+      EVENT,
+      "--json",
+    ]);
     expect(result.code).toBe(0);
     const document = JSON.parse(result.stdout);
     expect(document.state).toBe("preview");
@@ -341,7 +347,10 @@ describe("notes / extraction / graph / manual extract", () => {
       "--json",
     ]);
     expect(applied.code).toBe(0);
-    const body = transport.post.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    const body = transport.post.mock.calls.at(-1)?.[1] as Record<
+      string,
+      unknown
+    >;
     expect(body.text).toBe("记住这个决定");
     expect(body.scope).toBe("all-apps");
     expect(JSON.parse(applied.stdout).state).toBe("committed");

@@ -648,9 +648,7 @@ export function ModelSettings({
       }
     } catch {
       if (alive.current) {
-        setSaveError(
-          "配置尚未保存成功，已填写内容保留，可核对后重试。",
-        );
+        setSaveError("配置尚未保存成功，已填写内容保留，可核对后重试。");
       }
     } finally {
       flight.current = false;
@@ -826,14 +824,13 @@ export function ModelSettings({
           <div className="model-saved-heading">
             <Check size={18} aria-hidden="true" />
             <strong>
-              {isReady(savedProfile) &&
-              savedProfile.is_active
+              {isReady(savedProfile) && savedProfile.is_active
                 ? "已保存，已启用"
                 : isReady(savedProfile)
-                    ? "已保存，连接通过"
-                    : models.probeFor(savedProfile)
-                      ? "已保存，测试未通过"
-                      : "已保存，待测试"}
+                  ? "已保存，连接通过"
+                  : models.probeFor(savedProfile)
+                    ? "已保存，测试未通过"
+                    : "已保存，待测试"}
             </strong>
           </div>
           <h3>{savedProfile.name}</h3>
@@ -917,7 +914,7 @@ export function ModelSettings({
               刷新配置列表
             </button>
           )}
-          <label>
+          <div className="model-form-field">
             服务商预设
             <OptionMenu
               ariaLabel="服务商预设"
@@ -954,7 +951,7 @@ export function ModelSettings({
               只是帮你填好接口地址和一个模型名，不代表这个模型当前可用。
               请对照服务商的模型列表核对后再保存。
             </small>
-          </label>
+          </div>
           <label>
             协议
             <select
@@ -1245,11 +1242,7 @@ export function ModelSettings({
             )}
             <button
               type="button"
-              disabled={
-                locked ||
-                editChanged ||
-                (!editing && unknownCreation)
-              }
+              disabled={locked || editChanged || (!editing && unknownCreation)}
               onClick={() => void persist(true)}
             >
               {setupPhase === "testing"
@@ -1350,10 +1343,7 @@ export function ModelSettings({
                     <>
                       <button
                         type="button"
-                        disabled={
-                          locked ||
-                          !isReady(profile)
-                        }
+                        disabled={locked || !isReady(profile)}
                         onClick={() => models.activate(profile.profile_id)}
                       >
                         设为当前模型

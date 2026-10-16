@@ -46,9 +46,7 @@ const grant: ConnectionItem = {
   allowedTools: ["om_recall"],
   allowedScopes: ["all-apps"],
 };
-function plan(
-  items: ConnectionItem[] = [install, grant],
-): ConnectionPlan {
+function plan(items: ConnectionItem[] = [install, grant]): ConnectionPlan {
   return {
     schemaVersion: 1,
     ...owner,
@@ -286,10 +284,10 @@ describe("connection batch authorization and recovery", () => {
     const { batch, adapters, ledger } = fixture();
     vi.mocked(adapters.install.apply).mockImplementation(
       async (item, context) => {
-      expect(ledger.entries.get(context.operationId)?.items[0].state).toBe(
-        "in_flight",
-      );
-      return { status: "succeeded", receipt: receipt(item, context) };
+        expect(ledger.entries.get(context.operationId)?.items[0].state).toBe(
+          "in_flight",
+        );
+        return { status: "succeeded", receipt: receipt(item, context) };
       },
     );
     const result = await execute(batch);

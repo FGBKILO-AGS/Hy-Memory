@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { applyShellPath, planShellPath, removeShellPath } from "./shell-path.js";
+import {
+  applyShellPath,
+  planShellPath,
+  removeShellPath,
+} from "./shell-path.js";
 
 async function home(): Promise<string> {
   return mkdtemp(path.join(tmpdir(), "memhub-shell-path-"));

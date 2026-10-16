@@ -1464,7 +1464,8 @@ button.memory-row:hover:not(:disabled) {
   background: var(--card);
 }
 
-.model-form label {
+.model-form label,
+.model-form .model-form-field {
   display: grid;
   gap: 8px;
   color: var(--tx2);

@@ -1,10 +1,11 @@
-import { defineConfig } from "tsup";
 import { createRequire } from "node:module";
+import { defineConfig } from "tsup";
 
 const require = createRequire(import.meta.url);
-const { resolveBuildVersion } = require("../../scripts/release-version.cjs") as {
-  resolveBuildVersion(environment?: NodeJS.ProcessEnv, root?: string): string;
-};
+const { resolveBuildVersion } =
+  require("../../scripts/release-version.cjs") as {
+    resolveBuildVersion(environment?: NodeJS.ProcessEnv, root?: string): string;
+  };
 const releaseVersion = resolveBuildVersion(process.env);
 
 export default defineConfig({
@@ -18,7 +19,9 @@ export default defineConfig({
     __ONE_MEMORY_BUILD_NUMBER__: JSON.stringify(
       process.env.ONE_MEMORY_BUILD_NUMBER ?? "unknown",
     ),
-    __ONE_MEMORY_COMMIT__: JSON.stringify(process.env.ONE_MEMORY_COMMIT ?? "unknown"),
+    __ONE_MEMORY_COMMIT__: JSON.stringify(
+      process.env.ONE_MEMORY_COMMIT ?? "unknown",
+    ),
     __MEMHUB_DEFAULT_RELEASE_MANIFEST_URL_TEMPLATE__: JSON.stringify(
       process.env.MEMHUB_DEFAULT_RELEASE_MANIFEST_URL_TEMPLATE ?? "",
     ),

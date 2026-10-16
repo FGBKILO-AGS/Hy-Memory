@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { createRequire } from "node:module";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
@@ -56,10 +56,13 @@ export async function setReleaseVersion(
   const lockRelative = "apps/core/uv.lock";
   const lockPath = path.join(repositoryRoot, lockRelative);
   const lock = await readFile(lockPath, "utf8");
-  const lockPattern = /(\[\[package\]\]\s*\nname = "one-memory"\s*\nversion = ")[^"]+("\s*$)/gm;
+  const lockPattern =
+    /(\[\[package\]\]\s*\nname = "one-memory"\s*\nversion = ")[^"]+("\s*$)/gm;
   const matches = [...lock.matchAll(lockPattern)];
   if (matches.length !== 1) {
-    throw new Error("apps/core/uv.lock one-memory version must appear exactly once");
+    throw new Error(
+      "apps/core/uv.lock one-memory version must appear exactly once",
+    );
   }
   const nextLock = lock.replace(lockPattern, `$1${pythonVersion}$2`);
 

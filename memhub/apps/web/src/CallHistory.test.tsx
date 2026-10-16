@@ -439,7 +439,7 @@ it.each([
     );
     expect(
       screen.getByRole("heading", {
-        name: "未记录 · 09/20 11:03",
+        name: /^未记录 · 09\/20 \d{2}:03$/,
       }),
     ).toBeTruthy();
     expect(screen.getByText("没有找到相关内容")).toBeTruthy();

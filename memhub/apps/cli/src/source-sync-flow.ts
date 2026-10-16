@@ -1,7 +1,7 @@
 import {
-  SourceSyncInputError,
   buildSourceSyncRequest,
   hasSourceSyncTarget,
+  SourceSyncInputError,
 } from "@one-memory/operations";
 import type { CoreReader } from "./core-client.js";
 import type { CoreOperations } from "./core-operations.js";
@@ -36,7 +36,10 @@ async function current(
   reader: CoreReader,
   sourceId: string,
 ): Promise<
-  | { state: "ok"; source: NonNullable<ReturnType<typeof validateSources>>[number] }
+  | {
+      state: "ok";
+      source: NonNullable<ReturnType<typeof validateSources>>[number];
+    }
   | { state: "invalid" | "unknown"; code: string }
 > {
   const outcome = await reader<unknown>("/api/v1/sources");

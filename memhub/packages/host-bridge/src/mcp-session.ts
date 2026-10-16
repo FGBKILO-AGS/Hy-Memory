@@ -24,8 +24,8 @@ import {
   HOST_CONTEXT_TIMEOUT_MS,
   isContextSearchRequest,
 } from "./context-protocol.js";
-import { RECALL_PRESENTATION_GUIDANCE } from "./recall-presentation.js";
 import { recallForHost } from "./host-facing.js";
+import { RECALL_PRESENTATION_GUIDANCE } from "./recall-presentation.js";
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";

@@ -31,7 +31,9 @@ export interface RuntimeServiceOptions {
   dataDir: string;
   /** Build the supervisor. `onSidecarFault` must be wired into it so a captured
    * post-start sidecar fault reaches the durable receipt this service writes. */
-  createSupervisor(onSidecarFault: () => void): ManagedRuntime | Promise<ManagedRuntime>;
+  createSupervisor(
+    onSidecarFault: () => void,
+  ): ManagedRuntime | Promise<ManagedRuntime>;
   pid?: number;
   processIsAlive?: (pid: number) => boolean;
   diagnostics?: DiagnosticSink;
@@ -85,7 +87,13 @@ export class RuntimeService {
         this.options.createSupervisor.length > 0
           ? (supervisor as { readerPort?: number | null }).readerPort
           : undefined;
-      await this.writeReceipt("running", connection.instanceId, connection.coreBaseUrl, undefined, readerPort);
+      await this.writeReceipt(
+        "running",
+        connection.instanceId,
+        connection.coreBaseUrl,
+        undefined,
+        readerPort,
+      );
       this.started = true;
       await this.options.diagnostics?.log({
         level: "info",

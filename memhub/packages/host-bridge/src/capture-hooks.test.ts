@@ -119,7 +119,9 @@ describe("capture hooks installed with recall", () => {
     );
     expect(commands).toHaveLength(2);
     expect(commands[0]).toBe("other-tool");
-    expect(commands.filter((command) => command.includes("capture cursor"))).toHaveLength(1);
+    expect(
+      commands.filter((command) => command.includes("capture cursor")),
+    ).toHaveLength(1);
   });
 
   it("merges Claude Code and Codex hook groups", async () => {
@@ -185,10 +187,7 @@ describe("capture hooks installed with recall", () => {
       const home = await root();
       const dir = path.join(home, hostId === "codex" ? ".codex" : ".claude");
       await mkdir(dir);
-      const hooksPath = path.join(
-        hostId === "codex" ? dir : dir,
-        "hooks.json",
-      );
+      const hooksPath = path.join(hostId === "codex" ? dir : dir, "hooks.json");
       if (hostId === "claude-code") {
         await writeFile(
           path.join(dir, "settings.json"),
@@ -271,15 +270,14 @@ describe("capture hooks installed with recall", () => {
       const target =
         hostId === "codex" ? hooksPath : path.join(dir, "settings.json");
       const document = JSON.parse(await readFile(target, "utf8")) as {
-        hooks: Record<
-          string,
-          Array<{ hooks: Array<{ command: string }> }>
-        >;
+        hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>>;
       };
       const commands = document.hooks[event].flatMap((entry) =>
         entry.hooks.map((hook) => hook.command),
       );
-      expect(commands.filter((command) => command === "other-tool")).toHaveLength(1);
+      expect(
+        commands.filter((command) => command === "other-tool"),
+      ).toHaveLength(1);
       expect(
         commands.filter((command) => command.includes(`capture ${hostId}`)),
       ).toHaveLength(1);

@@ -13,8 +13,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ModelProfile } from "@one-memory/contracts";
 import {
-  ModelProfileInputError,
   buildModelProfileUpdateRequest,
+  ModelProfileInputError,
   parseModelProfileReceipt,
 } from "@one-memory/operations";
 import type { CoreOperations, CorePatchOperations } from "./core-operations.js";
@@ -78,7 +78,10 @@ function digestOf(value: unknown): string {
 
 function preview(
   plan:
-    | Omit<Extract<ModelWritePlan, { kind: "model_profile_activate" }>, "digest">
+    | Omit<
+        Extract<ModelWritePlan, { kind: "model_profile_activate" }>,
+        "digest"
+      >
     | Omit<Extract<ModelWritePlan, { kind: "model_profile_edit" }>, "digest">,
 ): ModelWriteDocument {
   return {
@@ -198,9 +201,9 @@ export async function executeModelProfileEdit(
   let request: ReturnType<typeof buildModelProfileUpdateRequest>;
   try {
     request = buildModelProfileUpdateRequest(plan.profile_id, {
-    ...plan.patch,
-    expected_revision: plan.expected_revision,
-    ...(apiKey === undefined ? {} : { api_key: apiKey }),
+      ...plan.patch,
+      expected_revision: plan.expected_revision,
+      ...(apiKey === undefined ? {} : { api_key: apiKey }),
     });
   } catch (error) {
     if (error instanceof ModelProfileInputError) {

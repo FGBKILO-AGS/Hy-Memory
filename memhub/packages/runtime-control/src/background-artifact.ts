@@ -163,14 +163,11 @@ async function manifest(root: string): Promise<DistributionManifest> {
         bytes.subarray(0, length),
       ),
     );
-    exact(value, [
-      "schema_version",
-      "product",
-      "version",
-      "platform",
-      "arch",
-      "files",
-    ], ["build_number"]);
+    exact(
+      value,
+      ["schema_version", "product", "version", "platform", "arch", "files"],
+      ["build_number"],
+    );
     if (
       value.schema_version !== 1 ||
       value.product !== "one-memory-runtime" ||

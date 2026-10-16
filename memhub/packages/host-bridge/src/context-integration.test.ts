@@ -528,7 +528,8 @@ it("reports a Core context failure without claiming MemHub is stopped", async ()
     ),
   ).rejects.toMatchObject({
     code: "context_unavailable",
-    message: "MemHub is running, but context search is temporarily unavailable.",
+    message:
+      "MemHub is running, but context search is temporarily unavailable.",
   });
   expect(f.calls.map((call) => call.url)).toEqual(["/api/v1/context/search"]);
 });

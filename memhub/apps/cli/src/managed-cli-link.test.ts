@@ -11,9 +11,8 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-
 import type { CliLinkPlan } from "@one-memory/runtime-control";
+import { describe, expect, it } from "vitest";
 import {
   installManagedCliAlias,
   installManagedCliLink,
@@ -107,7 +106,9 @@ describe("managed memhub CLI alias", () => {
     await installManagedCliAlias(plan);
 
     await expect(removeManagedCliAlias(plan)).resolves.toBe("removed");
-    await expect(lstat(plan.link_path)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(plan.link_path)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   // C8 P1 (2026-09-29): `runtime-control.applyLocalUninstall` deletes
@@ -156,7 +157,10 @@ describe("managed memhub CLI alias", () => {
   it("manages the one-memory companion when memhub is already present", async () => {
     if (process.platform === "win32") return;
     const f = await fixture();
-    const primary = { ...f.base, link_path: path.join(f.base.bin_directory, "memhub") };
+    const primary = {
+      ...f.base,
+      link_path: path.join(f.base.bin_directory, "memhub"),
+    };
     await mkdir(f.base.bin_directory, { recursive: true, mode: 0o700 });
     await (await import("node:fs/promises")).chmod(f.base.bin_directory, 0o700);
     await (await import("node:fs/promises")).symlink(
@@ -168,7 +172,10 @@ describe("managed memhub CLI alias", () => {
     const plan = await planManagedCliLink(f.base, "one-memory");
     // The companion does not exist yet, so it is ours to create; crucially it
     // targets the compat name, not the package's `memhub`.
-    expect(plan).toMatchObject({ status: "create", link_path: f.base.link_path });
+    expect(plan).toMatchObject({
+      status: "create",
+      link_path: f.base.link_path,
+    });
 
     // The package's memhub link is untouched.
     expect(await readlink(primary.link_path)).toBe(f.target);

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import {
   chmod,
@@ -14,7 +15,6 @@ import os from "node:os";
 import path from "node:path";
 import type { ContextSearchResponse, RecallHit } from "@one-memory/contracts";
 import { afterEach, describe, expect, it } from "vitest";
-
 import { HostGrantStore } from "./host-grants.js";
 import { RecallBroker } from "./recall-broker.js";
 import {
@@ -26,8 +26,6 @@ import {
   runRecallInjection,
   stripInjectedBlocks,
 } from "./recall-injection.js";
-
-import { spawn } from "node:child_process";
 
 const roots: string[] = [];
 const closers: Array<() => Promise<void>> = [];
@@ -1551,10 +1549,14 @@ describe("recall injection hook process", () => {
     const cliPath = path.resolve("dist/recall-cli.cjs");
     const started = Date.now();
     const exitCode = await new Promise<number>((resolve) => {
-      const child = spawn(process.execPath, [cliPath, "--inject", "workbuddy"], {
-        env,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      const child = spawn(
+        process.execPath,
+        [cliPath, "--inject", "workbuddy"],
+        {
+          env,
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
       let stdout = "";
       child.stdout.on("data", (chunk: Buffer) => {
         stdout += chunk.toString("utf8");
@@ -1570,12 +1572,14 @@ describe("recall injection hook process", () => {
         void stdout;
         resolve(code ?? -1);
       });
-      child.stdin.end(JSON.stringify({
-        session_id: "sess-subprocess",
-        turn_id: "turn-subprocess",
-        hook_event_name: "UserPromptSubmit",
-        prompt: "项目周会在哪天",
-      }));
+      child.stdin.end(
+        JSON.stringify({
+          session_id: "sess-subprocess",
+          turn_id: "turn-subprocess",
+          hook_event_name: "UserPromptSubmit",
+          prompt: "项目周会在哪天",
+        }),
+      );
     });
     const elapsed = Date.now() - started;
     server.close();

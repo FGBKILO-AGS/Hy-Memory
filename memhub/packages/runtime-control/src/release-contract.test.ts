@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   CLI_PROTOCOL,
@@ -16,7 +16,9 @@ describe("release protocol contract", () => {
       path.dirname(fileURLToPath(import.meta.url)),
       "../../..",
     );
-    const pkg = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+    const pkg = JSON.parse(
+      await readFile(path.join(root, "package.json"), "utf8"),
+    );
     expect({
       runtime_manifest_schema: RUNTIME_MANIFEST_SCHEMA,
       cli_protocol: CLI_PROTOCOL,

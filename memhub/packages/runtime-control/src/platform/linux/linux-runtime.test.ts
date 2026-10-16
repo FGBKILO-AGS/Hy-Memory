@@ -1,7 +1,6 @@
-import { describe, expect, it } from "vitest";
-
-import { planLinuxRuntimeControl } from "./linux-runtime.js";
 import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { planLinuxRuntimeControl } from "./linux-runtime.js";
 
 function layout(home: string) {
   return {
@@ -65,13 +64,17 @@ describe("Linux runtime control matrix", () => {
       status: "ready",
       service_id: "one-memory.service",
     });
-    expect(service?.legacyCanonicalDigest).toBe("b6c22afdd859760050cac9a4f621e67b38e0eaca");
+    expect(service?.legacyCanonicalDigest).toBe(
+      "b6c22afdd859760050cac9a4f621e67b38e0eaca",
+    );
     expect(service?.migrate).toBe(true);
     expect(service?.upgradeCommands).toEqual([
       ["systemctl", "--user", "stop", "one-memory.service"],
       ["systemctl", "--user", "enable", "--now", "one-memory.service"],
     ]);
-    expect(service?.plan.service_file?.content).toContain("WantedBy=default.target");
+    expect(service?.plan.service_file?.content).toContain(
+      "WantedBy=default.target",
+    );
   });
 
   it("does not overwrite a unit whose only difference is upstream hardening", () => {

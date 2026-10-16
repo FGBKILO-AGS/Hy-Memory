@@ -191,7 +191,9 @@ describe("packaged macOS permission metadata", () => {
     expect(fixture.plist.get("CFBundleShortVersionString")).toBe("1.2.3");
     expect(fixture.plist.get("CFBundleVersion")).toBe("3903");
     expect(fixture.plist.get("LSEnvironment:ONE_MEMORY_VERSION")).toBe("1.2.3");
-    expect(fixture.plist.get("LSEnvironment:ONE_MEMORY_BUILD_NUMBER")).toBe("3903");
+    expect(fixture.plist.get("LSEnvironment:ONE_MEMORY_BUILD_NUMBER")).toBe(
+      "3903",
+    );
   });
 
   it("removes inherited audio capture and existing unused keys before signing", async () => {
@@ -209,10 +211,7 @@ describe("packaged macOS permission metadata", () => {
     // Production clears any stale build marker before removing unused usage
     // strings and signing. No LaunchAgent plist is written.
     expect(fixture.execFileSync.mock.calls).toEqual([
-      [
-        "/usr/libexec/PlistBuddy",
-        ["-c", "Add :LSEnvironment dict", plistPath],
-      ],
+      ["/usr/libexec/PlistBuddy", ["-c", "Add :LSEnvironment dict", plistPath]],
       [
         "/usr/libexec/PlistBuddy",
         ["-c", "Delete :LSEnvironment:ONE_MEMORY_VERSION", plistPath],

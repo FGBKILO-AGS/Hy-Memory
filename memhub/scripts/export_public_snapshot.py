@@ -51,6 +51,7 @@ PUBLIC_DOCS = frozenset(
 PUBLIC_SCRIPTS = frozenset(
     {
         "scripts/assert-test-isolation.mjs",
+        "scripts/audit_core_test_design.py",
         "scripts/build-release-assets.mjs",
         "scripts/build-release-assets.test.mjs",
         "scripts/build_app_icon.cjs",
@@ -62,6 +63,7 @@ PUBLIC_SCRIPTS = frozenset(
         "scripts/check.sh",
         "scripts/export_public_snapshot.py",
         "scripts/fetch_embedding_model.py",
+        "scripts/generate_core_test_index.py",
         "scripts/generate_sbom.py",
         "scripts/install-docs.test.mjs",
         "scripts/platform/macos/build-macos-release.mjs",
@@ -93,6 +95,7 @@ PUBLIC_SCRIPTS = frozenset(
         "scripts/verify-published-release.test.mjs",
         "scripts/set-release-version.mjs",
         "scripts/set-release-version.test.mjs",
+        "scripts/summarize_core_test_report.py",
         "scripts/verify-release-version.mjs",
         "scripts/verify-release-version.test.mjs",
         "scripts/verify_structure.py",

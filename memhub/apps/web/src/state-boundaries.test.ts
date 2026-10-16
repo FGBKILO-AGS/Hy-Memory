@@ -95,8 +95,6 @@ describe("single state layer", () => {
   });
 
   it("reads and writes sources only through source-state", () => {
-    expect(
-      offenders(sourceUses, ["source-state.ts", "api.ts"]),
-    ).toEqual([]);
+    expect(offenders(sourceUses, ["source-state.ts", "api.ts"])).toEqual([]);
   });
 });

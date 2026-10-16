@@ -436,7 +436,9 @@ describe("display preference preload", () => {
   it("preload exposes the explicit background restart action", async () => {
     const api = await preload();
     fake.invoke.mockResolvedValue({ state: "restarted" });
-    await expect(api.restartBackground()).resolves.toEqual({ state: "restarted" });
+    await expect(api.restartBackground()).resolves.toEqual({
+      state: "restarted",
+    });
     expect(fake.invoke).toHaveBeenCalledExactlyOnceWith(
       "one-memory:restart-background",
     );

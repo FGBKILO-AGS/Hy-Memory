@@ -8,7 +8,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { processMcpLine } from "./mcp-protocol.js";
-import { type MemoryWriteRequest, McpSession } from "./mcp-session.js";
+import { McpSession, type MemoryWriteRequest } from "./mcp-session.js";
 
 /** Build a session whose only wired tools are the write ones.
  *
@@ -96,8 +96,10 @@ describe("om_memory_write MCP tool", () => {
         },
       }),
     );
-    const payload = JSON.parse(response ?? "{}").result
-      .structuredContent as { request_id: string; state: string };
+    const payload = JSON.parse(response ?? "{}").result.structuredContent as {
+      request_id: string;
+      state: string;
+    };
     expect(payload.request_id).toBe("req-42");
     expect(payload.state).toBe("accepted");
   });

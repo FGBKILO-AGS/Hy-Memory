@@ -85,12 +85,16 @@ describe("memhub ui command wiring", () => {
     const output = capture();
     let code: number;
     try {
-      code = await run(["ui", "--json"], {}, {
-        openBrowser: async (url) => {
-          opened.push(url);
-          return true;
+      code = await run(
+        ["ui", "--json"],
+        {},
+        {
+          openBrowser: async (url) => {
+            opened.push(url);
+            return true;
+          },
         },
-      });
+      );
     } finally {
       output.restore();
     }
@@ -102,7 +106,9 @@ describe("memhub ui command wiring", () => {
       state: "opened",
       url: "http://127.0.0.1:8765/ui/login?code=one-time-code",
     });
-    expect(opened).toEqual(["http://127.0.0.1:8765/ui/login?code=one-time-code"]);
+    expect(opened).toEqual([
+      "http://127.0.0.1:8765/ui/login?code=one-time-code",
+    ]);
     // The bearer token was sent to Core in the request header, never in output.
     expect(output.value()).not.toMatch(/synthetic-runtime-token/);
   });
@@ -159,7 +165,11 @@ describe("memhub ui command wiring", () => {
     const output = capture();
     let code: number;
     try {
-      code = await run(["ui", "--json"], {}, { openBrowser: async () => false });
+      code = await run(
+        ["ui", "--json"],
+        {},
+        { openBrowser: async () => false },
+      );
     } finally {
       output.restore();
     }
@@ -185,7 +195,11 @@ describe("memhub ui command wiring", () => {
       const output = capture();
       let code: number;
       try {
-        code = await run(["ui", "--json"], {}, { openBrowser: async () => true });
+        code = await run(
+          ["ui", "--json"],
+          {},
+          { openBrowser: async () => true },
+        );
       } finally {
         output.restore();
       }

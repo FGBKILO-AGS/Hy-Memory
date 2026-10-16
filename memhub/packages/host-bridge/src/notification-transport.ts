@@ -32,8 +32,7 @@ const errors: Record<ErrorCode, { status: number; message: string }> = {
   },
   host_authorization_required: {
     status: 401,
-    message:
-      "MemHub installation authorization is required or has changed.",
+    message: "MemHub installation authorization is required or has changed.",
   },
   source_not_authorized: {
     status: 403,

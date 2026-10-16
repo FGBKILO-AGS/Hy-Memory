@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -25,9 +25,14 @@ test("updates every release-bearing manifest in one transaction-sized command", 
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, '{"name":"fixture","version":"0.0.0"}\n');
   }
-  const rootPackage = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+  const rootPackage = JSON.parse(
+    await readFile(path.join(root, "package.json"), "utf8"),
+  );
   rootPackage.release = { build_number: 6 };
-  await writeFile(path.join(root, "package.json"), `${JSON.stringify(rootPackage)}\n`);
+  await writeFile(
+    path.join(root, "package.json"),
+    `${JSON.stringify(rootPackage)}\n`,
+  );
   await mkdir(path.join(root, "apps/core"), { recursive: true });
   await writeFile(
     path.join(root, "apps/core/pyproject.toml"),
@@ -43,7 +48,9 @@ test("updates every release-bearing manifest in one transaction-sized command", 
   assert.equal(receipt.changed.length, 11);
   assert.equal(receipt.build_number, 7);
   for (const relative of packageFiles) {
-    const document = JSON.parse(await readFile(path.join(root, relative), "utf8"));
+    const document = JSON.parse(
+      await readFile(path.join(root, relative), "utf8"),
+    );
     assert.equal(document.version, "1.2.3-rc.1");
   }
   assert.match(
@@ -62,7 +69,9 @@ test("updates every release-bearing manifest in one transaction-sized command", 
 });
 
 test("maps an internal SemVer prerelease to deterministic PEP 440 metadata", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "memhub-version-internal-"));
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "memhub-version-internal-"),
+  );
   t.after(() => rm(root, { recursive: true, force: true }));
   const packageFiles = [
     "package.json",
@@ -80,9 +89,14 @@ test("maps an internal SemVer prerelease to deterministic PEP 440 metadata", asy
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, '{"name":"fixture","version":"0.0.0"}\n');
   }
-  const rootPackage = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+  const rootPackage = JSON.parse(
+    await readFile(path.join(root, "package.json"), "utf8"),
+  );
   rootPackage.release = { build_number: 1 };
-  await writeFile(path.join(root, "package.json"), `${JSON.stringify(rootPackage)}\n`);
+  await writeFile(
+    path.join(root, "package.json"),
+    `${JSON.stringify(rootPackage)}\n`,
+  );
   await mkdir(path.join(root, "apps/core"), { recursive: true });
   await writeFile(
     path.join(root, "apps/core/pyproject.toml"),
@@ -154,5 +168,8 @@ test("refuses an ambiguous Core lockfile instead of changing an arbitrary packag
 });
 
 test("rejects a non-SemVer version before changing files", async () => {
-  await assert.rejects(setReleaseVersion("release-one", "/nonexistent"), /valid SemVer/);
+  await assert.rejects(
+    setReleaseVersion("release-one", "/nonexistent"),
+    /valid SemVer/,
+  );
 });

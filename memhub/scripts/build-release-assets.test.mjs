@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
-  readFile,
   readdir,
+  readFile,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -22,7 +22,9 @@ async function distribution(root, platform, arch, buildNumber = 7) {
   const target = path.join(root, `${platform}-${arch}`);
   await mkdir(path.join(target, "bin"), { recursive: true });
   const launcher = "#!/bin/sh\nexit 0\n";
-  await writeFile(path.join(target, "bin", "memhub"), launcher, { mode: 0o700 });
+  await writeFile(path.join(target, "bin", "memhub"), launcher, {
+    mode: 0o700,
+  });
   const sbom = await readFile(new URL("../SBOM.spdx.json", import.meta.url));
   const notices = await readFile(
     new URL("../THIRD_PARTY_NOTICES.md", import.meta.url),
@@ -87,22 +89,33 @@ test("builds versioned Runtime archives, checksums and a downloader-compatible m
     ],
   );
   const names = (await readdir(output)).sort();
-  assert.deepEqual(names, [
-    "checksums.txt",
-    "MemHub-v0.1.0-internal.1-macos-arm64.dmg",
-    "MemHub-v0.1.0-internal.1-macos-x64.dmg",
-    "SBOM.spdx.json",
-    "THIRD_PARTY_NOTICES.md",
-    "memhub-runtime-v0.1.0-internal.1-darwin-arm64.tar.gz",
-    "memhub-runtime-v0.1.0-internal.1-linux-x64.tar.gz",
-    "release-manifest.json",
-  ].sort());
-  const saved = JSON.parse(await readFile(path.join(output, "release-manifest.json"), "utf8"));
+  assert.deepEqual(
+    names,
+    [
+      "checksums.txt",
+      "MemHub-v0.1.0-internal.1-macos-arm64.dmg",
+      "MemHub-v0.1.0-internal.1-macos-x64.dmg",
+      "SBOM.spdx.json",
+      "THIRD_PARTY_NOTICES.md",
+      "memhub-runtime-v0.1.0-internal.1-darwin-arm64.tar.gz",
+      "memhub-runtime-v0.1.0-internal.1-linux-x64.tar.gz",
+      "release-manifest.json",
+    ].sort(),
+  );
+  const saved = JSON.parse(
+    await readFile(path.join(output, "release-manifest.json"), "utf8"),
+  );
   assert.deepEqual(saved, manifest);
   const checksums = await readFile(path.join(output, "checksums.txt"), "utf8");
   for (const artifact of manifest.artifacts) {
-    assert.match(checksums, new RegExp(`${artifact.sha256}  ${artifact.filename}`));
-    assert.equal(artifact.url, `https://git.example.test/release/downloads/${artifact.filename}`);
+    assert.match(
+      checksums,
+      new RegExp(`${artifact.sha256}  ${artifact.filename}`),
+    );
+    assert.equal(
+      artifact.url,
+      `https://git.example.test/release/downloads/${artifact.filename}`,
+    );
     assert.ok(artifact.bytes > 0);
     if (artifact.kind === "runtime") assert.ok(artifact.unpacked_bytes > 0);
   }
@@ -153,7 +166,10 @@ test("refuses Runtime commit drift across platforms", async (t) => {
   const secondManifestPath = path.join(second, "manifest.json");
   const secondManifest = JSON.parse(await readFile(secondManifestPath, "utf8"));
   secondManifest.git_commit = "b".repeat(40);
-  await writeFile(secondManifestPath, `${JSON.stringify(secondManifest, null, 2)}\n`);
+  await writeFile(
+    secondManifestPath,
+    `${JSON.stringify(secondManifest, null, 2)}\n`,
+  );
   await assert.rejects(
     buildReleaseAssets({
       output: path.join(root, "release"),
@@ -221,7 +237,11 @@ test("refuses duplicate Desktop architecture and unusable DMG inputs", async (t)
       assetBaseUrl: "https://git.example.test/release/",
       distributions: [source],
       desktops: [
-        { arch: "x64", file: path.join(root, "missing.dmg"), minimumSystemVersion: "13.0" },
+        {
+          arch: "x64",
+          file: path.join(root, "missing.dmg"),
+          minimumSystemVersion: "13.0",
+        },
       ],
     }),
     /ENOENT|release_desktop_invalid/,

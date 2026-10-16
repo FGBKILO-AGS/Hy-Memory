@@ -7,7 +7,9 @@ import {
   type WizardPrompter,
 } from "./init-wizard.js";
 
-function scripted(lines: string[]): WizardPrompter & { asked: string[]; wrote: string[] } {
+function scripted(
+  lines: string[],
+): WizardPrompter & { asked: string[]; wrote: string[] } {
   let index = 0;
   const asked: string[] = [];
   const wrote: string[] = [];

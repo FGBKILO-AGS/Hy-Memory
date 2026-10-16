@@ -74,7 +74,9 @@ const processing: MemoryProcessingSummary = {
   outside_window_pending: 0,
   extraction_window_preset: "3m",
   manual_extract_batches_planned: 0,
-  manual_extract_batches_current: 0, active_queue: 0, in_flight_count: 0,
+  manual_extract_batches_current: 0,
+  active_queue: 0,
+  in_flight_count: 0,
   seconds_per_completion: null,
 } as MemoryProcessingSummary;
 

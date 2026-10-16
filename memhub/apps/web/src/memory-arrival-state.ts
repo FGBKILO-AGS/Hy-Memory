@@ -86,9 +86,7 @@ export function resolveMemoryArrival({
     phase = "processing";
   } else if ((processing?.waiting_for_model ?? 0) > 0 || modelBlock(blocks)) {
     phase = "model-required";
-  } else if (
-    blocks.some((block) => permissionReasons.has(block.reason))
-  ) {
+  } else if (blocks.some((block) => permissionReasons.has(block.reason))) {
     phase = "consent-required";
   } else if ((processing?.failed ?? 0) > 0 && !onlyRetries(blocks)) {
     // "Failed" is a prompt to go and look. Work the pipeline will pick up on

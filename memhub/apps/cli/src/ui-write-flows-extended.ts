@@ -10,18 +10,17 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import {
-  MemoryNoteInputError,
   buildMemoryNoteSaveRequest,
-  parseMemoryNoteReceipt,
+  MemoryNoteInputError,
   parseExtractionSettingsReceipt,
   parseGraphWidthDecisionReceipt,
   parseManualExtractReceipt,
+  parseMemoryNoteReceipt,
 } from "@one-memory/operations";
 import type { CoreOperations, CorePutOperations } from "./core-operations.js";
 import { PRODUCT } from "./version.js";
 
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const DIGEST = /^[0-9a-f]{64}$/;
 const NOTE_MAX_CHARACTERS = 12_000;
 const EXTRACTION_PRESETS = ["3m", "6m", "1y", "all"] as const;
@@ -117,7 +116,10 @@ function digestOf(value: unknown): string {
 type Draft =
   | Omit<Extract<ExtendedWritePlan, { kind: "memory_note_add" }>, "digest">
   | Omit<Extract<ExtendedWritePlan, { kind: "memory_note_process" }>, "digest">
-  | Omit<Extract<ExtendedWritePlan, { kind: "extraction_window_set" }>, "digest">
+  | Omit<
+      Extract<ExtendedWritePlan, { kind: "extraction_window_set" }>,
+      "digest"
+    >
   | Omit<Extract<ExtendedWritePlan, { kind: "graph_width_decide" }>, "digest">
   | Omit<Extract<ExtendedWritePlan, { kind: "manual_extract" }>, "digest">;
 
@@ -148,7 +150,10 @@ function committed(
   };
 }
 
-function rejected(operationId: string | undefined, code: string): ExtendedWriteOutcome {
+function rejected(
+  operationId: string | undefined,
+  code: string,
+): ExtendedWriteOutcome {
   return {
     schema_version: 1,
     product: PRODUCT,
@@ -158,7 +163,10 @@ function rejected(operationId: string | undefined, code: string): ExtendedWriteO
   };
 }
 
-function unknown(operationId: string | undefined, code: string): ExtendedWriteOutcome {
+function unknown(
+  operationId: string | undefined,
+  code: string,
+): ExtendedWriteOutcome {
   return {
     schema_version: 1,
     product: PRODUCT,
@@ -197,7 +205,9 @@ export function validNoteText(text: string): boolean {
   );
 }
 
-export function planMemoryNoteProcess(evidenceId: string): ExtendedWriteOutcome {
+export function planMemoryNoteProcess(
+  evidenceId: string,
+): ExtendedWriteOutcome {
   return UUID.test(evidenceId)
     ? preview({
         schema_version: 1,
@@ -313,8 +323,7 @@ export function planGraphWidthDecide(decision: string): ExtendedWriteOutcome {
 
 export function planManualExtract(evidenceIds: string[]): ExtendedWriteOutcome {
   const ids = [...new Set(evidenceIds)];
-  return ids.length === evidenceIds.length &&
-    ids.every((id) => UUID.test(id))
+  return ids.length === evidenceIds.length && ids.every((id) => UUID.test(id))
     ? preview({
         schema_version: 1,
         kind: "manual_extract",
@@ -455,12 +464,12 @@ export function validateExtendedWritePlan(
 }
 
 export function extendedWriteExitCode(document: ExtendedWriteOutcome): number {
-  return ["preview", "committed", "recovered"].includes(document.state)
-    ? 0
-    : 1;
+  return ["preview", "committed", "recovered"].includes(document.state) ? 0 : 1;
 }
 
-export function renderExtendedWriteText(document: ExtendedWriteOutcome): string {
+export function renderExtendedWriteText(
+  document: ExtendedWriteOutcome,
+): string {
   if (document.state === "preview") {
     const lines = ["以下操作尚未执行；加 --confirm 后才会写入："];
     const plan = document.plan;

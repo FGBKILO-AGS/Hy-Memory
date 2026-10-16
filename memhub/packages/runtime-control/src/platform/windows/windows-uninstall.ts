@@ -1,10 +1,10 @@
-import { readlink, lstat, readFile } from "node:fs/promises";
+import { lstat, readFile, readlink } from "node:fs/promises";
 import path from "node:path";
 
 import {
-  planLocalUninstall,
   type LocalUninstallPlan,
   type LocalUninstallReceipt,
+  planLocalUninstall,
 } from "../../local-install.js";
 
 export type WindowsUninstallPlan = LocalUninstallPlan;
@@ -25,10 +25,7 @@ export async function planWindowsUninstall(options: {
 }): Promise<WindowsUninstallPlan> {
   const basePlan = await planLocalUninstall(options);
   if (basePlan.cli_link) {
-    await assertManagedWindowsCliLink(
-      basePlan.cli_link,
-      basePlan.install_root,
-    );
+    await assertManagedWindowsCliLink(basePlan.cli_link, basePlan.install_root);
   }
   return basePlan;
 }

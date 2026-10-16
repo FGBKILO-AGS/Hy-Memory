@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  getModelContentPermission,
-  setModelContentPermission,
-} from "./api";
+import { getModelContentPermission, setModelContentPermission } from "./api";
 import { traceUiAction } from "./ui-trace";
 import { isDefiniteRefusal, writeTraceStatus } from "./write-outcome";
 

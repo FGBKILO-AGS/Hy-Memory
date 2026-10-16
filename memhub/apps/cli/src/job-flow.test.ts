@@ -17,6 +17,7 @@ vi.mock("axios", () => ({
   default: { create: vi.fn(() => transport), get: vi.fn() },
 }));
 
+import type { CoreOperations } from "./core-operations.js";
 import { createCoreOperations } from "./core-operations.js";
 import {
   executeJobAction,
@@ -25,7 +26,6 @@ import {
   planJobAction,
   planJobStart,
 } from "./job-flow.js";
-import type { CoreOperations } from "./core-operations.js";
 
 function operations(
   post: (path: string, body: Record<string, unknown>) => Promise<unknown>,

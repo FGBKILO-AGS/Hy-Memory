@@ -229,6 +229,5 @@ contextBridge.exposeInMainWorld("oneMemory", {
     hostId: string;
     installed: boolean;
     permission: RecallPermissionStatus;
-  }> =>
-    ipcRenderer.invoke("one-memory:uninstall-recall", hostId, approved),
+  }> => ipcRenderer.invoke("one-memory:uninstall-recall", hostId, approved),
 });

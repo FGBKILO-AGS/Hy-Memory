@@ -1,4 +1,10 @@
-import { mkdir, mkdtemp, readFile, readlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -7,8 +13,8 @@ import {
   ensureStableRuntimeThenRepair,
   installBundledCliIfNeeded,
   isInstalledApplicationsApp,
-  startStableRuntimeRepair,
   stableRuntimeErrorCode,
+  startStableRuntimeRepair,
 } from "./stable-runtime";
 
 it("only treats a packaged macOS executable under Applications as installed", () => {
@@ -35,7 +41,12 @@ it("only treats a packaged macOS executable under Applications as installed", ()
 it("installs only memhub and adds its directory to a new shell", async () => {
   if (process.platform === "win32") return;
   const home = await mkdtemp(path.join(os.tmpdir(), "memhub-auto-cli-"));
-  const installRoot = path.join(home, "Library", "Application Support", "One Memory");
+  const installRoot = path.join(
+    home,
+    "Library",
+    "Application Support",
+    "One Memory",
+  );
   const target = path.join(installRoot, "current", "bin", "one-memory");
   await mkdir(path.dirname(target), { recursive: true });
   await writeFile(target, "#!/bin/sh\n", { mode: 0o700 });
@@ -43,10 +54,14 @@ it("installs only memhub and adds its directory to a new shell", async () => {
   await installBundledCliIfNeeded({ home, installRoot, platform: "darwin" });
   await installBundledCliIfNeeded({ home, installRoot, platform: "darwin" });
 
-  expect(await readlink(path.join(home, ".local", "bin", "memhub"))).toBe(target);
+  expect(await readlink(path.join(home, ".local", "bin", "memhub"))).toBe(
+    target,
+  );
   const profile = await readFile(path.join(home, ".zprofile"), "utf8");
   expect(profile.match(/# >>> memhub PATH >>>/g)).toHaveLength(1);
-  await expect(readFile(path.join(home, ".local", "bin", "one-memory"))).rejects.toThrow();
+  await expect(
+    readFile(path.join(home, ".local", "bin", "one-memory")),
+  ).rejects.toThrow();
 });
 
 describe("ensureStableRuntimeThenRepair", () => {

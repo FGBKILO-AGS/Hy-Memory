@@ -32,9 +32,12 @@ import { SourceDirectoryPicker } from "./SourceDirectoryPicker";
 import { SourceImportReceipt } from "./SourceImportReceipt";
 import { SourceJobActions } from "./SourceJobActions";
 import { SourceSnapshotStatus } from "./SourceSnapshotStatus";
-import { type UiTrace, traceUiAction } from "./ui-trace";
 import { SyncHookControl } from "./SyncHookControl";
-import { isDefiniteAccessRefusal, type useImportSources } from "./use-import-sources";
+import { traceUiAction, type UiTrace } from "./ui-trace";
+import {
+  isDefiniteAccessRefusal,
+  type useImportSources,
+} from "./use-import-sources";
 
 type ImportState = ReturnType<typeof useImportSources>;
 
@@ -472,9 +475,7 @@ export function SourcesView({ imports }: { imports: ImportState }) {
   return (
     <section className="view sources-view" aria-labelledby="sources-title">
       {modelConsentOpen && (
-        <ModelContentConsent
-          onClose={() => setModelConsentOpen(false)}
-        />
+        <ModelContentConsent onClose={() => setModelConsentOpen(false)} />
       )}
       <header className="view-header">
         <div>
@@ -1190,7 +1191,9 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                 event.stopPropagation();
                 if (!connecting) {
                   setConsentPhase(null);
-                  consentTrace.current?.done("rejected", { reason: "consent_dismissed" });
+                  consentTrace.current?.done("rejected", {
+                    reason: "consent_dismissed",
+                  });
                   consentTrace.current = null;
                 }
               }

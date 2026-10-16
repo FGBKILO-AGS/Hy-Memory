@@ -640,12 +640,13 @@ describe("WorkBuddy recall injection hooks", () => {
     const runtime = await injectingRuntime();
     const missingRuntime = {
       ...runtime,
-      runtimeCommand: "/opt/one-memory/missing/managed-runtime/current/bin/node",
+      runtimeCommand:
+        "/opt/one-memory/missing/managed-runtime/current/bin/node",
     };
 
-    await expect(
-      planRecallInstall(layout, missingRuntime),
-    ).rejects.toThrow(/runtimeCommand does not exist/);
+    await expect(planRecallInstall(layout, missingRuntime)).rejects.toThrow(
+      /runtimeCommand does not exist/,
+    );
     expect(await missing(plugin.marketplaceRoot)).toBe(true);
     expect(await missing(plugin.installRoot)).toBe(true);
   });
@@ -658,9 +659,9 @@ describe("WorkBuddy recall injection hooks", () => {
       recallCliPath: "/opt/one-memory/missing/host-bridge/recall-cli.cjs",
     };
 
-    await expect(
-      planRecallInstall(layout, missingRecall),
-    ).rejects.toThrow(/recallCliPath does not exist/);
+    await expect(planRecallInstall(layout, missingRecall)).rejects.toThrow(
+      /recallCliPath does not exist/,
+    );
     expect(await missing(plugin.marketplaceRoot)).toBe(true);
     expect(await missing(plugin.installRoot)).toBe(true);
   });
@@ -669,9 +670,7 @@ describe("WorkBuddy recall injection hooks", () => {
     const { layout, plugin } = await fixture({ populated: true });
     const runtime = await injectingRuntime();
 
-    await applyRecallInstall(
-      await planRecallInstall(layout, runtime),
-    );
+    await applyRecallInstall(await planRecallInstall(layout, runtime));
     await verifyRecallInstall(layout);
 
     const hooks = JSON.parse(
@@ -756,9 +755,7 @@ describe("WorkBuddy recall injection hooks", () => {
     const before = await Promise.all(
       paths.map((target) => readFile(target, "utf8")),
     );
-    await applyRecallInstall(
-      await planRecallInstall(layout, runtime),
-    );
+    await applyRecallInstall(await planRecallInstall(layout, runtime));
 
     const plan = await planRecallUninstall(layout);
     await applyRecallUninstall(plan, previewRecallUninstall(plan).fingerprint);
@@ -778,9 +775,9 @@ describe("WorkBuddy recall injection hooks", () => {
     const hooksPath = path.join(plugin.installRoot, "hooks", "hooks.json");
     expect(await readFile(hooksPath, "utf8")).not.toContain("--inject");
 
-    await expect(
-      checkSkillDrift(layout, runtime),
-    ).resolves.toMatchObject({ state: "stale" });
+    await expect(checkSkillDrift(layout, runtime)).resolves.toMatchObject({
+      state: "stale",
+    });
     const sync = await planSkillSync(layout, runtime);
     if (!sync) throw new Error("expected the hooks to sync");
     expect(sync.requiresConfirmation).toBe(false);
@@ -788,9 +785,9 @@ describe("WorkBuddy recall injection hooks", () => {
     await verifyRecallInstall(layout);
 
     expect(await readFile(hooksPath, "utf8")).toContain("--inject workbuddy");
-    await expect(
-      checkSkillDrift(layout, runtime),
-    ).resolves.toMatchObject({ state: "in_sync" });
+    await expect(checkSkillDrift(layout, runtime)).resolves.toMatchObject({
+      state: "in_sync",
+    });
   });
 
   it("keeps one speaking boundary hook, silent on failure, when the runtime ships no recall command", async () => {
@@ -822,9 +819,7 @@ describe("WorkBuddy recall injection hooks", () => {
   it("moves an install with two speaking hooks per event onto the single one", async () => {
     const { layout, plugin } = await fixture({ populated: true });
     const runtime = await injectingRuntime();
-    await applyRecallInstall(
-      await planRecallInstall(layout, runtime),
-    );
+    await applyRecallInstall(await planRecallInstall(layout, runtime));
     // The bytes 66d8f88 wrote, journaled as ours, as an install from then has.
     const legacy = legacyHooksFile(runtime);
     const copies = [
@@ -845,9 +840,9 @@ describe("WorkBuddy recall injection hooks", () => {
     }
     await writeFile(layout.journalPath, JSON.stringify(journal));
 
-    await expect(
-      checkSkillDrift(layout, runtime),
-    ).resolves.toMatchObject({ state: "stale" });
+    await expect(checkSkillDrift(layout, runtime)).resolves.toMatchObject({
+      state: "stale",
+    });
     const sync = await planSkillSync(layout, runtime);
     if (!sync) throw new Error("expected the hooks to sync");
     expect(sync.requiresConfirmation).toBe(false);
@@ -863,9 +858,9 @@ describe("WorkBuddy recall injection hooks", () => {
     );
     for (const event of ["SessionStart", "UserPromptSubmit"])
       expect(speakingHooks(hooks.hooks[event], capture)).toHaveLength(1);
-    await expect(
-      checkSkillDrift(layout, runtime),
-    ).resolves.toMatchObject({ state: "in_sync" });
+    await expect(checkSkillDrift(layout, runtime)).resolves.toMatchObject({
+      state: "in_sync",
+    });
   });
 
   it("does not silently overwrite a hooks file the user edited", async () => {
@@ -879,9 +874,9 @@ describe("WorkBuddy recall injection hooks", () => {
     );
 
     const sync = await planSkillSync(layout, runtime).catch(() => null);
-    await expect(
-      checkSkillDrift(layout, runtime),
-    ).resolves.toMatchObject({ state: "modified" });
+    await expect(checkSkillDrift(layout, runtime)).resolves.toMatchObject({
+      state: "modified",
+    });
     expect(sync?.requiresConfirmation ?? true).toBe(true);
   });
 

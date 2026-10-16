@@ -493,17 +493,17 @@ function publicItem(
     receipt: !receipt
       ? null
       : {
-            kind: receipt.kind,
-            hostId: receipt.host.hostId,
-            installationId: receipt.host.installationId as string,
-            permissionRevision: receipt.host.permissionRevision,
-            ...(receipt.kind === "readGrant"
-              ? {
-                  allowedTools: [...receipt.allowedTools],
-                  allowedScopes: [...receipt.allowedScopes],
-                }
-              : {}),
-          },
+          kind: receipt.kind,
+          hostId: receipt.host.hostId,
+          installationId: receipt.host.installationId as string,
+          permissionRevision: receipt.host.permissionRevision,
+          ...(receipt.kind === "readGrant"
+            ? {
+                allowedTools: [...receipt.allowedTools],
+                allowedScopes: [...receipt.allowedScopes],
+              }
+            : {}),
+        },
   };
 }
 function selectionInput(input: unknown): ConnectionSetupSelection {

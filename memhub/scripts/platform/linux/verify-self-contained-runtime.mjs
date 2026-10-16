@@ -159,7 +159,9 @@ async function waitForStatus(options) {
   let attempt = 0;
   while (Date.now() < deadline) {
     if (options.child.exitCode !== null) {
-      throw new Error(`self_contained_runtime_exited:${options.child.exitCode}`);
+      throw new Error(
+        `self_contained_runtime_exited:${options.child.exitCode}`,
+      );
     }
     attempt += 1;
     const result = run(
@@ -232,9 +234,13 @@ function parseArguments(arguments_) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   verifySelfContainedRuntime(parseArguments(process.argv.slice(2)))
-    .then((receipt) => process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`))
+    .then((receipt) =>
+      process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`),
+    )
     .catch((error) => {
-      process.stderr.write(`${error instanceof Error ? error.message : error}\n`);
+      process.stderr.write(
+        `${error instanceof Error ? error.message : error}\n`,
+      );
       process.exitCode = 1;
     });
 }

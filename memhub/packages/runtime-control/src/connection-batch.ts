@@ -344,7 +344,8 @@ export class ConnectionBatch {
       const value = await this.adapters.inspect(item, context);
       if (value.status === "denied") return "rejected";
       if (value.status !== "ready") return "unavailable";
-      if (canonical(value.sources) !== canonical(item.sources)) return "changed";
+      if (canonical(value.sources) !== canonical(item.sources))
+        return "changed";
       if (canonical(value.host) !== canonical(context.host)) return "changed";
       if (
         item.kind === "install" &&
@@ -365,9 +366,7 @@ export class ConnectionBatch {
       const current = await this.adapters.inspect(item, context);
       if (current.status === "denied") return "rejected";
       if (current.status !== "ready") return "unknown";
-      if (
-        canonical(current.sources) !== canonical(item.sources)
-      )
+      if (canonical(current.sources) !== canonical(item.sources))
         return "changed";
       // The write itself may have changed revision/fingerprint. Reconciliation
       // must prove that exact transition, but never across another layout/root.

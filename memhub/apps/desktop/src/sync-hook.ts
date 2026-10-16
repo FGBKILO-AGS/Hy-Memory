@@ -3,8 +3,8 @@ export {
   hasSyncHookArtifacts,
   loadSyncHookAssets,
   orphanSyncHookIdentity,
-  syncHookInput,
-  syncHookPreview,
   type SyncHookPreview,
   type SyncHookStatus,
+  syncHookInput,
+  syncHookPreview,
 } from "@one-memory/runtime-control";

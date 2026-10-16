@@ -97,7 +97,8 @@ export async function publishCliAfterRelease(options, dependencies = {}) {
     "--tag",
     npmTag(options.npmTag),
   ];
-  if (options.access) publishArguments.push("--access", npmAccess(options.access));
+  if (options.access)
+    publishArguments.push("--access", npmAccess(options.access));
   if (options.provenance) publishArguments.push("--provenance");
   if (options.dryRun) publishArguments.push("--dry-run");
   runCommand("npm", publishArguments, { cwd: root, env: buildEnvironment });
@@ -191,18 +192,28 @@ function parseArgs(arguments_) {
     }
     const value = arguments_[++index];
     if (!value) throw new Error(`missing value for ${flag}`);
-    if (flag === "--manifest-url" && options.manifestUrl === undefined) options.manifestUrl = value;
-    else if (flag === "--version" && options.version === undefined) options.version = value;
-    else if (flag === "--git-commit" && options.gitCommit === undefined) options.gitCommit = value;
-    else if (flag === "--channel" && options.channel === undefined) options.channel = value;
+    if (flag === "--manifest-url" && options.manifestUrl === undefined)
+      options.manifestUrl = value;
+    else if (flag === "--version" && options.version === undefined)
+      options.version = value;
+    else if (flag === "--git-commit" && options.gitCommit === undefined)
+      options.gitCommit = value;
+    else if (flag === "--channel" && options.channel === undefined)
+      options.channel = value;
     else if (flag === "--tag" && options.tag === undefined) options.tag = value;
-    else if (flag === "--build-number" && options.buildNumber === undefined) options.buildNumber = Number(value);
-    else if (flag === "--platform" && options.platform === undefined) options.platform = value;
-    else if (flag === "--arch" && options.arch === undefined) options.arch = value;
+    else if (flag === "--build-number" && options.buildNumber === undefined)
+      options.buildNumber = Number(value);
+    else if (flag === "--platform" && options.platform === undefined)
+      options.platform = value;
+    else if (flag === "--arch" && options.arch === undefined)
+      options.arch = value;
     else if (flag === "--allowed-host") options.allowedHosts.push(value);
-    else if (flag === "--registry" && options.registry === undefined) options.registry = value;
-    else if (flag === "--npm-tag" && options.npmTag === undefined) options.npmTag = value;
-    else if (flag === "--access" && options.access === undefined) options.access = value;
+    else if (flag === "--registry" && options.registry === undefined)
+      options.registry = value;
+    else if (flag === "--npm-tag" && options.npmTag === undefined)
+      options.npmTag = value;
+    else if (flag === "--access" && options.access === undefined)
+      options.access = value;
     else throw new Error(`invalid argument: ${flag}`);
   }
   if (
@@ -226,7 +237,9 @@ function parseArgs(arguments_) {
 }
 
 async function main() {
-  const receipt = await publishCliAfterRelease(parseArgs(process.argv.slice(2)));
+  const receipt = await publishCliAfterRelease(
+    parseArgs(process.argv.slice(2)),
+  );
   process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
 }
 

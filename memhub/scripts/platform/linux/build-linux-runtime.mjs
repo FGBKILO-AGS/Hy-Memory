@@ -70,8 +70,16 @@ function run(command, args, env = {}) {
   }
 }
 
-run("pnpm", ["--filter", "@one-memory/runtime-control", "build"], releaseEnvironment);
-run("pnpm", ["--filter", "@one-memory/host-bridge", "build"], releaseEnvironment);
+run(
+  "pnpm",
+  ["--filter", "@one-memory/runtime-control", "build"],
+  releaseEnvironment,
+);
+run(
+  "pnpm",
+  ["--filter", "@one-memory/host-bridge", "build"],
+  releaseEnvironment,
+);
 run("pnpm", ["--filter", "@one-memory/web", "build"], releaseEnvironment);
 run("pnpm", ["--filter", "@one-memory/cli", "build"], releaseEnvironment);
 run("uv", ["sync", "--directory", "apps/core", "--all-groups", "--locked"]);
@@ -89,18 +97,22 @@ run(
   ],
   { ...releaseEnvironment, ONE_MEMORY_CORE_LAYOUT: "folder" },
 );
-run("pnpm", [
-  "--filter",
-  "@one-memory/cli",
-  "exec",
-  "node",
-  "../../scripts/build_runtime_distribution.cjs",
-  output,
-  "linux",
-  arch,
-  version,
-  String(buildNumber),
-], releaseEnvironment);
+run(
+  "pnpm",
+  [
+    "--filter",
+    "@one-memory/cli",
+    "exec",
+    "node",
+    "../../scripts/build_runtime_distribution.cjs",
+    output,
+    "linux",
+    arch,
+    version,
+    String(buildNumber),
+  ],
+  releaseEnvironment,
+);
 
 const distributionManifestPath = path.join(output, "manifest.json");
 if (!existsSync(distributionManifestPath)) {

@@ -2,8 +2,8 @@
 
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -44,13 +44,17 @@ export async function verifyPublishedRelease(options) {
   });
   let value;
   try {
-    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes));
+    value = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes),
+    );
   } catch {
     throw new Error("release_manifest_invalid");
   }
   const release = parseManifest(value);
-  if (release.version !== expectedVersion) throw new Error("release_version_mismatch");
-  if (release.git_commit !== expectedCommit) throw new Error("release_commit_mismatch");
+  if (release.version !== expectedVersion)
+    throw new Error("release_version_mismatch");
+  if (release.git_commit !== expectedCommit)
+    throw new Error("release_commit_mismatch");
   if (release.channel !== channel) throw new Error("release_channel_mismatch");
   const artifact = release.artifacts.find(
     (candidate) =>
@@ -78,14 +82,17 @@ export async function verifyPublishedRelease(options) {
       }
       if (!response.body) throw new Error("release_response_body_missing");
       for await (const chunk of response.body) {
-        const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+        const bytes =
+          chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
         total += bytes.byteLength;
-        if (total > artifact.bytes) throw new Error("release_artifact_size_mismatch");
+        if (total > artifact.bytes)
+          throw new Error("release_artifact_size_mismatch");
         digest.update(bytes);
       }
     },
   });
-  if (total !== artifact.bytes) throw new Error("release_artifact_size_mismatch");
+  if (total !== artifact.bytes)
+    throw new Error("release_artifact_size_mismatch");
   const actualSha256 = digest.digest("hex");
   if (actualSha256 !== artifact.sha256) {
     throw new Error("release_artifact_hash_mismatch");
@@ -121,9 +128,11 @@ async function fetchBody(initial, options) {
       }
       if (!response.body) throw new Error("release_response_body_missing");
       for await (const chunk of response.body) {
-        const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+        const bytes =
+          chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
         total += bytes.byteLength;
-        if (total > options.maxBytes) throw new Error("release_response_too_large");
+        if (total > options.maxBytes)
+          throw new Error("release_response_too_large");
         chunks.push(bytes);
       }
     },
@@ -150,20 +159,25 @@ async function consumeResponse(initial, options) {
         method: "GET",
         redirect: "manual",
         signal: controller.signal,
-        headers: { accept: "application/json, application/octet-stream;q=0.9, */*;q=0.1" },
+        headers: {
+          accept: "application/json, application/octet-stream;q=0.9, */*;q=0.1",
+        },
       });
       if (REDIRECTS.has(response.status)) {
-        if (redirect >= options.maxRedirects) throw new Error("release_redirect_limit");
+        if (redirect >= options.maxRedirects)
+          throw new Error("release_redirect_limit");
         const location = response.headers.get("location");
         if (!location) throw new Error("release_redirect_invalid");
         current = trustedUrl(new URL(location, current).href);
         continue;
       }
-      if (response.status !== 200) throw new Error(`release_http_status_${response.status}`);
+      if (response.status !== 200)
+        throw new Error(`release_http_status_${response.status}`);
       await options.consume(response);
       return;
     } catch (error) {
-      if (controller.signal.aborted) throw new Error("release_download_timeout");
+      if (controller.signal.aborted)
+        throw new Error("release_download_timeout");
       throw error;
     } finally {
       clearTimeout(timeout);
@@ -172,7 +186,11 @@ async function consumeResponse(initial, options) {
 }
 
 function parseManifest(value) {
-  if (!object(value) || !Array.isArray(value.artifacts) || value.artifacts.length === 0) {
+  if (
+    !object(value) ||
+    !Array.isArray(value.artifacts) ||
+    value.artifacts.length === 0
+  ) {
     throw new Error("release_manifest_invalid");
   }
   if (
@@ -279,17 +297,30 @@ function parseArgs(arguments_) {
     const flag = arguments_[index];
     const value = arguments_[++index];
     if (!value) throw new Error(`missing value for ${flag}`);
-    if (flag === "--manifest-url" && options.manifestUrl === undefined) options.manifestUrl = value;
-    else if (flag === "--version" && options.version === undefined) options.version = value;
-    else if (flag === "--channel" && options.channel === undefined) options.channel = value;
-    else if (flag === "--git-commit" && options.gitCommit === undefined) options.gitCommit = value;
-    else if (flag === "--platform" && options.platform === undefined) options.platform = value;
-    else if (flag === "--arch" && options.arch === undefined) options.arch = value;
+    if (flag === "--manifest-url" && options.manifestUrl === undefined)
+      options.manifestUrl = value;
+    else if (flag === "--version" && options.version === undefined)
+      options.version = value;
+    else if (flag === "--channel" && options.channel === undefined)
+      options.channel = value;
+    else if (flag === "--git-commit" && options.gitCommit === undefined)
+      options.gitCommit = value;
+    else if (flag === "--platform" && options.platform === undefined)
+      options.platform = value;
+    else if (flag === "--arch" && options.arch === undefined)
+      options.arch = value;
     else if (flag === "--kind") options.kind = value;
     else if (flag === "--allowed-host") options.allowedHosts.push(value);
     else throw new Error(`invalid argument: ${flag}`);
   }
-  if (!options.manifestUrl || !options.version || !options.gitCommit || !options.channel || !options.platform || !options.arch) {
+  if (
+    !options.manifestUrl ||
+    !options.version ||
+    !options.gitCommit ||
+    !options.channel ||
+    !options.platform ||
+    !options.arch
+  ) {
     throw new Error(
       "usage: verify-published-release.mjs --manifest-url <https-url> --version <SemVer> --git-commit <sha> --channel <stable|prerelease> --platform <darwin|linux> --arch <x64|arm64> [--kind <runtime|desktop>] [--allowed-host <hostname>]",
     );
@@ -315,7 +346,8 @@ function contentLength(headers) {
   if (raw === null) return null;
   if (!/^\d+$/.test(raw)) throw new Error("release_content_length_invalid");
   const value = Number(raw);
-  if (!Number.isSafeInteger(value)) throw new Error("release_content_length_invalid");
+  if (!Number.isSafeInteger(value))
+    throw new Error("release_content_length_invalid");
   return value;
 }
 
@@ -332,17 +364,20 @@ function commit(value) {
 }
 
 function releaseChannel(value) {
-  if (value !== "stable" && value !== "prerelease") throw new Error("release_channel_invalid");
+  if (value !== "stable" && value !== "prerelease")
+    throw new Error("release_channel_invalid");
   return value;
 }
 
 function releasePlatform(value) {
-  if (value !== "darwin" && value !== "linux") throw new Error("release_platform_unsupported");
+  if (value !== "darwin" && value !== "linux")
+    throw new Error("release_platform_unsupported");
   return value;
 }
 
 function releaseArch(value) {
-  if (value !== "x64" && value !== "arm64") throw new Error("release_arch_unsupported");
+  if (value !== "x64" && value !== "arm64")
+    throw new Error("release_arch_unsupported");
   return value;
 }
 
@@ -362,7 +397,9 @@ function object(value) {
 }
 
 async function main() {
-  const receipt = await verifyPublishedRelease(parseArgs(process.argv.slice(2)));
+  const receipt = await verifyPublishedRelease(
+    parseArgs(process.argv.slice(2)),
+  );
   process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
 }
 

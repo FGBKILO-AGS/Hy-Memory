@@ -24,7 +24,9 @@ const processing: MemoryProcessingSummary = {
   seconds_per_completion: null,
   extraction_window_preset: "all",
   manual_extract_batches_planned: 0,
-  manual_extract_batches_current: 0, active_queue: 0, in_flight_count: 0,
+  manual_extract_batches_current: 0,
+  active_queue: 0,
+  in_flight_count: 0,
 };
 const sources = [
   { authorized: true, imported_messages: 12, imported_conversations: 3 },
@@ -336,8 +338,6 @@ it("reports the global model-content permission block", () => {
     },
   });
   expect(result.phase).toBe("consent-required");
-  expect(memoryArrivalTitle(result)).toBe(
-    "等待允许模型读取本地会话内容",
-  );
+  expect(memoryArrivalTitle(result)).toBe("等待允许模型读取本地会话内容");
   expect(result.blockedStages).toHaveLength(1);
 });

@@ -10,10 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  applyLocalUninstall,
-  planLocalUninstall,
-} from "./local-install.js";
+import { applyLocalUninstall, planLocalUninstall } from "./local-install.js";
 
 const applyManagedUninstall = applyLocalUninstall;
 

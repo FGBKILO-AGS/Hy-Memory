@@ -1,15 +1,15 @@
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  type CommandResult,
   inspectLaunchdService,
   restartManagedService,
+  type ServiceCommandRunner,
   startManagedService,
   stopManagedService,
-  type CommandResult,
-  type ServiceCommandRunner,
 } from "./service-session.js";
 
 const SERVICE_ID = "com.tencent.onememory.runtime";
@@ -35,7 +35,11 @@ describe("service-aware launchd session", () => {
   it("reports running with the launchd pid and plist", async () => {
     const run = vi.fn<ServiceCommandRunner>(async () => running(84237));
     await expect(
-      inspectLaunchdService({ serviceId: SERVICE_ID, uid: UID, runCaptured: run }),
+      inspectLaunchdService({
+        serviceId: SERVICE_ID,
+        uid: UID,
+        runCaptured: run,
+      }),
     ).resolves.toEqual({
       state: "running",
       pid: 84237,
@@ -46,7 +50,11 @@ describe("service-aware launchd session", () => {
   it("treats 'could not find service' as absent", async () => {
     const run = vi.fn<ServiceCommandRunner>(async () => absent());
     await expect(
-      inspectLaunchdService({ serviceId: SERVICE_ID, uid: UID, runCaptured: run }),
+      inspectLaunchdService({
+        serviceId: SERVICE_ID,
+        uid: UID,
+        runCaptured: run,
+      }),
     ).resolves.toEqual({ state: "absent" });
   });
 
@@ -57,7 +65,11 @@ describe("service-aware launchd session", () => {
       stderr: "Input/output error",
     }));
     await expect(
-      inspectLaunchdService({ serviceId: SERVICE_ID, uid: UID, runCaptured: run }),
+      inspectLaunchdService({
+        serviceId: SERVICE_ID,
+        uid: UID,
+        runCaptured: run,
+      }),
     ).resolves.toEqual({ state: "unknown", code: "launchd_inspection_failed" });
   });
 
@@ -146,13 +158,21 @@ describe("service-aware launchd session", () => {
       if (command[1] === "print") {
         printed += 1;
         return printed === 1
-          ? { code: 0, stdout: `path = /tmp/x.plist\nstate = not running\n`, stderr: "" }
+          ? {
+              code: 0,
+              stdout: `path = /tmp/x.plist\nstate = not running\n`,
+              stderr: "",
+            }
           : running(84237);
       }
       return running(84237);
     });
     await expect(
-      startManagedService({ serviceId: SERVICE_ID, uid: UID, runCaptured: run }),
+      startManagedService({
+        serviceId: SERVICE_ID,
+        uid: UID,
+        runCaptured: run,
+      }),
     ).resolves.toBe("started");
     expect(calls).toContainEqual([
       "launchctl",
@@ -169,7 +189,11 @@ describe("service-aware launchd session", () => {
       return running(84237);
     });
     await expect(
-      startManagedService({ serviceId: SERVICE_ID, uid: UID, runCaptured: run }),
+      startManagedService({
+        serviceId: SERVICE_ID,
+        uid: UID,
+        runCaptured: run,
+      }),
     ).resolves.toBe("started");
     // Already running -> no kickstart needed.
     expect(calls.some((c) => c[1] === "kickstart")).toBe(false);
@@ -214,7 +238,11 @@ describe("service-aware launchd session", () => {
       stderr: "",
     }));
     await expect(
-      inspectLaunchdService({ serviceId: SERVICE_ID, uid: UID, runCaptured: run }),
+      inspectLaunchdService({
+        serviceId: SERVICE_ID,
+        uid: UID,
+        runCaptured: run,
+      }),
     ).resolves.toEqual({ state: "loaded", plistPath: "/tmp/x.plist" });
   });
 
@@ -225,7 +253,11 @@ describe("service-aware launchd session", () => {
       return running(101);
     });
     await expect(
-      restartManagedService({ serviceId: SERVICE_ID, uid: UID, runCaptured: run }),
+      restartManagedService({
+        serviceId: SERVICE_ID,
+        uid: UID,
+        runCaptured: run,
+      }),
     ).resolves.toBe("restarted");
     expect(calls).toContainEqual([
       "launchctl",
@@ -286,7 +318,9 @@ describe("service-aware launchd session", () => {
         stdout: JSON.stringify({
           Label: SERVICE_ID,
           ProgramArguments: ["/tmp/node", "/tmp/runtime.cjs", "serve"],
-          EnvironmentVariables: { ONE_MEMORY_DATA_DIR: "/tmp/this-install/data" },
+          EnvironmentVariables: {
+            ONE_MEMORY_DATA_DIR: "/tmp/this-install/data",
+          },
         }),
         stderr: "",
       };

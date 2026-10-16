@@ -91,7 +91,8 @@ export async function callRestore(
   source: string,
   request: typeof defaultPost = defaultPost,
 ): Promise<
-  { state: "restored"; result: RestoreResult } | { state: "rejected"; code: string }
+  | { state: "restored"; result: RestoreResult }
+  | { state: "rejected"; code: string }
 > {
   const response = await request(
     `http://${options.host}:${options.port}/api/v1/backup/restore`,

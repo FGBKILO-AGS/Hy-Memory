@@ -23,19 +23,22 @@ describe("model content permission flow", () => {
   it.each([
     ["allow", true],
     ["deny", false],
-  ] as const)("sets %s directly without revision or receipt fields", async (_, allowed) => {
-    const post = vi.fn().mockResolvedValue({
-      state: "committed",
-      data: { allowed },
-    });
+  ] as const)(
+    "sets %s directly without revision or receipt fields",
+    async (_, allowed) => {
+      const post = vi.fn().mockResolvedValue({
+        state: "committed",
+        data: { allowed },
+      });
 
-    await expect(
-      setModelContentPermission({ post } as CoreOperations, allowed),
-    ).resolves.toMatchObject({ state: "ok", allowed });
-    expect(post).toHaveBeenCalledWith("/api/v1/model-content-permission", {
-      allowed,
-    });
-  });
+      await expect(
+        setModelContentPermission({ post } as CoreOperations, allowed),
+      ).resolves.toMatchObject({ state: "ok", allowed });
+      expect(post).toHaveBeenCalledWith("/api/v1/model-content-permission", {
+        allowed,
+      });
+    },
+  );
 
   it("does not accept a malformed or mismatched success response", async () => {
     const malformed = vi.fn().mockResolvedValue({

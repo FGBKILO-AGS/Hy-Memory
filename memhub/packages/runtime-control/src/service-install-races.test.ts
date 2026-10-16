@@ -24,7 +24,8 @@ vi.mock("node:fs/promises", async (original) => {
     ...real,
     lstat: async (file: string) => {
       const info = await real.lstat(file);
-      if (file !== injection.stalePathLinkCount || info.nlink !== 1) return info;
+      if (file !== injection.stalePathLinkCount || info.nlink !== 1)
+        return info;
       // CephFS can expose this exact stale view after unlink(temp): the open
       // handle already reports nlink=1 while lstat(target) still says 2.
       const stale = Object.create(Object.getPrototypeOf(info));

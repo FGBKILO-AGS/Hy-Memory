@@ -3,9 +3,9 @@ import path from "node:path";
 
 import {
   applyLocalUninstall,
-  planLocalUninstall,
   type LocalUninstallPlan,
   type LocalUninstallReceipt,
+  planLocalUninstall,
 } from "../../local-install.js";
 
 export interface LinuxUninstallPlan extends LocalUninstallPlan {}
@@ -20,7 +20,11 @@ export async function buildLinuxUninstallPlan(options: {
   unitPath?: string;
   unitContent?: string;
 }): Promise<LinuxUninstallPlan> {
-  if (options.stopsService && options.unitPath && options.unitContent !== undefined) {
+  if (
+    options.stopsService &&
+    options.unitPath &&
+    options.unitContent !== undefined
+  ) {
     const existing = await readlinkSafe(options.unitPath);
     if (existing === null) {
       const { readFile } = await import("node:fs/promises");
@@ -36,7 +40,9 @@ export async function buildLinuxUninstallPlan(options: {
   return basePlan;
 }
 
-export async function verifyLinuxUninstallPlan(plan: LinuxUninstallPlan): Promise<void> {
+export async function verifyLinuxUninstallPlan(
+  plan: LinuxUninstallPlan,
+): Promise<void> {
   if (plan.cli_link) {
     const link = await readlinkSafe(plan.cli_link);
     if (link === null) {
@@ -50,7 +56,12 @@ export async function verifyLinuxUninstallPlan(plan: LinuxUninstallPlan): Promis
       if (actual !== expected) throw new Error("linux_cli_link_unmanaged");
     } else {
       const target = path.resolve(path.dirname(plan.cli_link), link);
-      const expected = path.join(plan.install_root, "current", "bin", "one-memory");
+      const expected = path.join(
+        plan.install_root,
+        "current",
+        "bin",
+        "one-memory",
+      );
       if (target !== expected) throw new Error("linux_cli_link_unmanaged");
     }
   }

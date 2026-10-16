@@ -44,7 +44,8 @@ export async function planCliLink(options: {
     options.includeCompatibilityAlias === false
       ? undefined
       : paths.join(binDirectory, executableName);
-  const compatTargetPath = compatLinkPath === undefined ? undefined : targetPath;
+  const compatTargetPath =
+    compatLinkPath === undefined ? undefined : targetPath;
   if (platform === "win32") {
     return blocked(
       platform,

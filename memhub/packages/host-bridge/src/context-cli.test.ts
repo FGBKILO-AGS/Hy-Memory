@@ -91,9 +91,7 @@ describe("om_context CLI receipts", () => {
     const result = await runContextCli(["original"], env);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain(
-      "已完成MemHub的记忆查询。",
-    );
+    expect(result.stdout).toContain("已完成MemHub的记忆查询。");
     expect(result.stdout).not.toContain("成功使用 MemHub");
     expect(result.stdout).not.toContain("获取部分相关记忆");
     expect(result.stdout).not.toContain("暂时不可用");

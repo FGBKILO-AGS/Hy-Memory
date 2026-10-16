@@ -31,13 +31,13 @@ import {
   retryAutoReconcile,
   useAutoConnect,
 } from "./connection-reconcile";
+import { HomeCardBoundary } from "./HomeCardBoundary";
 import {
   hostBridgeAvailable,
   hostConnectionApproved,
   hostConnectionUnknown,
   useRecallHosts,
 } from "./host-state";
-import { HomeCardBoundary } from "./HomeCardBoundary";
 import { subscribePoll } from "./poll-scheduler";
 import { R6Button } from "./R6Controls";
 import { prefetchDataRuntime } from "./runtime-state";
@@ -804,214 +804,214 @@ export function ApplicationsHome({
         inert={expanded || phase !== "idle"}
       >
         <HomeCardBoundary label="记忆概览">
-        <section className="r6-home-overview" aria-label="记忆概览">
-          <header>
-            <h2>记忆概览</h2>
-          </header>
-          <div className="r6-home-metrics">
-            <div>
-              <p>已沉淀记忆</p>
-              {/* The figure slot used to hold the word 读取中 while the first
+          <section className="r6-home-overview" aria-label="记忆概览">
+            <header>
+              <h2>记忆概览</h2>
+            </header>
+            <div className="r6-home-metrics">
+              <div>
+                <p>已沉淀记忆</p>
+                {/* The figure slot used to hold the word 读取中 while the first
                   read was in flight, which is how "大数字不可见" (D51) shows up
                   on a slow link: the biggest type on the page spends the first
                   frame saying something that is not a number. A bar of the same
                   height reserves the digits instead, and the wording moves to a
                   live region so screen readers still hear it. 暂无法读取 stays a
                   word, because that is a settled state rather than progress. */}
-              {!visible && !summaryUnavailable ? (
-                <>
-                  <p className="r6-home-figure">
-                    <span
-                      className="r6-home-figure-pending"
-                      aria-hidden="true"
-                    />
-                  </p>
-                  <small role="status">正在读取已沉淀记忆数量…</small>
-                </>
+                {!visible && !summaryUnavailable ? (
+                  <>
+                    <p className="r6-home-figure">
+                      <span
+                        className="r6-home-figure-pending"
+                        aria-hidden="true"
+                      />
+                    </p>
+                    <small role="status">正在读取已沉淀记忆数量…</small>
+                  </>
+                ) : (
+                  <>
+                    <p className="r6-home-figure">
+                      <strong className={visible ? "" : "r6-home-word"}>
+                        {visible
+                          ? new Intl.NumberFormat("zh-CN").format(
+                              visible.memory_count,
+                            )
+                          : "暂无法读取"}
+                      </strong>
+                      {visible ? <i>条</i> : null}
+                    </p>
+                    <small>按应用授权范围使用</small>
+                  </>
+                )}
+              </div>
+              <div>
+                <p>沉淀状态</p>
+                <strong className="r6-home-word">{stateLabel}</strong>
+                <small>
+                  {modelContentAllowed === false
+                    ? "新的对话不会再整理成记忆"
+                    : processing?.running
+                      ? "新的对话正在整理"
+                      : processing?.pending
+                        ? "等待队列开始处理"
+                        : "以当前处理状态为准"}
+                </small>
+                {modelContentAllowed === false ? (
+                  <R6Button variant="quiet" onClick={() => onSettings()}>
+                    打开模型内容权限
+                  </R6Button>
+                ) : null}
+              </div>
+              <div>
+                <p>最近更新</p>
+                <strong className={time ? "r6-home-time" : "r6-home-word"}>
+                  {time ?? (visible ? "尚未生成" : "待核对")}
+                </strong>
+                <small>
+                  {time
+                    ? `${latestClock?.today ? "今天 · " : ""}记忆已保存`
+                    : "历史与记忆分别处理"}
+                </small>
+              </div>
+            </div>
+            <div className="r6-home-activity">
+              {availableActivities.length > 1 &&
+              (activity === "call" ||
+                activity === "memory" ||
+                activity === "dialogue") ? (
+                <div className="r6-home-activity-tabs" role="tablist">
+                  {(["update", "call"] as const).map((item) => (
+                    <button
+                      type="button"
+                      role="tab"
+                      key={item}
+                      aria-selected={
+                        item === "call"
+                          ? activity === "call"
+                          : activity === "memory" || activity === "dialogue"
+                      }
+                      onClick={() => setActivityView(item)}
+                    >
+                      {item === "call" ? "最近调用" : "最近更新"}
+                    </button>
+                  ))}
+                </div>
               ) : (
-                <>
-                  <p className="r6-home-figure">
-                    <strong className={visible ? "" : "r6-home-word"}>
-                      {visible
-                        ? new Intl.NumberFormat("zh-CN").format(
-                            visible.memory_count,
-                          )
-                        : "暂无法读取"}
-                    </strong>
-                    {visible ? <i>条</i> : null}
-                  </p>
-                  <small>按应用授权范围使用</small>
-                </>
+                <p>
+                  {activity === "unavailable"
+                    ? "动态暂不可用"
+                    : activity === "call"
+                      ? "最近调用"
+                      : activity === "dialogue" || activity === "memory"
+                        ? "最近更新"
+                        : "首批沉淀"}
+                </p>
               )}
-            </div>
-            <div>
-              <p>沉淀状态</p>
-              <strong className="r6-home-word">{stateLabel}</strong>
-              <small>
-                {modelContentAllowed === false
-                  ? "新的对话不会再整理成记忆"
-                  : processing?.running
-                    ? "新的对话正在整理"
-                    : processing?.pending
-                      ? "等待队列开始处理"
-                      : "以当前处理状态为准"}
-              </small>
-              {modelContentAllowed === false ? (
-                <R6Button variant="quiet" onClick={() => onSettings()}>
-                  打开模型内容权限
-                </R6Button>
-              ) : null}
-            </div>
-            <div>
-              <p>最近更新</p>
-              <strong className={time ? "r6-home-time" : "r6-home-word"}>
-                {time ?? (visible ? "尚未生成" : "待核对")}
-              </strong>
-              <small>
-                {time
-                  ? `${latestClock?.today ? "今天 · " : ""}记忆已保存`
-                  : "历史与记忆分别处理"}
-              </small>
-            </div>
-          </div>
-          <div className="r6-home-activity">
-            {availableActivities.length > 1 &&
-            (activity === "call" ||
-              activity === "memory" ||
-              activity === "dialogue") ? (
-              <div className="r6-home-activity-tabs" role="tablist">
-                {(["update", "call"] as const).map((item) => (
+              <div>
+                {activity === "call" && recentCall ? (
+                  <div className="r6-home-call-direction" aria-hidden="true">
+                    {recentCallSource ? (
+                      <>
+                        <AppMark id={recentCallSource.source_id} size={26} />
+                        <ArrowRight size={22} />
+                      </>
+                    ) : null}
+                    <AppMark
+                      id={
+                        recentCallHost?.source_id ??
+                        recentCall.host_id ??
+                        "unknown"
+                      }
+                      size={26}
+                    />
+                  </div>
+                ) : activity === "memory" && latest?.source_ids[0] ? (
+                  (() => {
+                    const source = imports.sources.find(
+                      (item) => item.source_id === latest.source_ids[0],
+                    );
+                    return source ? <SourceMark source={source} /> : null;
+                  })()
+                ) : activity === "dialogue" && latestDialogue ? (
+                  (() => {
+                    const source = imports.sources.find(
+                      (item) => item.source_id === latestDialogue.source_id,
+                    );
+                    return source ? <SourceMark source={source} /> : null;
+                  })()
+                ) : null}
+                <section>
+                  <h3>
+                    {activity === "unavailable"
+                      ? callState === "unavailable"
+                        ? "暂时无法读取调用记录"
+                        : "暂时无法读取记忆状态"
+                      : activity === "call" && recentCall
+                        ? callDetailHeadline(
+                            recentCall,
+                            recentCallHost?.display_name ??
+                              callHostName(recentCall.host_id),
+                          )
+                        : activity === "memory" && latest
+                          ? `${latest.content}${latest.truncated ? "…" : ""}`
+                          : activity === "dialogue" && latestDialogue
+                            ? `${latestDialogue.excerpt}${latestDialogue.truncated ? "…" : ""}`
+                            : activity === "importing"
+                              ? "对话持续导入中，即将沉淀你的记忆"
+                              : activity === "first-running"
+                                ? "正在沉淀第一批记忆"
+                                : activity === "first-queued"
+                                  ? "准备沉淀第一批记忆"
+                                  : activity === "loading"
+                                    ? "正在读取动态"
+                                    : "还没有已生成的记忆"}
+                  </h3>
+                  <small>
+                    {activity === "unavailable"
+                      ? callState === "unavailable"
+                        ? "已有记忆仍可查看；重试不会发起新的调用。"
+                        : "读取失败不会当作没有记忆。"
+                      : activity === "call" && recentCall
+                        ? `${stamped(recentCall.occurred_at)} · ${callRowDetail(recentCall)}${callState === "incomplete" ? " · 有几次调用没被记下来，列表可能不全" : ""}`
+                        : activity === "memory" && latest
+                          ? `${time} · ${memoryAction(latest.action)} · ${latest.source_ids.map((id) => imports.sources.find((s) => s.source_id === id)?.display_name ?? id).join("、")} · 版本 ${latest.revision}`
+                          : activity === "dialogue" && latestDialogue
+                            ? `${clockParts(latestDialogue.created_at ?? latestDialogue.imported_at)?.clock ?? "时间未知"} ${latestDialogue.time_basis === "conversation" ? "对话时间" : "导入时间"} · ${imports.sources.find((source) => source.source_id === latestDialogue.source_id)?.display_name ?? latestDialogue.source_id}`
+                            : activity === "importing"
+                              ? "对话正在后台持续保存。"
+                              : "历史已保存，记忆生成后会显示在这里。"}
+                  </small>
+                </section>
+                {(activity === "unavailable" ||
+                  (activity === "call" && CALL_HISTORY_ENTRY_VISIBLE) ||
+                  activity === "memory") && (
                   <button
                     type="button"
-                    role="tab"
-                    key={item}
-                    aria-selected={
-                      item === "call"
-                        ? activity === "call"
-                        : activity === "memory" || activity === "dialogue"
+                    className="r6-home-activity-link"
+                    onClick={
+                      activity === "unavailable"
+                        ? () => {
+                            setRevision((n) => n + 1);
+                            setCallRevision((n) => n + 1);
+                          }
+                        : activity === "call"
+                          ? onCalls
+                          : () => onMemories(latest?.memory_id)
                     }
-                    onClick={() => setActivityView(item)}
                   >
-                    {item === "call" ? "最近调用" : "最近更新"}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p>
-                {activity === "unavailable"
-                  ? "动态暂不可用"
-                  : activity === "call"
-                    ? "最近调用"
-                    : activity === "dialogue" || activity === "memory"
-                      ? "最近更新"
-                      : "首批沉淀"}
-              </p>
-            )}
-            <div>
-              {activity === "call" && recentCall ? (
-                <div className="r6-home-call-direction" aria-hidden="true">
-                  {recentCallSource ? (
-                    <>
-                      <AppMark id={recentCallSource.source_id} size={26} />
-                      <ArrowRight size={22} />
-                    </>
-                  ) : null}
-                  <AppMark
-                    id={
-                      recentCallHost?.source_id ??
-                      recentCall.host_id ??
-                      "unknown"
-                    }
-                    size={26}
-                  />
-                </div>
-              ) : activity === "memory" && latest?.source_ids[0] ? (
-                (() => {
-                  const source = imports.sources.find(
-                    (item) => item.source_id === latest.source_ids[0],
-                  );
-                  return source ? <SourceMark source={source} /> : null;
-                })()
-              ) : activity === "dialogue" && latestDialogue ? (
-                (() => {
-                  const source = imports.sources.find(
-                    (item) => item.source_id === latestDialogue.source_id,
-                  );
-                  return source ? <SourceMark source={source} /> : null;
-                })()
-              ) : null}
-              <section>
-                <h3>
-                  {activity === "unavailable"
-                    ? callState === "unavailable"
-                      ? "暂时无法读取调用记录"
-                      : "暂时无法读取记忆状态"
-                    : activity === "call" && recentCall
-                      ? callDetailHeadline(
-                          recentCall,
-                          recentCallHost?.display_name ??
-                            callHostName(recentCall.host_id),
-                        )
-                      : activity === "memory" && latest
-                        ? `${latest.content}${latest.truncated ? "…" : ""}`
-                        : activity === "dialogue" && latestDialogue
-                          ? `${latestDialogue.excerpt}${latestDialogue.truncated ? "…" : ""}`
-                          : activity === "importing"
-                            ? "对话持续导入中，即将沉淀你的记忆"
-                            : activity === "first-running"
-                              ? "正在沉淀第一批记忆"
-                              : activity === "first-queued"
-                                ? "准备沉淀第一批记忆"
-                                : activity === "loading"
-                                  ? "正在读取动态"
-                                  : "还没有已生成的记忆"}
-                </h3>
-                <small>
-                  {activity === "unavailable"
-                    ? callState === "unavailable"
-                      ? "已有记忆仍可查看；重试不会发起新的调用。"
-                      : "读取失败不会当作没有记忆。"
-                    : activity === "call" && recentCall
-                      ? `${stamped(recentCall.occurred_at)} · ${callRowDetail(recentCall)}${callState === "incomplete" ? " · 有几次调用没被记下来，列表可能不全" : ""}`
-                      : activity === "memory" && latest
-                        ? `${time} · ${memoryAction(latest.action)} · ${latest.source_ids.map((id) => imports.sources.find((s) => s.source_id === id)?.display_name ?? id).join("、")} · 版本 ${latest.revision}`
-                        : activity === "dialogue" && latestDialogue
-                          ? `${clockParts(latestDialogue.created_at ?? latestDialogue.imported_at)?.clock ?? "时间未知"} ${latestDialogue.time_basis === "conversation" ? "对话时间" : "导入时间"} · ${imports.sources.find((source) => source.source_id === latestDialogue.source_id)?.display_name ?? latestDialogue.source_id}`
-                          : activity === "importing"
-                            ? "对话正在后台持续保存。"
-                            : "历史已保存，记忆生成后会显示在这里。"}
-                </small>
-              </section>
-              {(activity === "unavailable" ||
-                (activity === "call" && CALL_HISTORY_ENTRY_VISIBLE) ||
-                activity === "memory") && (
-                <button
-                  type="button"
-                  className="r6-home-activity-link"
-                  onClick={
-                    activity === "unavailable"
-                      ? () => {
-                          setRevision((n) => n + 1);
-                          setCallRevision((n) => n + 1);
-                        }
+                    {activity === "unavailable"
+                      ? "重新读取"
                       : activity === "call"
-                        ? onCalls
-                        : () => onMemories(latest?.memory_id)
-                  }
-                >
-                  {activity === "unavailable"
-                    ? "重新读取"
-                    : activity === "call"
-                      ? "查看记录"
-                      : "查看记忆"}
-                  {activity === "unavailable" ? null : (
-                    <ArrowRight size={14} aria-hidden="true" />
-                  )}
-                </button>
-              )}
+                        ? "查看记录"
+                        : "查看记忆"}
+                    {activity === "unavailable" ? null : (
+                      <ArrowRight size={14} aria-hidden="true" />
+                    )}
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
         </HomeCardBoundary>
         {attention ? (
           <section className="r6-home-auto-failure" role="alert">
@@ -1038,81 +1038,81 @@ export function ApplicationsHome({
           </section>
         ) : null}
         <HomeCardBoundary label="运行状态">
-        <aside className="r6-home-runtime">
-          <h2>运行状态</h2>
-          <h3>
-            {connected
-              ? "后台运行中"
-              : imports.healthStale
-                ? "连接状态待核对"
-                : "服务未连接"}
-          </h3>
-          <p>仅处理已授权范围</p>
-          <dl>
-            <div>
-              <dt>对话同步</dt>
-              <dd>{syncState}</dd>
-            </div>
-            <div>
-              <dt>记忆整理</dt>
-              <dd>{stateLabel}</dd>
-            </div>
-            <div>
-              <dt>应用访问</dt>
-              <dd>{accessText}</dd>
-            </div>
-          </dl>
-          {accessUnknownText ? (
-            <div
-              role="status"
-              aria-label="应用接入核对"
-              className="r6-home-auto-failure"
-            >
-              <p>{accessUnknownText}</p>
-              <button
-                type="button"
-                className="r6-home-activity-link"
-                disabled={hostQuery.isFetching}
-                onClick={() => void hostQuery.refetch()}
+          <aside className="r6-home-runtime">
+            <h2>运行状态</h2>
+            <h3>
+              {connected
+                ? "后台运行中"
+                : imports.healthStale
+                  ? "连接状态待核对"
+                  : "服务未连接"}
+            </h3>
+            <p>仅处理已授权范围</p>
+            <dl>
+              <div>
+                <dt>对话同步</dt>
+                <dd>{syncState}</dd>
+              </div>
+              <div>
+                <dt>记忆整理</dt>
+                <dd>{stateLabel}</dd>
+              </div>
+              <div>
+                <dt>应用访问</dt>
+                <dd>{accessText}</dd>
+              </div>
+            </dl>
+            {accessUnknownText ? (
+              <div
+                role="status"
+                aria-label="应用接入核对"
+                className="r6-home-auto-failure"
               >
-                {hostQuery.isFetching ? "核对中…" : "重新核对"}
-              </button>
-            </div>
-          ) : null}
-          {hostStale ? (
-            <p
-              role="status"
-              aria-label="应用接入状态"
-              className="r6-home-auto-failure"
-            >
-              应用接入状态暂时读取失败，当前为上次状态。
+                <p>{accessUnknownText}</p>
+                <button
+                  type="button"
+                  className="r6-home-activity-link"
+                  disabled={hostQuery.isFetching}
+                  onClick={() => void hostQuery.refetch()}
+                >
+                  {hostQuery.isFetching ? "核对中…" : "重新核对"}
+                </button>
+              </div>
+            ) : null}
+            {hostStale ? (
+              <p
+                role="status"
+                aria-label="应用接入状态"
+                className="r6-home-auto-failure"
+              >
+                应用接入状态暂时读取失败，当前为上次状态。
+              </p>
+            ) : null}
+            {autoFailureText ? (
+              <div role="alert" className="r6-home-auto-failure">
+                <p>{`${autoFailureText}不会自动重试。`}</p>
+                <button
+                  type="button"
+                  className="r6-home-activity-link"
+                  disabled={auto.running.length > 0}
+                  onClick={() =>
+                    void retryAutoReconcile({
+                      sources: imports.sources,
+                      setSync: imports.setSync,
+                      refresh: imports.refresh,
+                    })
+                  }
+                >
+                  重新接入
+                </button>
+              </div>
+            ) : null}
+            <p className="r6-home-checked">
+              {!checked
+                ? "上次核对：待核对"
+                : `上次核对：${checked.today ? "今天 " : ""}${checked.clock}`}
             </p>
-          ) : null}
-          {autoFailureText ? (
-            <div role="alert" className="r6-home-auto-failure">
-              <p>{`${autoFailureText}不会自动重试。`}</p>
-              <button
-                type="button"
-                className="r6-home-activity-link"
-                disabled={auto.running.length > 0}
-                onClick={() =>
-                  void retryAutoReconcile({
-                    sources: imports.sources,
-                    setSync: imports.setSync,
-                    refresh: imports.refresh,
-                  })
-                }
-              >
-                重新接入
-              </button>
-            </div>
-          ) : null}
-          <p className="r6-home-checked">
-            {!checked
-              ? "上次核对：待核对"
-              : `上次核对：${checked.today ? "今天 " : ""}${checked.clock}`}
-          </p>
-        </aside>
+          </aside>
         </HomeCardBoundary>
       </div>
       <section

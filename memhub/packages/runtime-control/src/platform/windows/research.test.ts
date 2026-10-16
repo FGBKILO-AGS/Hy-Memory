@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  WINDOWS_RESEARCH_STATE,
   createWindowsSupportAssessment,
+  WINDOWS_RESEARCH_STATE,
 } from "./research.js";
 
 describe("Windows H08 support assessment", () => {
   it("keeps every real-machine gate blocked instead of extrapolating", () => {
-    for (const capability of Object.values(WINDOWS_RESEARCH_STATE.capabilities)) {
+    for (const capability of Object.values(
+      WINDOWS_RESEARCH_STATE.capabilities,
+    )) {
       if ("status" in capability && capability.status !== "implemented") {
         expect(capability.status).toBe("blocked");
         expect(capability.blocked_reason).toMatch(/windows|target_machine/);
@@ -21,8 +23,14 @@ describe("Windows H08 support assessment", () => {
 
   it("explicitly excludes Windows 10 and arm64 from the x64 release gate", () => {
     expect(WINDOWS_RESEARCH_STATE.explicit_matrix).toMatchObject({
-      windows_10_x64: { support: "blocked", blocked_reason: "windows_10_matrix_not_measured" },
-      windows_arm64: { support: "blocked", blocked_reason: "windows_arm64_matrix_not_measured" },
+      windows_10_x64: {
+        support: "blocked",
+        blocked_reason: "windows_10_matrix_not_measured",
+      },
+      windows_arm64: {
+        support: "blocked",
+        blocked_reason: "windows_arm64_matrix_not_measured",
+      },
     });
   });
 
@@ -47,11 +55,13 @@ describe("Windows H08 support assessment", () => {
 
   it("normalizes Windows paths for a future reparse-point containment check", () => {
     const assessment = createWindowsSupportAssessment();
-    expect(assessment.reparseLikePath("C:\\Programs\\中文 One Memory\\runtime")).toBe(
-      "C:\\Programs\\中文 One Memory\\runtime",
-    );
+    expect(
+      assessment.reparseLikePath("C:\\Programs\\中文 One Memory\\runtime"),
+    ).toBe("C:\\Programs\\中文 One Memory\\runtime");
     expect(assessment.reparseLikePath("relative\\path")).toBeNull();
-    expect(assessment.containsReparseMarker("C:\\One Memory\\runtime")).toBe(true);
+    expect(assessment.containsReparseMarker("C:\\One Memory\\runtime")).toBe(
+      true,
+    );
     expect(assessment.containsReparseMarker("")).toBe(false);
   });
 });

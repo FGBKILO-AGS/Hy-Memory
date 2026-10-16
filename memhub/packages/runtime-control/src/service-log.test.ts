@@ -42,9 +42,9 @@ describe("service log capture", () => {
       await capture?.writeStdout(chunk);
     }
     await capture?.flush();
-    const entries = (
-      await readdir(path.join(dataDir, "logs"))
-    ).filter((name) => name.startsWith("service.log"));
+    const entries = (await readdir(path.join(dataDir, "logs"))).filter((name) =>
+      name.startsWith("service.log"),
+    );
     // service.log + .1 + .2 + .3 -- never unbounded.
     expect(entries.length).toBeLessThanOrEqual(4);
     await rm(dataDir, { recursive: true, force: true });

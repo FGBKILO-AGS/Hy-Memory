@@ -246,10 +246,19 @@ export function ImportProgressStrip({
     const firstImport = !stale && runningHistory.length > 0;
     const actionable =
       currentArrival !== null &&
-      ["model-required", "consent-required", "failed", "stopped", "unavailable"].includes(
-        currentArrival.phase,
-      );
-    if (!firstImport && !actionable && !failed.length && !completedWithErrors.length) {
+      [
+        "model-required",
+        "consent-required",
+        "failed",
+        "stopped",
+        "unavailable",
+      ].includes(currentArrival.phase);
+    if (
+      !firstImport &&
+      !actionable &&
+      !failed.length &&
+      !completedWithErrors.length
+    ) {
       return null;
     }
     const imported = sources.reduce(
@@ -264,14 +273,25 @@ export function ImportProgressStrip({
           ? "模型授权已撤回，新的对话不会再整理成记忆。"
           : "有些内容没有处理完成，请前往设置查看。";
     return (
-      <div className="import-strip" role="status" aria-live="polite" data-feedback="compact">
+      <div
+        className="import-strip"
+        role="status"
+        aria-live="polite"
+        data-feedback="compact"
+      >
         <div className="import-strip-headline">
           <div className="import-strip-heading">
-            {firstImport && <span className="import-strip-pulse" aria-hidden="true" />}
+            {firstImport && (
+              <span className="import-strip-pulse" aria-hidden="true" />
+            )}
             <strong>{message}</strong>
           </div>
           {!firstImport && onConfigureModel && (
-            <button type="button" className="secondary" onClick={onConfigureModel}>
+            <button
+              type="button"
+              className="secondary"
+              onClick={onConfigureModel}
+            >
               <Settings2 size={15} aria-hidden="true" />
               去设置
             </button>

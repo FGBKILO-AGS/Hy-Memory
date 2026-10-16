@@ -170,7 +170,9 @@ describe("recall link probe", () => {
     const probe = await probeRecallInstall(cursorLayout(cursorDir));
 
     expect(probe.state).toBe("unreachable");
-    expect(probe.detail).toMatch(/closed before|did not complete the handshake/);
+    expect(probe.detail).toMatch(
+      /closed before|did not complete the handshake/,
+    );
   });
 
   it("records a self-check in the journal of every fresh install", async () => {

@@ -3,8 +3,8 @@ import { createReadStream } from "node:fs";
 import {
   chmod,
   lstat,
-  mkdtemp,
   mkdir,
+  mkdtemp,
   open,
   readdir,
   readFile,
@@ -14,7 +14,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Readable } from "node:stream";
+import type { Readable } from "node:stream";
 import axios from "axios";
 import { HttpsProxyAgent } from "https-proxy-agent";
 // proxy-from-env 2.1.0 ships ESM/CJS entrypoints but no TypeScript declarations.
@@ -157,11 +157,11 @@ export function parseRuntimeReleaseManifest(
   }
   if (
     value.cli_protocol !== CLI_PROTOCOL ||
+    !protocolIncludes(CLI_SUPPORTED_RUNTIME_PROTOCOL, value.runtime_protocol) ||
     !protocolIncludes(
-      CLI_SUPPORTED_RUNTIME_PROTOCOL,
+      value.supported_runtime_protocol,
       value.runtime_protocol,
     ) ||
-    !protocolIncludes(value.supported_runtime_protocol, value.runtime_protocol) ||
     !protocolIncludes(value.supported_cli_protocol, CLI_PROTOCOL)
   ) {
     throw new Error("release_protocol_incompatible");
@@ -224,7 +224,8 @@ export function selectRuntimeReleaseArtifact(
   const artifact = release.artifacts.find(
     (candidate): candidate is RuntimeReleaseArtifact =>
       candidate.kind === "runtime" &&
-      candidate.platform === options.platform && candidate.arch === options.arch,
+      candidate.platform === options.platform &&
+      candidate.arch === options.arch,
   );
   if (!artifact) throw new Error("release_artifact_unavailable");
   return artifact;
@@ -254,7 +255,10 @@ export async function acquireRuntimeDistribution(options: {
   const artifactUrl = trustedUrl(artifact.url);
   const maxArtifactBytes = options.maxArtifactBytes ?? 2 * 1024 * 1024 * 1024;
   const maxUnpackedBytes = options.maxUnpackedBytes ?? 4 * 1024 * 1024 * 1024;
-  if (artifact.bytes > maxArtifactBytes || artifact.unpacked_bytes > maxUnpackedBytes) {
+  if (
+    artifact.bytes > maxArtifactBytes ||
+    artifact.unpacked_bytes > maxUnpackedBytes
+  ) {
     throw new Error("release_artifact_too_large");
   }
 
@@ -264,7 +268,9 @@ export async function acquireRuntimeDistribution(options: {
     artifact.bytes + artifact.unpacked_bytes,
     options.statfsImpl ?? statfs,
   );
-  const temporaryRoot = await mkdtemp(path.join(temporaryParent, "memhub-runtime-"));
+  const temporaryRoot = await mkdtemp(
+    path.join(temporaryParent, "memhub-runtime-"),
+  );
   await chmod(temporaryRoot, 0o700);
   const archive = path.join(temporaryRoot, artifact.filename);
   const extracted = path.join(temporaryRoot, "extracted");
@@ -340,7 +346,9 @@ export async function resolveRuntimeRelease(options: {
   });
   let releaseValue: unknown;
   try {
-    releaseValue = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes));
+    releaseValue = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes),
+    );
   } catch {
     throw new Error("release_manifest_invalid");
   }
@@ -426,7 +434,8 @@ async function fetchBytes(
     }
     for await (const chunk of response.body) {
       total += chunk.byteLength;
-      if (total > options.maxBytes) throw new Error("release_response_too_large");
+      if (total > options.maxBytes)
+        throw new Error("release_response_too_large");
       chunks.push(chunk);
     }
   });
@@ -472,7 +481,8 @@ async function downloadArtifact(
   } finally {
     await file.close();
   }
-  if (total !== artifact.bytes) throw new Error("release_artifact_size_mismatch");
+  if (total !== artifact.bytes)
+    throw new Error("release_artifact_size_mismatch");
   if (digest.digest("hex") !== artifact.sha256) {
     throw new Error("release_artifact_hash_mismatch");
   }
@@ -515,7 +525,8 @@ async function forResponse(
       await consume(response);
       return;
     } catch (error) {
-      if (controller.signal.aborted) throw new Error("release_download_timeout");
+      if (controller.signal.aborted)
+        throw new Error("release_download_timeout");
       throw error;
     } finally {
       clearTimeout(timeout);
@@ -549,9 +560,7 @@ async function extractRuntimeArchive(
         }
       } catch (error) {
         validationError =
-          error instanceof Error
-            ? error
-            : new Error("release_archive_invalid");
+          error instanceof Error ? error : new Error("release_archive_invalid");
       }
     },
   });
@@ -588,22 +597,29 @@ export function validateTarEntry(
   type: string,
   linkPath: string | undefined,
 ): void {
-  if (!safeArchivePath(entryPath)) throw new Error("release_archive_path_invalid");
+  if (!safeArchivePath(entryPath))
+    throw new Error("release_archive_path_invalid");
   if (!["File", "Directory", "SymbolicLink", "Link"].includes(type)) {
     throw new Error("release_archive_type_invalid");
   }
   if (type === "SymbolicLink" || type === "Link") {
-    if (!linkPath || path.posix.isAbsolute(linkPath) || linkPath.includes("\\")) {
+    if (
+      !linkPath ||
+      path.posix.isAbsolute(linkPath) ||
+      linkPath.includes("\\")
+    ) {
       throw new Error("release_archive_link_escapes");
     }
     const base = type === "Link" ? "." : path.posix.dirname(entryPath);
     const resolved = path.posix.normalize(path.posix.join(base, linkPath));
-    if (!safeArchivePath(resolved)) throw new Error("release_archive_link_escapes");
+    if (!safeArchivePath(resolved))
+      throw new Error("release_archive_link_escapes");
   }
 }
 
 async function locateDistribution(extracted: string): Promise<string> {
-  if (await regularFile(path.join(extracted, "manifest.json"))) return extracted;
+  if (await regularFile(path.join(extracted, "manifest.json")))
+    return extracted;
   const entries = await readdir(extracted, { withFileTypes: true });
   const directories = entries.filter((entry) => entry.isDirectory());
   if (entries.length !== 1 || directories.length !== 1) {
@@ -721,19 +737,24 @@ function safeArchivePath(value: string): boolean {
   const segments = withoutTrailingSlash.split("/");
   if (
     withoutTrailingSlash.length === 0 ||
-    segments.some((segment) => segment === "" || segment === "." || segment === "..")
+    segments.some(
+      (segment) => segment === "" || segment === "." || segment === "..",
+    )
   ) {
     return false;
   }
   return path.posix.normalize(withoutTrailingSlash) === withoutTrailingSlash;
 }
 
-function contentLength(headers: Record<string, string | undefined>): number | null {
+function contentLength(
+  headers: Record<string, string | undefined>,
+): number | null {
   const raw = headers["content-length"];
   if (raw === undefined) return null;
   if (!/^\d+$/.test(raw)) throw new Error("release_content_length_invalid");
   const value = Number(raw);
-  if (!Number.isSafeInteger(value)) throw new Error("release_content_length_invalid");
+  if (!Number.isSafeInteger(value))
+    throw new Error("release_content_length_invalid");
   return value;
 }
 
@@ -758,8 +779,10 @@ function isProtocolVersion(value: unknown): value is number {
 }
 
 function validTimestamp(value: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value) &&
-    !Number.isNaN(Date.parse(value));
+  return (
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value) &&
+    !Number.isNaN(Date.parse(value))
+  );
 }
 
 export async function sha256File(file: string): Promise<string> {
@@ -768,6 +791,8 @@ export async function sha256File(file: string): Promise<string> {
   return digest.digest("hex");
 }
 
-export async function readReleaseManifestFile(file: string): Promise<RuntimeReleaseManifest> {
+export async function readReleaseManifestFile(
+  file: string,
+): Promise<RuntimeReleaseManifest> {
   return parseRuntimeReleaseManifest(JSON.parse(await readFile(file, "utf8")));
 }

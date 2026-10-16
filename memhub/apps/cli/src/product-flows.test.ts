@@ -103,26 +103,45 @@ describe("unknown flags are rejected", () => {
   });
 
   it("still accepts the documented verbless scan", () => {
-    expect(parseProductCommand("scan", ["--all", "--yes"])?.plan.all).toBe(true);
-    expect(parseProductCommand("scan", ["--source", "codex"])?.plan.sourceId).toBe(
-      "codex",
+    expect(parseProductCommand("scan", ["--all", "--yes"])?.plan.all).toBe(
+      true,
     );
+    expect(
+      parseProductCommand("scan", ["--source", "codex"])?.plan.sourceId,
+    ).toBe("codex");
   });
 
   it("rejects flags that the named verb does not consume", () => {
     // These were accepted and then silently dropped. An operator who typed
     // `path remove --source codex` would believe the source filter applied.
     expect(
-      parseProductCommand("path", ["remove", "--root", "/tmp/x", "--source", "codex"]),
+      parseProductCommand("path", [
+        "remove",
+        "--root",
+        "/tmp/x",
+        "--source",
+        "codex",
+      ]),
     ).toBeNull();
     expect(
-      parseProductCommand("path", ["remove", "--root", "/tmp/x", "--no-recursive"]),
+      parseProductCommand("path", [
+        "remove",
+        "--root",
+        "/tmp/x",
+        "--no-recursive",
+      ]),
     ).toBeNull();
     expect(
       parseProductCommand("path", ["add", "--root", "/tmp/x", "--full"]),
     ).toBeNull();
     expect(
-      parseProductCommand("backup", ["create", "--target", "/tmp/b", "--source", "/tmp/s"]),
+      parseProductCommand("backup", [
+        "create",
+        "--target",
+        "/tmp/b",
+        "--source",
+        "/tmp/s",
+      ]),
     ).toBeNull();
     expect(
       parseProductCommand("backup", [
@@ -163,9 +182,7 @@ describe("unknown flags are rejected", () => {
   });
 
   it("rejects repeated boolean flags instead of treating them as idempotent", () => {
-    expect(
-      parseProductCommand("scan", ["--all", "--all", "--yes"]),
-    ).toBeNull();
+    expect(parseProductCommand("scan", ["--all", "--all", "--yes"])).toBeNull();
     expect(
       parseProductCommand("scan", ["--full", "--full", "--yes"]),
     ).toBeNull();
@@ -179,7 +196,13 @@ describe("unknown flags are rejected", () => {
       ]),
     ).toBeNull();
     expect(
-      parseProductCommand("backup", ["create", "--target", "/tmp/a", "--yes", "--yes"]),
+      parseProductCommand("backup", [
+        "create",
+        "--target",
+        "/tmp/a",
+        "--yes",
+        "--yes",
+      ]),
     ).toBeNull();
   });
 
@@ -215,12 +238,12 @@ describe("unknown flags are rejected", () => {
     ]);
     expect(parsed).not.toBeNull();
     expect(parsed?.confirmPath).toBe("/tmp/backups/a.sqlite3");
-    expect(restoreConfirmationMatches("/tmp/backups/a.sqlite3", parsed?.confirmPath)).toBe(
-      true,
-    );
-    expect(restoreConfirmationMatches("/tmp/backups/a.sqlite3", undefined)).toBe(
-      false,
-    );
+    expect(
+      restoreConfirmationMatches("/tmp/backups/a.sqlite3", parsed?.confirmPath),
+    ).toBe(true);
+    expect(
+      restoreConfirmationMatches("/tmp/backups/a.sqlite3", undefined),
+    ).toBe(false);
     expect(
       restoreConfirmationMatches(
         "/tmp/backups/a.sqlite3",
@@ -365,7 +388,11 @@ describe("path add and remove carry what the endpoint needs", () => {
   });
 
   it("distinguishes remove from add", () => {
-    const parsed = parseProductCommand("path", ["remove", "--root", "/tmp/scanme"]);
+    const parsed = parseProductCommand("path", [
+      "remove",
+      "--root",
+      "/tmp/scanme",
+    ]);
     if (parsed === null) {
       throw new Error("path remove must parse");
     }
@@ -375,7 +402,12 @@ describe("path add and remove carry what the endpoint needs", () => {
   });
 
   it("does not silently drop --yes", () => {
-    const parsed = parseProductCommand("path", ["add", "--root", "/tmp/a", "--yes"]);
+    const parsed = parseProductCommand("path", [
+      "add",
+      "--root",
+      "/tmp/a",
+      "--yes",
+    ]);
     expect(parsed?.confirmed).toBe(true);
     // Without this, a typo'd `--yes` would fall through to a plan and the user
     // would believe the change had been made.

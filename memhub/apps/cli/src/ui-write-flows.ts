@@ -14,8 +14,7 @@ import type {
 } from "./core-operations.js";
 import { PRODUCT } from "./version.js";
 
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const INPUT_KINDS = ["raw_conversation", "memory_content"] as const;
 const MAX_UPLOAD_BYTES = 128 * 1024 * 1024;
 
@@ -139,7 +138,11 @@ export function planCallEventsClear(
   ) {
     return invalid("call_event_ids_invalid");
   }
-  return preview({ schema_version: 1, kind: "call_events_clear", event_ids: [...eventIds] });
+  return preview({
+    schema_version: 1,
+    kind: "call_events_clear",
+    event_ids: [...eventIds],
+  });
 }
 
 export function planCallEventsClearAll(): UiWriteOutcome {
@@ -224,11 +227,7 @@ export async function readImportFileUpload(
   }
   try {
     const stats = await handle.stat();
-    if (
-      !stats.isFile() ||
-      stats.nlink !== 1 ||
-      stats.size > MAX_UPLOAD_BYTES
-    ) {
+    if (!stats.isFile() || stats.nlink !== 1 || stats.size > MAX_UPLOAD_BYTES) {
       return null;
     }
     const buffer = Buffer.alloc(Number(stats.size));
@@ -273,9 +272,7 @@ function fileUploadOperationId(
   checksum: string,
 ): string {
   const hex = createHash("sha256")
-    .update(
-      JSON.stringify([filename, inputKind, checksum]),
-    )
+    .update(JSON.stringify([filename, inputKind, checksum]))
     .digest("hex");
   return [
     hex.slice(0, 8),
@@ -325,8 +322,7 @@ export function validateUiWritePlan(value: unknown): UiWritePlan | null {
         UUID.test(candidate.operation_id) &&
         typeof candidate.path === "string" &&
         typeof candidate.filename === "string" &&
-        candidate.filename ===
-          candidate.path.split(/[/\\]/).pop() &&
+        candidate.filename === candidate.path.split(/[/\\]/).pop() &&
         /^[0-9a-f]{64}$/.test(String(candidate.sha256)) &&
         INPUT_KINDS.includes(
           candidate.input_kind as (typeof INPUT_KINDS)[number],
@@ -364,9 +360,7 @@ export async function executeCallEventsClear(
     event_ids: plan.event_ids,
     user_confirmed: true,
   });
-  return outcome(result, plan.event_ids.join(","), [
-    "removed",
-  ]);
+  return outcome(result, plan.event_ids.join(","), ["removed"]);
 }
 
 export async function executeCallEventsClearAll(
@@ -543,7 +537,9 @@ function outcome(
     return committed(operationId, {});
   }
   const data =
-    result.data !== null && typeof result.data === "object" && !Array.isArray(result.data)
+    result.data !== null &&
+    typeof result.data === "object" &&
+    !Array.isArray(result.data)
       ? (result.data as Record<string, unknown>)
       : null;
   if (data === null || required.some((key) => !Object.hasOwn(data, key))) {

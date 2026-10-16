@@ -1028,20 +1028,20 @@ it("does not keep WorkBuddy looking synced when the server write fails", async (
     screen.getByRole("switch", { name: "同步开关" }),
   );
   expect(
-    screen.getByRole("alert").compareDocumentPosition(
-      screen.getByRole("switch", { name: "同步开关" }),
-    ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    screen
+      .getByRole("alert")
+      .compareDocumentPosition(
+        screen.getByRole("switch", { name: "同步开关" }),
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
 });
 
 it("disables connection and explains why outside Applications, and stays enabled when in Applications", async () => {
   window.oneMemory = {
-    getConnectionSetupCapability: vi
-      .fn()
-      .mockResolvedValue({
-        available: false,
-        reason: "app_not_in_applications",
-      }),
+    getConnectionSetupCapability: vi.fn().mockResolvedValue({
+      available: false,
+      reason: "app_not_in_applications",
+    }),
   } as unknown as NonNullable<typeof window.oneMemory>;
   render(<ApplicationDetail {...props} />);
   await waitFor(() =>
@@ -1106,13 +1106,9 @@ it("promises a backfill when the switch is turned back on (D97)", async () => {
     />,
   );
   expect(screen.queryByText(/将补充冻结期间的新对话/)).toBeNull();
-  fireEvent.click(
-    await screen.findByRole("switch", { name: "同步开关" }),
-  );
+  fireEvent.click(await screen.findByRole("switch", { name: "同步开关" }));
   await waitFor(() =>
-    expect(
-      screen.getByText(/将补充冻结期间的新对话/),
-    ).toBeTruthy(),
+    expect(screen.getByText(/将补充冻结期间的新对话/)).toBeTruthy(),
   );
 });
 
@@ -1135,15 +1131,11 @@ it("says sync is being turned on while the write is in flight (D77)", async () =
   );
   const sync = await screen.findByRole("switch", { name: "同步开关" });
   fireEvent.click(sync);
-  await waitFor(() =>
-    expect(screen.getByText("正在开启处理…")).toBeTruthy(),
-  );
+  await waitFor(() => expect(screen.getByText("正在开启处理…")).toBeTruthy());
   expect(screen.getByRole("status").textContent).toContain("一两分钟");
   expect(screen.queryByText("处理中")).toBeNull();
   finish();
-  await waitFor(() =>
-    expect(screen.queryByText("正在开启处理…")).toBeNull(),
-  );
+  await waitFor(() => expect(screen.queryByText("正在开启处理…")).toBeNull());
 });
 
 it("sends a click made while the remembered sync is still writing (D77)", async () => {

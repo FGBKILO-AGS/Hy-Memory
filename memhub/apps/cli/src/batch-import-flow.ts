@@ -14,15 +14,14 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { buildSourceImportRequest } from "@one-memory/operations";
-
 import type { ImportJob } from "@one-memory/contracts";
+import { buildSourceImportRequest } from "@one-memory/operations";
+import type { CoreReader } from "./core-client.js";
+import type { CoreOperations } from "./core-operations.js";
 import {
   type SourceConnectionCandidate,
   validateSourceConnectionCandidates,
 } from "./core-responses.js";
-import type { CoreReader } from "./core-client.js";
-import type { CoreOperations } from "./core-operations.js";
 import { PRODUCT } from "./version.js";
 
 export interface BatchSourceRow {
@@ -57,19 +56,34 @@ export function detectedSourceIds(
   return candidates.map((candidate) => candidate.source_id);
 }
 
-export async function planBatchImport(
-  reader: CoreReader,
-): Promise<
-  | { state: "preview"; candidates: SourceConnectionCandidate[]; rows: BatchSourceRow[]; notFound: string[] }
-  | { state: "rejected" | "unknown" | "no_sources"; code: string; notFound: string[] }
+export async function planBatchImport(reader: CoreReader): Promise<
+  | {
+      state: "preview";
+      candidates: SourceConnectionCandidate[];
+      rows: BatchSourceRow[];
+      notFound: string[];
+    }
+  | {
+      state: "rejected" | "unknown" | "no_sources";
+      code: string;
+      notFound: string[];
+    }
 > {
   const outcome = await reader<unknown>("/api/v1/sources");
   if (outcome.state !== "ok") {
-    return { state: outcome.state === "unavailable" ? "unknown" : "rejected", code: outcome.code, notFound: [] };
+    return {
+      state: outcome.state === "unavailable" ? "unknown" : "rejected",
+      code: outcome.code,
+      notFound: [],
+    };
   }
   const catalog = outcome.data;
   if (!Array.isArray(catalog) || catalog.length > SOURCE_LIST_LIMIT) {
-    return { state: "rejected", code: "sources_response_invalid", notFound: [] };
+    return {
+      state: "rejected",
+      code: "sources_response_invalid",
+      notFound: [],
+    };
   }
   const candidates = validateSourceConnectionCandidates(catalog);
   if (!candidates) {
@@ -165,9 +179,7 @@ export async function executeBatchImport(
     receipt.failed_sources && typeof receipt.failed_sources === "object"
       ? (receipt.failed_sources as Record<string, string>)
       : {};
-  const jobs = Array.isArray(receipt.jobs)
-    ? (receipt.jobs as ImportJob[])
-    : [];
+  const jobs = Array.isArray(receipt.jobs) ? (receipt.jobs as ImportJob[]) : [];
   const firstSeen = jobs.map((job) => ({
     source_id: job.source_id,
     discovered: job.discovered,
@@ -262,7 +274,8 @@ export async function executeBatchImport(
 }
 
 export function batchScanExitCode(document: BatchScanDocument): number {
-  if (document.state === "committed" || document.state === "no_sources") return 0;
+  if (document.state === "committed" || document.state === "no_sources")
+    return 0;
   if (document.state === "partial") return 1;
   return 1;
 }

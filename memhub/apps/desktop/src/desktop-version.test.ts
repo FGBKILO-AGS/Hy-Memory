@@ -4,10 +4,7 @@ import { desktopVersionOutput } from "./desktop-version";
 describe("Desktop version probe", () => {
   it("returns packaged SemVer for the product-private probe", () => {
     expect(
-      desktopVersionOutput(
-        ["MemHub", "--memhub-version"],
-        "0.1.0-internal.2",
-      ),
+      desktopVersionOutput(["MemHub", "--memhub-version"], "0.1.0-internal.2"),
     ).toBe("MemHub 0.1.0-internal.2\n");
   });
 

@@ -292,7 +292,10 @@ try {
   ) {
     throw new Error("doctor did not verify the packaged Core identity");
   }
-  if (brokerCheck.state !== "pass" || brokerCheck.code !== "background_verified") {
+  if (
+    brokerCheck.state !== "pass" ||
+    brokerCheck.code !== "background_verified"
+  ) {
     throw new Error("doctor did not verify the background broker");
   }
   observations.doctor_state = doctor.state;
@@ -370,9 +373,7 @@ try {
   );
   const afterUpgradeId = findKey(afterUpgrade, "instance_id");
   observations.idempotent_upgrade_instance_id_changed = Boolean(
-    beforeUpgradeId &&
-      afterUpgradeId &&
-      beforeUpgradeId !== afterUpgradeId,
+    beforeUpgradeId && afterUpgradeId && beforeUpgradeId !== afterUpgradeId,
   );
   if (!observations.idempotent_upgrade_instance_id_changed) {
     throw new Error("idempotent upgrade did not restart the Runtime");

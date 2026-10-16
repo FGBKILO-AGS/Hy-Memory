@@ -81,7 +81,11 @@ test("two non-default install roots must not both fall back to the fixed port", 
     null,
     "a non-default install root must declare an explicit Core port in its plist",
   );
-  assert.notEqual(portA, portB, "two custom roots must not share one Core port");
+  assert.notEqual(
+    portA,
+    portB,
+    "two custom roots must not share one Core port",
+  );
 });
 
 test("the daily (default) install root keeps the fixed port and no override key", () => {

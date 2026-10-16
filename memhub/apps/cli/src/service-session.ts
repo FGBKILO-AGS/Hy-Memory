@@ -49,7 +49,10 @@ function launchdDomain(uid: number): string {
 /** Deterministic location of the managed LaunchAgent plist. Needed because
  * after `bootout` launchd no longer reports a path, yet `start` must be able to
  * bootstrap the very same service back. */
-export function defaultLaunchAgentPath(home: string, serviceId: string): string {
+export function defaultLaunchAgentPath(
+  home: string,
+  serviceId: string,
+): string {
   return path.posix.join(home, "Library", "LaunchAgents", `${serviceId}.plist`);
 }
 
@@ -162,7 +165,10 @@ export async function stopManagedService(options: {
     ? (["launchctl", "bootout", domain, before.plistPath] as const)
     : (["launchctl", "bootout", `${domain}/${options.serviceId}`] as const);
   const result = await options.runCaptured([...target]);
-  if (result.code !== 0 && !/could not find service|service not found/i.test(result.stderr)) {
+  if (
+    result.code !== 0 &&
+    !/could not find service|service not found/i.test(result.stderr)
+  ) {
     throw new Error("launchd_bootout_failed");
   }
   // "Stopped" must mean the label stays gone, not that we saw it gone once.
@@ -295,9 +301,7 @@ export async function runLaunchctlCaptured(
       stderr += String(chunk);
     });
     child.once("error", () => reject(new Error("launchd_command_failed")));
-    child.once("close", (code) =>
-      resolve({ code: code ?? 1, stdout, stderr }),
-    );
+    child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
   });
 }
 

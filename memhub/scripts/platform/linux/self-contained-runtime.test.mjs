@@ -13,7 +13,7 @@ test("self-contained verifier poisons system build/runtime tools", async () => {
     '"sqlite3"',
     '"pnpm"',
     '"uv"',
-    'PATH: `${poisonBin}:/usr/bin:/bin`',
+    "PATH: `${poisonBin}:/usr/bin:/bin`",
     'child.kill("SIGTERM")',
     "no_system_python_sqlite_build_tools",
   ]) {

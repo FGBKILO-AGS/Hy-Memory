@@ -65,29 +65,29 @@ describe("formal package test isolation", () => {
   it.skipIf(process.platform !== "darwin")(
     "accepts the macOS /tmp alias for an existing /private/tmp test home",
     () => {
-    const root = mkdtempSync("/private/tmp/one-memory-desktop-alias.");
-    const home = path.join(root, "home");
-    const dataDir = path.join(root, "data");
-    const hostHome = path.join(root, "host-home");
-    mkdirSync(home, { recursive: true });
-    mkdirSync(dataDir, { recursive: true });
-    mkdirSync(hostHome, { recursive: true });
+      const root = mkdtempSync("/private/tmp/one-memory-desktop-alias.");
+      const home = path.join(root, "home");
+      const dataDir = path.join(root, "data");
+      const hostHome = path.join(root, "host-home");
+      mkdirSync(home, { recursive: true });
+      mkdirSync(dataDir, { recursive: true });
+      mkdirSync(hostHome, { recursive: true });
 
-    expect(
-      resolveDesktopTestIsolation(
-        {
-          ONE_MEMORY_TEST_ISOLATED: "1",
-          ONE_MEMORY_TEST_REAL_HOME: "/Users/example",
-          ONE_MEMORY_DESKTOP_TEST_HOME: home,
-          ONE_MEMORY_DATA_DIR: dataDir,
-          ONE_MEMORY_HOST_HOME: hostHome,
-          ONE_MEMORY_CORE_PORT: "27791",
-          ONE_MEMORY_RUNTIME_PORT: "27791",
-          ONE_MEMORY_BROKER_PORT: "37791",
-        },
-        home.replace(/^\/private\/tmp\//, "/tmp/"),
-      ),
-    ).toMatchObject({ home });
+      expect(
+        resolveDesktopTestIsolation(
+          {
+            ONE_MEMORY_TEST_ISOLATED: "1",
+            ONE_MEMORY_TEST_REAL_HOME: "/Users/example",
+            ONE_MEMORY_DESKTOP_TEST_HOME: home,
+            ONE_MEMORY_DATA_DIR: dataDir,
+            ONE_MEMORY_HOST_HOME: hostHome,
+            ONE_MEMORY_CORE_PORT: "27791",
+            ONE_MEMORY_RUNTIME_PORT: "27791",
+            ONE_MEMORY_BROKER_PORT: "37791",
+          },
+          home.replace(/^\/private\/tmp\//, "/tmp/"),
+        ),
+      ).toMatchObject({ home });
     },
   );
 

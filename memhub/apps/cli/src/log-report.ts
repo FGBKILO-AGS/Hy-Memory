@@ -1,7 +1,10 @@
-import type { DiagnosticEventV1 } from "@one-memory/runtime-control";
-import { diagnosticLogFiles, readDiagnosticEvents } from "@one-memory/runtime-control";
 import { lstat } from "node:fs/promises";
 import path from "node:path";
+import type { DiagnosticEventV1 } from "@one-memory/runtime-control";
+import {
+  diagnosticLogFiles,
+  readDiagnosticEvents,
+} from "@one-memory/runtime-control";
 
 export interface LogQuery {
   since?: Date;
@@ -160,10 +163,21 @@ export async function readLogReport(
   const logsDirectory = path.join(path.resolve(dataDir), "logs");
   const info = await lstat(logsDirectory).catch(() => null);
   if (info !== null && (!info.isDirectory() || info.isSymbolicLink())) {
-    return { events: [], invalid_lines: 0, failure: "log_directory_unreadable" };
+    return {
+      events: [],
+      invalid_lines: 0,
+      failure: "log_directory_unreadable",
+    };
   }
-  if (info !== null && (await diagnosticLogFiles(dataDir).catch(() => null)) === null) {
-    return { events: [], invalid_lines: 0, failure: "log_directory_unreadable" };
+  if (
+    info !== null &&
+    (await diagnosticLogFiles(dataDir).catch(() => null)) === null
+  ) {
+    return {
+      events: [],
+      invalid_lines: 0,
+      failure: "log_directory_unreadable",
+    };
   }
   const explicit =
     query.since ||
@@ -239,15 +253,27 @@ export function redactDiagnosticEvent(
     outcome: event.outcome,
     session_id: event.session_id,
     ...(event.trace_id === undefined ? {} : { trace_id: event.trace_id }),
-    ...(event.incident_id === undefined ? {} : { incident_id: event.incident_id }),
-    ...(event.instance_id === undefined ? {} : { instance_id: event.instance_id }),
-    ...(event.operation_id === undefined ? {} : { operation_id: event.operation_id }),
+    ...(event.incident_id === undefined
+      ? {}
+      : { incident_id: event.incident_id }),
+    ...(event.instance_id === undefined
+      ? {}
+      : { instance_id: event.instance_id }),
+    ...(event.operation_id === undefined
+      ? {}
+      : { operation_id: event.operation_id }),
     ...(event.request_id === undefined ? {} : { request_id: event.request_id }),
     ...(event.job_id === undefined ? {} : { job_id: event.job_id }),
     ...(event.task_id === undefined ? {} : { task_id: event.task_id }),
-    ...(event.duration_ms === undefined ? {} : { duration_ms: event.duration_ms }),
-    ...(event.state_before === undefined ? {} : { state_before: event.state_before }),
-    ...(event.state_after === undefined ? {} : { state_after: event.state_after }),
+    ...(event.duration_ms === undefined
+      ? {}
+      : { duration_ms: event.duration_ms }),
+    ...(event.state_before === undefined
+      ? {}
+      : { state_before: event.state_before }),
+    ...(event.state_after === undefined
+      ? {}
+      : { state_after: event.state_after }),
     ...(event.error_code === undefined ? {} : { error_code: event.error_code }),
     ...(event.error_type === undefined ? {} : { error_type: event.error_type }),
     ...(event.safe_stack === undefined

@@ -681,7 +681,8 @@ export class CoreSupervisor {
           // Carry the streak across rounds so the delay actually grows: 1s,
           // 2s, 4s ... capped, rather than restarting from 1s every crash.
           const delayMs = Math.min(
-            this.options.restartBaseDelayMs * 2 ** (this.restartStreak + attempt),
+            this.options.restartBaseDelayMs *
+              2 ** (this.restartStreak + attempt),
             this.options.restartMaxDelayMs,
           );
           await this.options.diagnostics?.log({

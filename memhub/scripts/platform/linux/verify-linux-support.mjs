@@ -16,7 +16,11 @@ async function hasSystemdUser() {
 
 async function hasPortables() {
   try {
-    await execFileAsync("systemctl", ["--user", "show", "--property=Portables"]);
+    await execFileAsync("systemctl", [
+      "--user",
+      "show",
+      "--property=Portables",
+    ]);
     return true;
   } catch {
     return false;
@@ -33,9 +37,9 @@ async function hasTmpfilesD() {
 }
 
 const capabilities = {
-  systemd_user: await hasSystemdUser() ? "available" : "unavailable",
-  portable_service: await hasPortables() ? "available" : "unavailable",
-  tmpfiles_d: await hasTmpfilesD() ? "available" : "unavailable",
+  systemd_user: (await hasSystemdUser()) ? "available" : "unavailable",
+  portable_service: (await hasPortables()) ? "available" : "unavailable",
+  tmpfiles_d: (await hasTmpfilesD()) ? "available" : "unavailable",
 };
 
 const matrix = {
@@ -48,9 +52,12 @@ const matrix = {
   status: {
     x64_build: "blocked",
     arm64_build: "blocked",
-    x64_systemd_user: capabilities.systemd_user === "available" ? "blocked" : "blocked",
-    arm64_systemd_user: capabilities.systemd_user === "available" ? "blocked" : "blocked",
-    no_systemd_serve: capabilities.systemd_user === "available" ? "blocked" : "blocked",
+    x64_systemd_user:
+      capabilities.systemd_user === "available" ? "blocked" : "blocked",
+    arm64_systemd_user:
+      capabilities.systemd_user === "available" ? "blocked" : "blocked",
+    no_systemd_serve:
+      capabilities.systemd_user === "available" ? "blocked" : "blocked",
   },
   blocked_reason: "linux_runtime_and_runner_unavailable",
   conditions_to_unblock: [

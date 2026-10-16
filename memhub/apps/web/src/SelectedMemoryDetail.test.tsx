@@ -70,9 +70,7 @@ it("OBS-21: names a manually added memory 手动添加, not the internal source 
       detail={{
         ...detail,
         memory: { ...detail.memory, origin: "manual" },
-        evidence: [
-          { ...detail.evidence[0], source_id: "one-memory-manual" },
-        ],
+        evidence: [{ ...detail.evidence[0], source_id: "one-memory-manual" }],
       }}
       sources={[]}
       onChanged={vi.fn()}
@@ -416,7 +414,9 @@ it("reports a definite undo refusal as not submitted, not as an unknown write", 
   fireEvent.click(screen.getByText("更多管理"));
   fireEvent.click(screen.getByRole("button", { name: "撤销上次修改" }));
 
-  expect((await screen.findByRole("alert")).textContent).toContain("撤销未提交");
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "撤销未提交",
+  );
   expect(screen.queryByText(/操作尚未确认/)).toBeNull();
   expect(trace.done).toHaveBeenLastCalledWith("failed", {
     reason: "memory_undo_failed",

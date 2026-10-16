@@ -29,7 +29,10 @@ function readReleaseBuildNumber(root = repositoryRoot()) {
   return value;
 }
 
-function resolveBuildVersion(environment = process.env, root = repositoryRoot()) {
+function resolveBuildVersion(
+  environment = process.env,
+  root = repositoryRoot(),
+) {
   const canonical = readReleaseVersion(root);
   const supplied = environment.ONE_MEMORY_VERSION?.trim();
   if (supplied === undefined || supplied === "") return canonical;
@@ -42,7 +45,10 @@ function resolveBuildVersion(environment = process.env, root = repositoryRoot())
   return canonical;
 }
 
-function resolveBuildNumber(environment = process.env, root = repositoryRoot()) {
+function resolveBuildNumber(
+  environment = process.env,
+  root = repositoryRoot(),
+) {
   const canonical = readReleaseBuildNumber(root);
   const supplied = environment.ONE_MEMORY_BUILD_NUMBER?.trim();
   if (supplied === undefined || supplied === "") return canonical;
@@ -81,17 +87,21 @@ function pythonPackageVersion(version) {
   if (prerelease) {
     const parts = prerelease.split(".");
     const label = parts[0].toLowerCase();
-    const number = parts.length === 2 && /^\d+$/.test(parts[1]) ? parts[1] : null;
-    if (number !== null && ["a", "alpha"].includes(label)) pep = `${base}a${number}`;
-    else if (number !== null && ["b", "beta"].includes(label)) pep = `${base}b${number}`;
+    const number =
+      parts.length === 2 && /^\d+$/.test(parts[1]) ? parts[1] : null;
+    if (number !== null && ["a", "alpha"].includes(label))
+      pep = `${base}a${number}`;
+    else if (number !== null && ["b", "beta"].includes(label))
+      pep = `${base}b${number}`;
     else if (number !== null && label === "rc") pep = `${base}rc${number}`;
     else {
       const trailing = parts.at(-1);
-      const dev = trailing !== undefined && /^\d+$/.test(trailing) ? trailing : "0";
+      const dev =
+        trailing !== undefined && /^\d+$/.test(trailing) ? trailing : "0";
       pep = `${base}.dev${dev}`;
-      local = parts
-        .slice(0, trailing === dev ? -1 : undefined)
-        .join(".") || "prerelease";
+      local =
+        parts.slice(0, trailing === dev ? -1 : undefined).join(".") ||
+        "prerelease";
     }
   }
   const localParts = [local, build]

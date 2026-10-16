@@ -9,11 +9,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import {
-  installCliLink,
-  planCliLink,
-  rollbackCliLink,
-} from "./cli-link.js";
+import { installCliLink, planCliLink, rollbackCliLink } from "./cli-link.js";
 
 describe("public CLI link", () => {
   it("creates memhub plus an idempotent one-memory compatibility link", async () => {
@@ -74,9 +70,7 @@ describe("public CLI link", () => {
     });
 
     expect(plan.status).toBe("blocked");
-    await expect(installCliLink(plan)).rejects.toThrow(
-      "cli_link_unmanaged",
-    );
+    await expect(installCliLink(plan)).rejects.toThrow("cli_link_unmanaged");
     expect(await readFile(command, "utf8")).toBe("another product");
   });
 
@@ -93,9 +87,7 @@ describe("public CLI link", () => {
     });
 
     expect(plan.status).toBe("blocked");
-    await expect(installCliLink(plan)).rejects.toThrow(
-      "cli_link_unmanaged",
-    );
+    await expect(installCliLink(plan)).rejects.toThrow("cli_link_unmanaged");
     expect(await readFile(command, "utf8")).toBe("another product");
   });
 

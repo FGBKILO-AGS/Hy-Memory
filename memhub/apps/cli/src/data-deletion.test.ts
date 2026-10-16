@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -23,14 +23,22 @@ describe("explicit data deletion", () => {
       "one-memory.sqlite3": "db",
       "runtime-service.json": "{}",
     });
-    const plan = await planDataDeletion({ dataDir, home, runtimeRunning: false });
+    const plan = await planDataDeletion({
+      dataDir,
+      home,
+      runtimeRunning: false,
+    });
     expect(plan.state).toBe("preview");
     expect(plan.entries).toContain(path.join(dataDir, "one-memory.sqlite3"));
   });
 
   it("refuses while the Runtime is still running", async () => {
     const { home, dataDir } = await homeWith();
-    const plan = await planDataDeletion({ dataDir, home, runtimeRunning: true });
+    const plan = await planDataDeletion({
+      dataDir,
+      home,
+      runtimeRunning: true,
+    });
     expect(plan).toMatchObject({
       state: "blocked",
       code: "runtime_still_running",
@@ -66,16 +74,23 @@ describe("explicit data deletion", () => {
         home,
         runtimeRunning: false,
       });
-      expect(plan).toMatchObject({ state: "blocked", code: "data_dir_refused" });
+      expect(plan).toMatchObject({
+        state: "blocked",
+        code: "data_dir_refused",
+      });
     }
   });
 
   it("requires the second confirmation to name the exact directory", async () => {
     const { home, dataDir } = await homeWith();
-    const plan = await planDataDeletion({ dataDir, home, runtimeRunning: false });
-    await expect(applyDataDeletion(plan, path.join(home, "other"))).rejects.toThrow(
-      "data_deletion_confirmation_mismatch",
-    );
+    const plan = await planDataDeletion({
+      dataDir,
+      home,
+      runtimeRunning: false,
+    });
+    await expect(
+      applyDataDeletion(plan, path.join(home, "other")),
+    ).rejects.toThrow("data_deletion_confirmation_mismatch");
     // The data survived a mismatched confirmation.
     await expect(
       stat(path.join(dataDir, "one-memory.sqlite3")),
@@ -84,7 +99,11 @@ describe("explicit data deletion", () => {
 
   it("deletes an owned Home only when both confirmations match", async () => {
     const { home, dataDir } = await homeWith({ "one-memory.sqlite3": "db" });
-    const plan = await planDataDeletion({ dataDir, home, runtimeRunning: false });
+    const plan = await planDataDeletion({
+      dataDir,
+      home,
+      runtimeRunning: false,
+    });
     const receipt = await applyDataDeletion(plan, dataDir);
     expect(receipt.state).toBe("deleted");
     await expect(stat(dataDir)).rejects.toMatchObject({ code: "ENOENT" });

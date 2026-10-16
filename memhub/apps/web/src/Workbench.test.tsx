@@ -9,7 +9,13 @@ import type {
   MemoryProcessingSummary,
   SourceResponse,
 } from "@one-memory/contracts";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -113,7 +119,9 @@ const processing = {
   outside_window_pending: 0,
   extraction_window_preset: "3m",
   manual_extract_batches_planned: 0,
-  manual_extract_batches_current: 0, active_queue: 0, in_flight_count: 0,
+  manual_extract_batches_current: 0,
+  active_queue: 0,
+  in_flight_count: 0,
   seconds_per_completion: null,
 } as MemoryProcessingSummary;
 
@@ -227,7 +235,9 @@ it("选中的图节点把记忆库与详情联到一起（图 → 列表 → 原
   // selects a node without WebGL. The same label also appears in the memory
   // list, so scope the query to the graph.
   const graph = screen.getByTestId("graph-3d");
-  await user.click(within(graph).getByRole("button", { name: "统一用 axios 封装" }));
+  await user.click(
+    within(graph).getByRole("button", { name: "统一用 axios 封装" }),
+  );
   expect(onOpenMemory).toHaveBeenCalledWith("memory-1");
 });
 
@@ -265,13 +275,14 @@ it("展开一段原话后再选图节点，展开态被收起，不把旧原话�
   ).not.toBeNull();
   // Selecting a graph node must collapse it.
   const graph = screen.getByTestId("graph-3d");
-  await user.click(within(graph).getByRole("button", { name: "统一用 axios 封装" }));
+  await user.click(
+    within(graph).getByRole("button", { name: "统一用 axios 封装" }),
+  );
   expect(
     document.querySelector('[data-open="true"]'),
     "graph selection must collapse the previously opened evidence",
   ).toBeNull();
 });
-
 
 beforeEach(() => {
   vi.clearAllMocks();

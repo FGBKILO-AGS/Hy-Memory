@@ -168,7 +168,9 @@ describe("HealthPanel", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(toggle);
     await waitFor(() => expect(setDetailedLogging).toHaveBeenCalledWith(true));
-    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
+    await waitFor(() =>
+      expect(toggle.getAttribute("aria-checked")).toBe("true"),
+    );
   });
 
   it("records a problem marker, copies its id and exports diagnostics", async () => {

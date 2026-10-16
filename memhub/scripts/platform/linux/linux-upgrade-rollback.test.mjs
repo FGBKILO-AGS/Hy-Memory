@@ -25,8 +25,8 @@ test("Linux upgrade matrix proves N-1 to N and crash rollback separately", () =>
   assert.match(source, /manifest\.files\["core\/one-memory"\]/);
   assert.match(source, /crashingExecutable = "\/bin\/false"/);
   const crashUpgrade = source.slice(
-    source.indexOf('const failedUpgrade = run('),
-    source.indexOf('if (failedUpgrade.status !== 1)'),
+    source.indexOf("const failedUpgrade = run("),
+    source.indexOf("if (failedUpgrade.status !== 1)"),
   );
   assert.match(crashUpgrade, /"upgrade-to-crashing-build"/);
   assert.match(crashUpgrade, /\[1\]/);
@@ -42,5 +42,8 @@ test("Linux upgrade matrix proves N-1 to N and crash rollback separately", () =>
   assert.match(statusWait, /\[0, 1, 3\]/);
   assert.match(statusWait, /if \(result\.status === 0\)/);
   assert.match(source, /recalled_after_rollback/);
-  assert.match(source, /databaseAfterUninstall\.sha256 !== databaseBeforeUninstall\.sha256/);
+  assert.match(
+    source,
+    /databaseAfterUninstall\.sha256 !== databaseBeforeUninstall\.sha256/,
+  );
 });

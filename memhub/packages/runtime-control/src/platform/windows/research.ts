@@ -15,9 +15,18 @@ export const WINDOWS_RESEARCH_STATE = {
     blocked_reason: "windows_target_machine_required",
   },
   explicit_matrix: {
-    "windows_11_x64": { support: "blocked", blocked_reason: "windows_target_machine_required" },
-    "windows_10_x64": { support: "blocked", blocked_reason: "windows_10_matrix_not_measured" },
-    "windows_arm64": { support: "blocked", blocked_reason: "windows_arm64_matrix_not_measured" },
+    windows_11_x64: {
+      support: "blocked",
+      blocked_reason: "windows_target_machine_required",
+    },
+    windows_10_x64: {
+      support: "blocked",
+      blocked_reason: "windows_10_matrix_not_measured",
+    },
+    windows_arm64: {
+      support: "blocked",
+      blocked_reason: "windows_arm64_matrix_not_measured",
+    },
   },
   capabilities: {
     x64_core_electron_cli_build: {
@@ -62,7 +71,8 @@ export const WINDOWS_RESEARCH_STATE = {
     },
     app_cli_shared_runtime: {
       status: "implemented",
-      evidence: "shared runtime-control layout and same install root are source-contract implemented",
+      evidence:
+        "shared runtime-control layout and same install root are source-contract implemented",
     },
   },
 } as const;
@@ -83,13 +93,16 @@ export function createWindowsSupportAssessment(): WindowsSupportAssessment {
     },
     blockedReason(platform, arch) {
       if (platform !== "win32") return null;
-      if (arch !== "x64") return WINDOWS_RESEARCH_STATE.explicit_matrix.windows_arm64.blocked_reason;
+      if (arch !== "x64")
+        return WINDOWS_RESEARCH_STATE.explicit_matrix.windows_arm64
+          .blocked_reason;
       return WINDOWS_RESEARCH_STATE.minimum_release_gate.blocked_reason;
     },
     canUsePosixOwnerOnlyFallback(platform) {
       return platform !== "win32";
     },
-    containsReparseMarker: (source) => getNormalizedWindowsPath(source) !== null,
+    containsReparseMarker: (source) =>
+      getNormalizedWindowsPath(source) !== null,
     reparseLikePath: (source) => getNormalizedWindowsPath(source),
   };
 }

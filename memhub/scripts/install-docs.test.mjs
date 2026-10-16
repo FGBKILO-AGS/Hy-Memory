@@ -12,25 +12,22 @@ test("installation docs disclose publication and lifecycle boundaries", async ()
     "utf8",
   );
 
-  assert.match(readme, /公共 Python SDK 已发布为 `hy-memory==2\.0\.1`/);
-  assert.match(readme, /npm 包尚未发布，GitHub Releases 仍为空/s);
-  assert.match(readme, /Linux x64/);
-  assert.match(readme, /Linux arm64.*没有本版本公开支持证据/s);
-  assert.match(readme, /macOS arm64.*正式公证.*尚未完成/s);
+  assert.match(readme, /公共 Python SDK 为 `hy-memory==2\.0\.1`/);
+  assert.match(readme, /`v1\.0\.0` 的发行目标是 Linux x64\/arm64 Runtime/);
+  assert.match(readme, /Linux 制品由 GitHub Actions/);
+  assert.match(readme, /macOS.*Developer ID 签名、公证/s);
+  assert.match(readme, /release-manifest\.json/);
   assert.match(readme, /memhub uninstall/);
   assert.match(readme, /memhub delete-data/);
   assert.match(readme, /docs\/INSTALLATION\.md/);
+  assert.doesNotMatch(readme, /私有 RC|内部候选/);
 
-  assert.match(installation, /384,082 bytes/);
-  assert.match(installation, /277,961,300 bytes/);
-  assert.match(installation, /688,414,016 bytes/);
-  assert.match(installation, /277,961,849 bytes/);
-  assert.match(installation, /688,414,163 bytes/);
+  assert.match(installation, /Linux x64.*GitHub Actions/s);
+  assert.match(installation, /Linux arm64.*GitHub Actions/s);
+  assert.match(installation, /macOS arm64.*Developer ID/s);
+  assert.match(installation, /macOS x64.*Developer ID/s);
+  assert.match(installation, /release-manifest\.json/);
   assert.match(installation, /fake Release/);
-  assert.match(installation, /verify-fake-release-bootstrap\.mjs/);
-  assert.match(installation, /N-1 升级/);
-  assert.match(installation, /健康检查失败会恢复/);
-  assert.match(installation, /verify-linux-upgrade-rollback\.mjs/);
   assert.match(installation, /--source/);
   assert.match(installation, /完全离线/);
   assert.match(installation, /HTTPS_PROXY/);
@@ -39,9 +36,9 @@ test("installation docs disclose publication and lifecycle boundaries", async ()
   assert.match(installation, /Python Core.*系统 Python/s);
   assert.match(installation, /默认数据目录是 `~\/\.one-memory`/);
   assert.match(installation, /Windows.*不支持/s);
-  assert.match(installation, /最低 macOS 13/);
+  assert.match(installation, /最低支持 macOS 13/);
   assert.match(installation, /手动下载新版本/);
-  assert.match(installation, /macos-15-intel/);
   assert.match(installation, /auto-updater/);
+  assert.doesNotMatch(installation, /私有 RC|内部候选/);
   assert.doesNotMatch(installation, /npm install -g @tencent\/memhub_internal/);
 });

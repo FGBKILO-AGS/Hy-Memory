@@ -29,7 +29,8 @@ export function installEarlyStartupErrorHandler(
     if (handled) return;
     handled = true;
     const fields = diagnosticError(error);
-    const message = error instanceof Error ? error.message : "desktop_startup_failed";
+    const message =
+      error instanceof Error ? error.message : "desktop_startup_failed";
     const errorCode = SAFE_ERROR_CODE.test(message)
       ? message
       : "desktop_startup_failed";

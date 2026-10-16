@@ -39,8 +39,7 @@ function runtime(overrides: Partial<RecallRuntime> = {}): RecallRuntime {
     runtimeCommand: "/Applications/MemHub.app/Contents/MacOS/MemHub",
     mcpEntryPath: "/Applications/MemHub.app/Contents/Resources/mcp.cjs",
     discoveryPath: "/Users/somebody/.one-memory/broker.json",
-    recallCliPath:
-      "/Applications/MemHub.app/Contents/Resources/recall-cli.cjs",
+    recallCliPath: "/Applications/MemHub.app/Contents/Resources/recall-cli.cjs",
     ...overrides,
   };
 }

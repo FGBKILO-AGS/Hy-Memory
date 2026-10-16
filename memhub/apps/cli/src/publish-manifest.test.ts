@@ -6,10 +6,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /** The app root (one level above this test's `src/`). */
-const root = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-);
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bundle = path.join(root, "dist", "one-memory.cjs");
 
 // The published npm package must be self-contained. The bundle inlines
@@ -20,9 +17,10 @@ const bundle = path.join(root, "dist", "one-memory.cjs");
 describe("publish manifest is production-safe", () => {
   it("declares no npm runtime dependency once dependencies are inlined", () => {
     // `test` builds with tsup first, so a missing bundle is a real failure.
-    expect(existsSync(bundle), "run `pnpm --filter @one-memory/cli build`").toBe(
-      true,
-    );
+    expect(
+      existsSync(bundle),
+      "run `pnpm --filter @one-memory/cli build`",
+    ).toBe(true);
     const source = readFileSync(bundle, "utf8");
     const external = [
       ...new Set(
@@ -37,16 +35,15 @@ describe("publish manifest is production-safe", () => {
       ),
     ];
     // Every one of these must be a Node builtin, i.e. no npm package.
-    const npmDeps = external.filter(
-      (name) => !builtinModules.includes(name),
-    );
+    const npmDeps = external.filter((name) => !builtinModules.includes(name));
     expect(npmDeps).toEqual([]);
   });
 
   it("strip-out rule keeps only what the bundle requires", () => {
-    expect(existsSync(bundle), "run `pnpm --filter @one-memory/cli build`").toBe(
-      true,
-    );
+    expect(
+      existsSync(bundle),
+      "run `pnpm --filter @one-memory/cli build`",
+    ).toBe(true);
     // Run the real generator, then inspect its output manifest.
     execFileSync("node", ["scripts/prepare-publish-manifest.mjs"], {
       cwd: root,

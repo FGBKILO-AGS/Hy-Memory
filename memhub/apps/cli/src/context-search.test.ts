@@ -342,17 +342,20 @@ describe("unified context search", () => {
     ["--limit", "1", "2"],
     ["--character-budget", "200", "300"],
     ["--timeout-ms", "100", "200"],
-  ])("rejects a repeated %s before Runtime attach", async (flag, first, second) => {
-    const streams = captureStreams();
-    try {
-      expect(
-        await run(["recall", "q", flag, first, flag, second, "--json"], {}),
-      ).toBe(2);
-    } finally {
-      streams.restore();
-    }
-    expect(streams.stdout()).toBe("");
-  });
+  ])(
+    "rejects a repeated %s before Runtime attach",
+    async (flag, first, second) => {
+      const streams = captureStreams();
+      try {
+        expect(
+          await run(["recall", "q", flag, first, flag, second, "--json"], {}),
+        ).toBe(2);
+      } finally {
+        streams.restore();
+      }
+      expect(streams.stdout()).toBe("");
+    },
+  );
 
   it("refuses malformed success bodies instead of leaking nested values", async () => {
     transport.post.mockResolvedValue({

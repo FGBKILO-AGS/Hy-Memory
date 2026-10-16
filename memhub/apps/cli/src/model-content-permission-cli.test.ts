@@ -53,7 +53,9 @@ describe("model content permission CLI", () => {
     expect(permission.code).toBe(0);
     expect(permission.stdout).toContain("memhub permission allow");
     expect(permission.stdout).toContain("memhub permission deny");
-    expect(permission.stdout).not.toMatch(/\b(preview|confirm|process|revoke)\b/);
+    expect(permission.stdout).not.toMatch(
+      /\b(preview|confirm|process|revoke)\b/,
+    );
     expect(permission.stdout).not.toContain("revision");
     expect(permission.stdout).not.toContain("receipt");
 

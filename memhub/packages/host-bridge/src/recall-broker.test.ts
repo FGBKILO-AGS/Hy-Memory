@@ -145,7 +145,11 @@ describe("RecallBroker", () => {
       },
     );
     expect(response.status).toBe(503);
-    expect(diagnostics.some((event) => event.event === "connection_control.exception")).toBe(true);
+    expect(
+      diagnostics.some(
+        (event) => event.event === "connection_control.exception",
+      ),
+    ).toBe(true);
     const exception = diagnostics.find(
       (event) => event.event === "connection_control.exception",
     );
@@ -425,9 +429,10 @@ describe("RecallBroker", () => {
     try {
       await broker.start();
       closers.push(() => broker.stop());
-      (broker as unknown as { handle: () => Promise<void> }).handle = async () => {
-        throw new Error("forced handler failure");
-      };
+      (broker as unknown as { handle: () => Promise<void> }).handle =
+        async () => {
+          throw new Error("forced handler failure");
+        };
       const response = await axios.get(
         `http://127.0.0.1:${broker.port}/health`,
         { validateStatus: () => true },

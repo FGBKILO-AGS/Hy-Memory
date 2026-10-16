@@ -20,11 +20,7 @@ import { pathToFileURL } from "node:url";
 
 const REQUIRED_ALIASES = {
   daemon: ["start", "stop", "restart", "status"],
-  "startup-service": [
-    "service-plan",
-    "service-install",
-    "service-uninstall",
-  ],
+  "startup-service": ["service-plan", "service-install", "service-uninstall"],
 };
 
 const REQUIRED_COMMAND_SURFACE = [
@@ -112,19 +108,85 @@ const REQUIRED_SUBCOMMANDS = [
  * These run without `--lifecycle`, so they are safe against any package.
  */
 const STOPPED_DESTRUCTIVE_PROBES = [
-  { name: "calls_clear_preview", args: ["calls", "clear", "--event", "11111111-1111-4111-8111-111111111111"] },
-  { name: "calls_clear_apply", args: ["calls", "clear", "--event", "11111111-1111-4111-8111-111111111111", "--confirm"] },
-  { name: "calls_clear_all_apply", args: ["calls", "clear", "--all", "--confirm"] },
-  { name: "import_file_commit_apply", args: ["import-file", "commit", "22222222-2222-4222-8222-222222222222", "--confirm"] },
-  { name: "import_file_discard_apply", args: ["import-file", "discard", "22222222-2222-4222-8222-222222222222", "--confirm"] },
-  { name: "notes_process_apply", args: ["notes", "process", "33333333-3333-4333-8333-333333333333", "--confirm"] },
+  {
+    name: "calls_clear_preview",
+    args: ["calls", "clear", "--event", "11111111-1111-4111-8111-111111111111"],
+  },
+  {
+    name: "calls_clear_apply",
+    args: [
+      "calls",
+      "clear",
+      "--event",
+      "11111111-1111-4111-8111-111111111111",
+      "--confirm",
+    ],
+  },
+  {
+    name: "calls_clear_all_apply",
+    args: ["calls", "clear", "--all", "--confirm"],
+  },
+  {
+    name: "import_file_commit_apply",
+    args: [
+      "import-file",
+      "commit",
+      "22222222-2222-4222-8222-222222222222",
+      "--confirm",
+    ],
+  },
+  {
+    name: "import_file_discard_apply",
+    args: [
+      "import-file",
+      "discard",
+      "22222222-2222-4222-8222-222222222222",
+      "--confirm",
+    ],
+  },
+  {
+    name: "notes_process_apply",
+    args: [
+      "notes",
+      "process",
+      "33333333-3333-4333-8333-333333333333",
+      "--confirm",
+    ],
+  },
   { name: "permission_allow", args: ["permission", "allow"] },
   { name: "permission_deny", args: ["permission", "deny"] },
-  { name: "extraction_set_apply", args: ["extraction", "set", "--window", "6m", "--confirm"] },
-  { name: "graph_width_apply", args: ["graph", "width", "--decision", "keep_existing", "--confirm"] },
-  { name: "processing_extract_apply", args: ["processing", "extract", "--confirm"] },
-  { name: "models_activate_apply", args: ["models", "activate", "44444444-4444-4444-8444-444444444444", "--confirm"] },
-  { name: "models_edit_apply", args: ["models", "edit", "44444444-4444-4444-8444-444444444444", "--config-file", "/nonexistent/patch.json", "--confirm"] },
+  {
+    name: "extraction_set_apply",
+    args: ["extraction", "set", "--window", "6m", "--confirm"],
+  },
+  {
+    name: "graph_width_apply",
+    args: ["graph", "width", "--decision", "keep_existing", "--confirm"],
+  },
+  {
+    name: "processing_extract_apply",
+    args: ["processing", "extract", "--confirm"],
+  },
+  {
+    name: "models_activate_apply",
+    args: [
+      "models",
+      "activate",
+      "44444444-4444-4444-8444-444444444444",
+      "--confirm",
+    ],
+  },
+  {
+    name: "models_edit_apply",
+    args: [
+      "models",
+      "edit",
+      "44444444-4444-4444-8444-444444444444",
+      "--config-file",
+      "/nonexistent/patch.json",
+      "--confirm",
+    ],
+  },
 ];
 
 export function validateCatalog(document) {
@@ -201,7 +263,9 @@ export async function runPackageMatrix(runtimeDist, options = {}) {
   const markers = REQUIRED_MARKERS.filter(
     (marker) => !bundle.toString("utf8").includes(marker),
   );
-  const isolatedRoot = await mkdtemp(path.join(tmpdir(), "memhub-package-matrix-"));
+  const isolatedRoot = await mkdtemp(
+    path.join(tmpdir(), "memhub-package-matrix-"),
+  );
   const home = path.join(isolatedRoot, "home");
   const dataDir = path.join(isolatedRoot, "data");
   const hostHome = path.join(isolatedRoot, "host-home");
@@ -343,7 +407,10 @@ async function runStoppedDestructive(node, cli, environment) {
         `${probe.name} exit ${result.code}, expected 3 while Runtime is stopped`,
       );
     }
-    if (document?.state !== "unknown" || document?.code !== "runtime_not_running") {
+    if (
+      document?.state !== "unknown" ||
+      document?.code !== "runtime_not_running"
+    ) {
       failures.push(
         `${probe.name} did not fail closed with unknown/runtime_not_running`,
       );
@@ -451,8 +518,7 @@ async function main() {
   }
   const asJson = rest.includes("--json");
   const expectShaIndex = rest.indexOf("--expect-sha");
-  const expectSha =
-    expectShaIndex >= 0 ? rest[expectShaIndex + 1] : undefined;
+  const expectSha = expectShaIndex >= 0 ? rest[expectShaIndex + 1] : undefined;
   if (expectSha !== undefined && !/^[0-9a-fA-F]{64}$/.test(expectSha)) {
     process.stderr.write("--expect-sha must be a 64-character SHA-256\n");
     process.exitCode = 2;

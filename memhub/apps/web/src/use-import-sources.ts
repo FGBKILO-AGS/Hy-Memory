@@ -81,9 +81,7 @@ interface ConnectOptions {
   traceId?: string;
 }
 
-export function useImportSources(_options: {
-  automaticSync?: boolean;
-} = {}) {
+export function useImportSources(_options: { automaticSync?: boolean } = {}) {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const sources = useSources() ?? NO_SOURCES;
   const syncWrite = useSourceSync();

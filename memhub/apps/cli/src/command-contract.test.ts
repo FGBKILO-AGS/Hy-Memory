@@ -300,11 +300,7 @@ describe("CLI-22 shared output contract", () => {
           `${PRODUCT} sync`,
         ],
         [
-          [
-            "sync",
-            "receipt",
-            "123e4567-e89b-12d3-a456-426614174000",
-          ],
+          ["sync", "receipt", "123e4567-e89b-12d3-a456-426614174000"],
           `${PRODUCT} sync`,
         ],
         [["sync", "pause", "--source"], `${PRODUCT} sync`],
@@ -555,12 +551,7 @@ describe("documented commands", () => {
     // Source processing is one Freeze/Thaw switch under `sync`; the obsolete
     // independent read/write `sources access` command must not return here.
     sources: ["list", "import", "receipt"],
-    jobs: [
-      "list",
-      "show",
-      "start",
-      "<pause|resume|cancel>",
-    ],
+    jobs: ["list", "show", "start", "<pause|resume|cancel>"],
     // `sync <pause|resume>` is documented as one alternation, so it is
     // checked as an entry rather than as two literal subcommands.
     sync: ["status", "<pause|resume>"],

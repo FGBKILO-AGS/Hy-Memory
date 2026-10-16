@@ -1,7 +1,7 @@
 import {
-  runtimeInstallLayout,
   type RuntimeInstallLayout,
   type RuntimeServicePlan,
+  runtimeInstallLayout,
 } from "../../service-plan.js";
 
 export type WindowsCapabilityStatus = "available" | "unavailable" | "unknown";

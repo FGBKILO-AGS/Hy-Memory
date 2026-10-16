@@ -72,9 +72,7 @@ function blockFor(binDirectory: string): string {
  * original file byte-for-byte regardless of the original's trailing newline. */
 function ownedBlock(existing: string | null, binDirectory: string): string {
   const separator =
-    existing === null || existing === "" || existing.endsWith("\n")
-      ? ""
-      : "\n";
+    existing === null || existing === "" || existing.endsWith("\n") ? "" : "\n";
   return `${separator}${blockFor(binDirectory)}`;
 }
 
@@ -104,10 +102,7 @@ export async function planShellPath(options: {
       disabled: true,
     };
   }
-  const blocked = (
-    reason: string,
-    target: string,
-  ): ShellPathPlan => ({
+  const blocked = (reason: string, target: string): ShellPathPlan => ({
     schema_version: 1,
     status: "blocked",
     blocked_reason: reason,
@@ -229,11 +224,12 @@ async function writeProfileAtomically(
   // A fresh `--home` may not exist yet; create it (owner-only) before writing
   // the temp profile, otherwise the write fails with a raw ENOENT. Surface a
   // structured code for any other failure.
-  await mkdir(path.dirname(profilePath), { recursive: true, mode: 0o700 }).catch(
-    () => {
-      throw new Error("shell_path_home_unwritable");
-    },
-  );
+  await mkdir(path.dirname(profilePath), {
+    recursive: true,
+    mode: 0o700,
+  }).catch(() => {
+    throw new Error("shell_path_home_unwritable");
+  });
   const temporary = `${profilePath}.memhub.${process.pid}.tmp`;
   try {
     await writeFile(temporary, content, { encoding: "utf8", mode: 0o644 });

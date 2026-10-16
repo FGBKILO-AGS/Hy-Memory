@@ -1720,7 +1720,8 @@ button.map-related {
   border-block: 1px solid var(--bd);
   gap: 20px 24px;
 }
-.model-form label {
+.model-form label,
+.model-form .model-form-field {
   font-size: 13px;
   gap: 8px;
 }

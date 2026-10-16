@@ -15,10 +15,14 @@ vi.mock("./ui-trace", () => ({
 }));
 
 beforeEach(() => {
-  vi.mocked(api.getModelContentPermission).mockResolvedValue({ allowed: false });
-  vi.mocked(api.setModelContentPermission).mockImplementation(async (allowed) => ({
-    allowed,
-  }));
+  vi.mocked(api.getModelContentPermission).mockResolvedValue({
+    allowed: false,
+  });
+  vi.mocked(api.setModelContentPermission).mockImplementation(
+    async (allowed) => ({
+      allowed,
+    }),
+  );
 });
 
 afterEach(() => {
@@ -46,12 +50,17 @@ it("writes the desired boolean and updates the switch", async () => {
   await user.click(toggle);
 
   await waitFor(() =>
-    expect(api.setModelContentPermission).toHaveBeenCalledWith(true, "trace-id"),
+    expect(api.setModelContentPermission).toHaveBeenCalledWith(
+      true,
+      "trace-id",
+    ),
   );
   expect(toggle.getAttribute("aria-checked")).toBe("true");
 });
 
 it("states that generated-memory search is independent", async () => {
   render(<ModelContentConsent onClose={vi.fn()} />);
-  expect(await screen.findByText(/已生成记忆的搜索和读取不受影响/)).toBeTruthy();
+  expect(
+    await screen.findByText(/已生成记忆的搜索和读取不受影响/),
+  ).toBeTruthy();
 });

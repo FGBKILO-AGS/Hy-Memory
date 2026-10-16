@@ -32,13 +32,22 @@ describe("Linux runtime scripts", () => {
       path.join(directory, "../../../../.github/workflows/linux-lifecycle.yml"),
       "utf8",
     );
-    assert.doesNotMatch(workflow, /ONE_MEMORY_BUILD_NUMBER:.*github\.run_number/);
+    assert.doesNotMatch(
+      workflow,
+      /ONE_MEMORY_BUILD_NUMBER:.*github\.run_number/,
+    );
     assert.doesNotMatch(workflow, /ONE_MEMORY_VERSION:\s*0\.0\.0/);
     assert.match(workflow, /runner:\s*ubuntu-24\.04-arm[\s\S]*arch:\s*arm64/);
-    assert.match(workflow, /memhub-runtime-v\$\{VERSION\}-linux-\$\{ARCH\}\.tar\.gz/);
+    assert.match(
+      workflow,
+      /memhub-runtime-v\$\{VERSION\}-linux-\$\{ARCH\}\.tar\.gz/,
+    );
     assert.match(workflow, /sha256sum "\$archive"/);
     assert.match(workflow, /actions\/upload-artifact@[a-f0-9]{40}/);
-    assert.match(workflow, /name:\s*memhub-runtime-linux-\$\{\{ matrix\.arch \}\}/);
+    assert.match(
+      workflow,
+      /name:\s*memhub-runtime-linux-\$\{\{ matrix\.arch \}\}/,
+    );
   });
 
   it("executes the complete Linux lifecycle instead of reporting static blockers", async () => {
@@ -66,7 +75,10 @@ describe("Linux runtime scripts", () => {
     assert.match(script, /findKey\(installReceipt, "core_port"\)/);
     assert.match(script, /doctorCheck\(doctor, "core"\)/);
     assert.match(script, /doctorCheck\(doctor, "broker"\)/);
-    assert.match(script, /coreCheck\.details\?\.version !== distributionManifest\.version/);
+    assert.match(
+      script,
+      /coreCheck\.details\?\.version !== distributionManifest\.version/,
+    );
     assert.match(
       script,
       /env\.ONE_MEMORY_CORE_PORT = String\(installedCorePort\)/,

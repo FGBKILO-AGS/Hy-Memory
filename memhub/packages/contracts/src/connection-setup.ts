@@ -50,16 +50,14 @@ export interface ConnectionSetupItem {
   id: string;
   kind: "sync" | "install" | "readGrant";
   state: ConnectionSetupItemState;
-  receipt:
-    | {
-        kind: "install" | "readGrant";
-        hostId: string;
-        installationId: string;
-        permissionRevision: number;
-        allowedTools?: readonly string[];
-        allowedScopes?: readonly string[];
-      }
-    | null;
+  receipt: {
+    kind: "install" | "readGrant";
+    hostId: string;
+    installationId: string;
+    permissionRevision: number;
+    allowedTools?: readonly string[];
+    allowedScopes?: readonly string[];
+  } | null;
 }
 export interface ConnectionSetupResult {
   operationId: string;

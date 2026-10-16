@@ -279,7 +279,8 @@ export function writeDiagnosticEventSync(
     ...input,
     service: options.service,
     session_id: canonicalUuid(options.sessionId) ?? randomUUID(),
-    timestamp: input.timestamp ?? (options.now ?? (() => new Date()))().toISOString(),
+    timestamp:
+      input.timestamp ?? (options.now ?? (() => new Date()))().toISOString(),
   });
   const directory = diagnosticDirectory(options.dataDir);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -849,7 +850,9 @@ function compareDiagnosticTimestamps(left: string, right: string): number {
     if (!Number.isFinite(milliseconds)) fail("diagnostic_timestamp_invalid");
     const fraction = /\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/.exec(value)?.[1] ?? "";
     const nanoseconds = BigInt((fraction + "000000000").slice(0, 9));
-    return BigInt(Math.floor(milliseconds / 1000)) * 1_000_000_000n + nanoseconds;
+    return (
+      BigInt(Math.floor(milliseconds / 1000)) * 1_000_000_000n + nanoseconds
+    );
   };
   const leftKey = key(left);
   const rightKey = key(right);

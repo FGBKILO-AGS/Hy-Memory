@@ -56,11 +56,11 @@ describe("ui trace write coverage", () => {
 
   it("traces the global model-content permission write", () => {
     const hook = source("use-model-content-permission.ts");
-    expect(hook).toMatch(
-      /setModelContentPermission\(next, trace\.traceId\)/,
-    );
+    expect(hook).toMatch(/setModelContentPermission\(next, trace\.traceId\)/);
     const api = source("api.ts");
-    const start = api.indexOf("export async function setModelContentPermission(");
+    const start = api.indexOf(
+      "export async function setModelContentPermission(",
+    );
     expect(start, "setModelContentPermission not found").toBeGreaterThan(-1);
     const body = api.slice(start, start + 650);
     expect(body).toContain("traceId?: string");
@@ -173,9 +173,7 @@ describe("ui trace write coverage", () => {
     // leaving kernel-only legs behind.
     const reconcile = source("connection-reconcile.ts");
     expect(reconcile).toMatch(/traceUiAction\("sources", "confirm"\)/);
-    expect(reconcile).toMatch(
-      /setSync\(source, true, trace\.traceId\)/,
-    );
+    expect(reconcile).toMatch(/setSync\(source, true, trace\.traceId\)/);
   });
 
   it("gives every settle() guard exactly one finally close", () => {
@@ -231,7 +229,10 @@ describe("ui trace write coverage", () => {
     const memory = source("MemorySpace.tsx");
     const start = memory.indexOf("async function syncIndex()");
     expect(start).toBeGreaterThan(-1);
-    const body = memory.slice(start, memory.indexOf("\n  async function", start + 1));
+    const body = memory.slice(
+      start,
+      memory.indexOf("\n  async function", start + 1),
+    );
     expect(body).toMatch(
       /if \(result\.status === "synced"\) trace\.done\("succeeded"\);\s*else\s+trace\.done\("failed"/,
     );
@@ -286,10 +287,9 @@ describe("ui trace write coverage", () => {
     expect(body, "askMemoriesStream must accept traceId").toContain(
       "traceId?: string",
     );
-    expect(
-      body,
-      "askMemoriesStream must send the trace header",
-    ).toContain("X-One-Memory-Trace-Id");
+    expect(body, "askMemoriesStream must send the trace header").toContain(
+      "X-One-Memory-Trace-Id",
+    );
   });
 
   it("traces the answer note save and the bulk memory mutations", () => {
@@ -308,7 +308,9 @@ describe("ui trace write coverage", () => {
   it("traces the Harness Freeze/Thaw toggle", () => {
     const control = source("SourcesView.tsx");
     expect(control).toMatch(/traceUiAction\("sources", "toggle"\)/);
-    expect(control).toMatch(/imports\.setSync\(source, enabled, trace\.traceId\)/);
+    expect(control).toMatch(
+      /imports\.setSync\(source, enabled, trace\.traceId\)/,
+    );
 
     const hook = source("use-import-sources.ts");
     expect(hook).toMatch(
@@ -381,7 +383,9 @@ describe("ui trace write coverage", () => {
     expect(hook).toMatch(
       /traceReason\(key\)[\s\S]{0,120}?traceReasonUnknown\(key\)/,
     );
-    expect(hook).toMatch(/function traceReasonUnknown\(key: string\): string \{/);
+    expect(hook).toMatch(
+      /function traceReasonUnknown\(key: string\): string \{/,
+    );
     expect(hook).not.toMatch(/trace\.done\("failed", \{ reason: key \}\)/);
     expect(hook).toMatch(
       /createModelProfile\(\s*\{[\s\S]{0,200}?traceId,\s*\)/,

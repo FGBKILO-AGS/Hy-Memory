@@ -188,6 +188,7 @@ export function OnboardingFlow({
     accepted,
     startingImport,
     imports.sources,
+    modelSourceIds,
     state.selected_source_ids,
   ]);
   useEffect(() => {
@@ -431,7 +432,6 @@ export function OnboardingFlow({
       await persistFinish(destination);
       flight.current = false;
       if (alive.current) setBusy(null);
-
     },
     [persistFinish],
   );
@@ -616,8 +616,7 @@ export function OnboardingFlow({
       : imports.sources;
     const defaultDraft = defaultConnectionDraft(reviewSources, sourceIds);
     const activeDraft =
-      connectionTouched ||
-      connectionDraft.hostSourceIds.length > 0
+      connectionTouched || connectionDraft.hostSourceIds.length > 0
         ? connectionDraft
         : defaultDraft;
     return (

@@ -1,7 +1,7 @@
 import type {
+  ModelProbeResult,
   ModelProfile,
   ModelProfileInput,
-  ModelProbeResult,
 } from "@one-memory/contracts";
 import { useRef, useState } from "react";
 import { getModelProfiles, setModelContentPermission } from "./api";

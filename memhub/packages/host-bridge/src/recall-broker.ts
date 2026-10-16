@@ -8,8 +8,8 @@ import type { AddressInfo } from "node:net";
 import type {
   AskMemoryRequest,
   AskMemoryResponse,
-  ContextSearchResponse,
   ContextSearchRequest,
+  ContextSearchResponse,
   ConversationSearchResponse,
   RecallReceipt,
   RecallRequest,
@@ -611,7 +611,8 @@ export class RecallBroker {
         error instanceof Error && isConnectionControlError(error.message)
           ? error.message
           : "connection_control_unavailable";
-      const isKnown = error instanceof Error && isConnectionControlError(error.message);
+      const isKnown =
+        error instanceof Error && isConnectionControlError(error.message);
       if (!isKnown) {
         // Whitelist-out-of-range errors bypass the control-plane dedup:
         // emit unconditionally so an unexpected exception (the D43
@@ -740,29 +741,31 @@ export class RecallBroker {
         return;
       }
       const authorized = await this.authorizeHost(request, body, "all-apps");
-      const result = { data: await this.readViaReader<unknown>(
-        "/api/v1/context/search",
-        body,
-        authorized.headers,
-        (body.timeout_ms ?? 2000) + 1000,
-        async () => {
-          const r = await axios.post(
-            `${this.options.coreBaseUrl}/api/v1/context/search`,
-            body,
-            {
-              headers: authorized.headers,
-              proxy: false,
-              maxRedirects: 0,
-              timeout: (body.timeout_ms ?? 2000) + 1000,
-              maxContentLength: 2 * 1024 * 1024,
-              signal: abort.signal,
-            },
-          );
-          await authorized.verifyBeforeRelease();
-          return r.data;
-        },
-        abort.signal,
-      ) };
+      const result = {
+        data: await this.readViaReader<unknown>(
+          "/api/v1/context/search",
+          body,
+          authorized.headers,
+          (body.timeout_ms ?? 2000) + 1000,
+          async () => {
+            const r = await axios.post(
+              `${this.options.coreBaseUrl}/api/v1/context/search`,
+              body,
+              {
+                headers: authorized.headers,
+                proxy: false,
+                maxRedirects: 0,
+                timeout: (body.timeout_ms ?? 2000) + 1000,
+                maxContentLength: 2 * 1024 * 1024,
+                signal: abort.signal,
+              },
+            );
+            await authorized.verifyBeforeRelease();
+            return r.data;
+          },
+          abort.signal,
+        ),
+      };
       const invalidField = contextResponseInvalidField(result.data);
       const identity = authorized.identity;
       const responseFailure =

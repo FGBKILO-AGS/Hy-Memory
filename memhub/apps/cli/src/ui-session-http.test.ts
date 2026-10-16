@@ -9,7 +9,8 @@ import { parseUiSessionExchange } from "./ui-session.js";
 describe("ui session exchange over HTTP", () => {
   let server: Server;
   let port: number;
-  const seen: Array<{ authorization?: string; method?: string; url?: string }> = [];
+  const seen: Array<{ authorization?: string; method?: string; url?: string }> =
+    [];
   let status = 200;
 
   beforeAll(async () => {

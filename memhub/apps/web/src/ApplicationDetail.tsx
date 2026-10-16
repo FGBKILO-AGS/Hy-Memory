@@ -517,7 +517,9 @@ export function ApplicationDetail({
             )}
             {hostError && <p role="alert">{hostError}</p>}
             {appLocationNote && <p role="status">{appLocationNote}</p>}
-            {hostRestartNotice ? <p role="status">{hostRestartNotice}</p> : null}
+            {hostRestartNotice ? (
+              <p role="status">{hostRestartNotice}</p>
+            ) : null}
           </div>
           <R6Switch
             label="一键插入应用"
