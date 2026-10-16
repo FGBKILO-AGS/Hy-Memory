@@ -16,11 +16,20 @@ Hy Memory and MemHub are versioned and released independently.
   Because PyPI release metadata is immutable, the next SDK patch release must
   carry the updated license metadata; `2.0.1` retains its published metadata.
 
-## MemHub 1.0.1 — Unreleased
+## MemHub 1.0.2 — Unreleased
 
-- Updated the source version to `1.0.1` (build 5).
+- Updated the source version to `1.0.2` (build 6).
 - Pinned the public SDK to `hy-memory==2.0.2`.
 - Pinned `onnxruntime==1.23.2` to retain macOS x64 packaging support.
+- Fixed relaunch and upgrade failures when a prior managed Runtime exists.
+- Embedded canonical build identity when an external packaging pipeline omits
+  release environment fields.
+- Added automatic Linux Runtime upload to tagged Draft Releases.
+
+## MemHub 1.0.1 — Superseded before release
+
+- The candidate tag was not published as a GitHub Release; `1.0.2` replaces it
+  after the managed-Runtime relaunch fix.
 
 ## MemHub 1.0.0
 
