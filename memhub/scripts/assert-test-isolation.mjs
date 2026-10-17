@@ -28,6 +28,14 @@ if (path.resolve(dataDir).startsWith(`${path.resolve(realHome)}${path.sep}`)) {
   fail("ONE_MEMORY_DATA_DIR is inside the real user directory");
 }
 
+if (process.platform === "win32") {
+  const userProfile = process.env.USERPROFILE;
+  if (!userProfile) fail("USERPROFILE is unset");
+  if (path.resolve(userProfile) === path.resolve(realHome)) {
+    fail("USERPROFILE is the real user directory");
+  }
+}
+
 for (const key of PORT_KEYS) {
   const value = Number(process.env[key]);
   if (!Number.isSafeInteger(value) || value < 1024 || value > 65535) {

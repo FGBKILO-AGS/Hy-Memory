@@ -2,8 +2,15 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REAL_HOME="${ONE_MEMORY_TEST_REAL_HOME:-$(python3 -c 'import os, pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')}"
-RUN_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/one-memory-tests.XXXXXX")"
+REAL_HOME="${ONE_MEMORY_TEST_REAL_HOME:-$(python3 -c 'import os; print(__import__("pwd").getpwuid(os.getuid()).pw_dir if hasattr(os, "getuid") else os.path.expanduser("~"))')}"
+# Git Bash resolves /tmp inside the user profile, which the isolation guard
+# below refuses; use the repo's gitignored build/ there instead.
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) TEST_TMP_BASE="$ROOT/build" ;;
+  *) TEST_TMP_BASE="${TMPDIR:-/tmp}" ;;
+esac
+mkdir -p "$TEST_TMP_BASE"
+RUN_ROOT="$(mktemp -d "$TEST_TMP_BASE/one-memory-tests.XXXXXX")"
 TEST_CACHE_ROOT="${ONE_MEMORY_TEST_CACHE_ROOT:-$REAL_HOME/.cache}"
 CORE_PORT=$((25000 + ($$ % 10000)))
 BROKER_PORT=$((CORE_PORT + 10000))
@@ -24,6 +31,8 @@ fi
 export ONE_MEMORY_TEST_ISOLATED=1
 export ONE_MEMORY_TEST_REAL_HOME="$REAL_HOME"
 export HOME="$RUN_ROOT/home"
+# os.homedir() reads USERPROFILE, not HOME, on Windows.
+export USERPROFILE="$RUN_ROOT/home"
 export ONE_MEMORY_DATA_DIR="$RUN_ROOT/data"
 export ONE_MEMORY_SOURCE_HOME="$RUN_ROOT/home"
 export ONE_MEMORY_HOST_HOME="$RUN_ROOT/home"
