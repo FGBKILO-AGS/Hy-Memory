@@ -46,8 +46,32 @@ def from_token():
     return buffer.value
 
 
+def to_native(posix_path):
+    """Convert an MSYS/Cygwin path to the form Node resolves on Windows."""
+    import subprocess
+
+    return subprocess.run(
+        ["cygpath", "-w", posix_path],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def resolve():
+    # Keyed on os.name, not hasattr(os, "getuid"): an MSYS/Cygwin build of
+    # CPython has getuid and would otherwise return `/c/Users/...`, which Node
+    # resolves against the current drive, silently defeating the guard.
+    if os.name == "nt":
+        return from_token()
+    if sys.platform in ("msys", "cygwin"):
+        return to_native(from_passwd())
+    if hasattr(os, "getuid"):
+        return from_passwd()
+    return os.path.expanduser("~")
+
+
 def main():
-    resolve = from_passwd if hasattr(os, "getuid") else from_token
     try:
         sys.stdout.write(f"{resolve()}\n")
     except Exception as error:
