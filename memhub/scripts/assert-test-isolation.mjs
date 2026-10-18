@@ -31,8 +31,11 @@ if (path.resolve(dataDir).startsWith(`${path.resolve(realHome)}${path.sep}`)) {
 if (process.platform === "win32") {
   const userProfile = process.env.USERPROFILE;
   if (!userProfile) fail("USERPROFILE is unset");
-  if (path.resolve(userProfile) === path.resolve(realHome)) {
-    fail("USERPROFILE is the real user directory");
+  const real = path.resolve(realHome);
+  const profile = path.resolve(userProfile);
+  if (profile === real) fail("USERPROFILE is the real user directory");
+  if (profile.startsWith(`${real}${path.sep}`)) {
+    fail("USERPROFILE is inside the real user directory");
   }
 }
 

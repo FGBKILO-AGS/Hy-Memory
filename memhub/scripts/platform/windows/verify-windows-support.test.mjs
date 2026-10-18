@@ -9,11 +9,15 @@ const script = path.join(
   "verify-windows-support.mjs",
 );
 
+function runMatrix() {
+  const result = spawnSync(process.execPath, [script], { encoding: "utf8" });
+  assert.equal(result.error, undefined);
+  return { exitCode: result.status, matrix: JSON.parse(result.stdout) };
+}
+
 describe("Windows support matrix", () => {
   it("reports explicit blocked status until a Windows 11 x64 target is available", () => {
-    const result = spawnSync(process.execPath, [script], { encoding: "utf8" });
-    assert.equal(result.error, undefined);
-    const matrix = JSON.parse(result.stdout);
+    const { matrix } = runMatrix();
     assert.deepEqual(matrix.release_gate, {
       os: "Windows 11",
       arch: "x64",
@@ -34,14 +38,17 @@ describe("Windows support matrix", () => {
     );
   });
 
-  // Fail-closed gate: the process exit code must agree with the matrix, not be
-  // a constant 0. A release job that only checks step success must fail while
-  // the platform is blocked. Removing the `process.exitCode = ...` line in the
-  // script makes this test go red.
-  it("exits non-zero while the Windows release gate is blocked", () => {
-    const result = spawnSync(process.execPath, [script], { encoding: "utf8" });
-    const matrix = JSON.parse(result.stdout);
+  // Fail-closed gate: the exit code must be derived from the matrix in both
+  // directions. Dropping `process.exitCode = ...` from the script goes red, and
+  // so does hardcoding it to 1 while the gate reads "accepted".
+  it("derives its exit code from the release gate status", () => {
+    const { exitCode, matrix } = runMatrix();
+    assert.equal(
+      exitCode,
+      matrix.release_gate.status === "accepted" ? 0 : 1,
+      "exit code must agree with release_gate.status",
+    );
     assert.equal(matrix.release_gate.status, "blocked");
-    assert.notEqual(result.status, 0);
+    assert.notEqual(exitCode, 0);
   });
 });
