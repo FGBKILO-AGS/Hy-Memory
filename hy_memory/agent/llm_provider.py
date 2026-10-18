@@ -34,6 +34,7 @@ import os
 import weakref
 
 from ..config import MemoryConfig
+from ..utils.model_call_context import model_call_stage
 from ..core.workload import llm_slot
 
 logger = logging.getLogger(__name__)
@@ -348,6 +349,7 @@ class LLMProvider:
         stop: List[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
+        audit_stage: Optional[str] = None,
         **kwargs
     ) -> LLMResponse:
         """
@@ -386,15 +388,16 @@ class LLMProvider:
                         len(prompt), _content_fingerprint(prompt),
                     )
 
-                response = await self._call_llm(
-                    prompt=prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    stop=stop,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    **kwargs
-                )
+                with model_call_stage(audit_stage):
+                    response = await self._call_llm(
+                        prompt=prompt,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        stop=stop,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        **kwargs
+                    )
 
                 self._total_calls += 1
                 self._total_tokens += response.tokens_used
@@ -496,11 +499,21 @@ class LLMProvider:
         clients = self._clients.setdefault(loop, {})
         client = clients.get(client_key)
         if client is None:
+            client_options: Dict[str, Any] = {
+                "api_key": base_api_key,
+                "base_url": base_url,
+                "timeout": self._llm_config.timeout,
+                "max_retries": 0,
+            }
+            transport_factory = getattr(self.config, "http_transport_factory", None)
+            if callable(transport_factory):
+                import httpx
+
+                client_options["http_client"] = httpx.AsyncClient(
+                    transport=transport_factory()
+                )
             client = AsyncOpenAI(
-                api_key=base_api_key,
-                base_url=base_url,
-                timeout=self._llm_config.timeout,
-                max_retries=0,
+                **client_options,
             )
             clients[client_key] = client
 
@@ -585,6 +598,7 @@ class LLMProvider:
         temperature: Optional[float] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
+        audit_stage: Optional[str] = None,
     ) -> LLMResponse:
         """
         多轮 messages 调用（支持 tool results 回传）。
@@ -612,13 +626,14 @@ class LLMProvider:
                         f"msgs={len(messages)} tools={len(tools) if tools else 0}"
                     )
 
-                response = await self._chat_completions(
-                    messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                )
+                with model_call_stage(audit_stage):
+                    response = await self._chat_completions(
+                        messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                    )
 
                 self._total_calls += 1
                 self._total_tokens += response.tokens_used

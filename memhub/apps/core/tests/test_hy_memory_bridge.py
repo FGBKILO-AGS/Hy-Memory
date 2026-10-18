@@ -18,10 +18,12 @@ from one_memory.hy_memory_bridge import (
     HyMemoryBridge,
     HyMemoryBridgeError,
     HyMemoryIngestRequest,
+    HyMemoryIngestResult,
     HyMemoryTurn,
     UnsupportedHyMemoryProviderError,
     _basic_info_memories,
     _collection_name,
+    _with_native_mutation_delta,
     build_hy_memory_config,
     configure_hy_memory_environment,
     reattach_legacy_vector_collection,
@@ -308,6 +310,7 @@ def test_ollama_profile_ignores_ambient_remote_storage_and_models(
     monkeypatch.setenv("MEMORY_VECTOR_HOST", "remote.example.com")
     monkeypatch.setenv("MEMORY_COLLECTION_NAME", "hostile-collection")
     monkeypatch.setenv("MEMORY_EMBEDDING_DIMS", "99")
+    monkeypatch.delenv("MEMORY_CODING_TOOL_RESULT_MAX_BYTES", raising=False)
     profile = snapshot(
         ProviderKind.OLLAMA,
         base_url="http://127.0.0.1:11434",
@@ -331,6 +334,20 @@ def test_ollama_profile_ignores_ambient_remote_storage_and_models(
     assert config.vector_store.embedding_dims == 768
     assert config.graph_store.provider == "kuzu"
     assert str(tmp_path) in config.graph_store.db_path
+    assert config.coding.tool_result_max_bytes == 512
+
+
+def test_memhub_coding_tool_result_ceiling_is_configurable(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("MEMORY_CODING_TOOL_RESULT_MAX_BYTES", "1024")
+    profile = snapshot(
+        ProviderKind.OLLAMA,
+        base_url="http://127.0.0.1:11434",
+        has_api_key=False,
+    )
+
+    config = build_hy_memory_config(profile, api_key=None, data_dir=tmp_path)
+
+    assert config.coding.tool_result_max_bytes == 1024
 
 
 def _kuzu_graph_with_embedding_width(db_path: Path, width: int) -> None:
@@ -1324,7 +1341,7 @@ def test_hy_runtime_matches_public_sdk_without_reranker_or_service_backends(
     config = build_hy_memory_config(profile, api_key=None, data_dir=tmp_path)
 
     assert HY_MEMORY_DISTRIBUTION == "hy-memory"
-    assert HY_MEMORY_VERSION == "2.0.2"
+    assert HY_MEMORY_VERSION == "2.0.4"
     assert HY_MEMORY_MODE == "ultra"
     assert HY_MEMORY_READER == "hybrid"
     assert os.environ["MEMORY_MODE"] == "ultra"
@@ -1507,3 +1524,58 @@ def test_the_client_mode_follows_the_graph_store_switch(tmp_path, monkeypatch) -
     hy_memory_bridge.create_hy_memory_client(profile, api_key=None, data_dir=tmp_path).close()
 
     assert seen == ["pro", HY_MEMORY_MODE]
+
+
+def test_native_mutation_delta_reports_coding_deletes_and_supersedes() -> None:
+    raw = {
+        "ops": [
+            {
+                "action": "DELETE",
+                "target_experience_id": "old-experience",
+            }
+        ],
+        "fact_ops": [
+            {
+                "action": "SUPERSEDE",
+                "fact_id": "old-fact",
+                "superseded_by": "new-fact",
+            }
+        ],
+    }
+
+    result = asyncio.run(
+        _with_native_mutation_delta(
+            SimpleNamespace(),
+            HyMemoryIngestResult(success=True),
+            raw,
+            (),
+        )
+    )
+
+    assert result.retired_memory_ids == ("old-experience", "old-fact")
+    assert result.superseded_memory_ids == {"old-fact": ("new-fact",)}
+
+
+def test_native_mutation_delta_reads_chat_status_from_the_sdk() -> None:
+    class Client:
+        def get(self, memory_id: str) -> Mapping[str, object]:
+            assert memory_id == "old-chat"
+            return {
+                "memory_id": memory_id,
+                "content": "old",
+                "status": "superseded",
+                "superseded_by": ["new-chat"],
+            }
+
+    guard = SimpleNamespace(mutation_target_ids={"old-chat"})
+    result = asyncio.run(
+        _with_native_mutation_delta(
+            Client(),
+            HyMemoryIngestResult(success=True),
+            {},
+            (guard,),
+        )
+    )
+
+    assert result.retired_memory_ids == ("old-chat",)
+    assert result.superseded_memory_ids == {"old-chat": ("new-chat",)}

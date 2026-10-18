@@ -8,7 +8,6 @@ import axios from "axios";
  */
 const READ_ONLY_PATHS = [
   "/api/v1/call-events",
-  "/api/v1/model-content-permission",
   "/api/v1/home-summary",
   "/api/v1/import-jobs",
   "/api/v1/live-sync",
@@ -395,6 +394,41 @@ export async function readMemoryWrite(
     if (axios.isAxiosError(error) && error.response?.status === 404)
       return null;
     throw error;
+  }
+}
+
+export interface OnboardingState {
+  status: string;
+  selected_source_ids: string[];
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+/** Send onboarding back to its first-run state.
+ *
+ * Returns null when the endpoint is not there, so an older runtime degrades to
+ * "not available" instead of failing the command. Only the completion flag
+ * moves: memories, sources and settings live in other tables, which is what
+ * makes this the honest way to see the cold-start screens again.
+ */
+export async function resetOnboarding(
+  attachment: RuntimeAttachmentLike,
+): Promise<OnboardingState | null> {
+  try {
+    const response = await axios.post<OnboardingState>(
+      `${baseUrlOf(attachment)}/api/v1/onboarding/reset`,
+      undefined,
+      {
+        headers: { Authorization: `Bearer ${attachment.apiToken}` },
+        timeout: 15_000,
+        proxy: false,
+        maxRedirects: 0,
+        maxContentLength: MAX_RESPONSE_BYTES,
+      },
+    );
+    return response.data;
+  } catch {
+    return null;
   }
 }
 

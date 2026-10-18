@@ -12,7 +12,6 @@ import {
   getHomeSummary,
   getLiveSyncHealth,
   getMemoryProcessing,
-  getModelContentPermission,
   getRecentConversations,
 } from "./api";
 import { AppMark } from "./app-mark";
@@ -41,6 +40,7 @@ import {
 import { subscribePoll } from "./poll-scheduler";
 import { R6Button } from "./R6Controls";
 import { prefetchDataRuntime } from "./runtime-state";
+import { refreshSedimentation, useSedimentation } from "./sedimentation-state";
 import type { useImportSources } from "./use-import-sources";
 import "./applications-home.css";
 
@@ -169,7 +169,6 @@ export function ApplicationsHome({
   imports,
   onManage,
   onMemories,
-  onSettings,
   onCalls,
   active = true,
 }: {
@@ -178,7 +177,7 @@ export function ApplicationsHome({
   onMemories(memoryId?: string): void;
   /** 保留兼容旧调用方；“查看会话”入口已按产品要求下线。 */
   onConversations?(): void;
-  onSettings(): void;
+  onSettings?(): void;
   onCalls?(): void;
   active?: boolean;
 }) {
@@ -194,13 +193,11 @@ export function ApplicationsHome({
   // A failed poll keeps the last answer on screen; the page must say it is old.
   const hostStale = hostQuery.isError && hostQuery.data !== undefined;
   const auto = useAutoConnect();
+  const sedimentation = useSedimentation();
   const [summary, setSummary] = useState<HomeSummary | null>(null);
   const [processing, setProcessing] = useState<MemoryProcessingSummary | null>(
     null,
   );
-  const [modelContentAllowed, setModelContentAllowed] = useState<
-    boolean | null
-  >(null);
   const [syncHealth, setSyncHealth] = useState<LiveSyncHealth[]>([]);
   const [failed, setFailed] = useState(false);
   const [recentCall, setRecentCall] = useState<CallEvent | null>(null);
@@ -554,12 +551,12 @@ export function ApplicationsHome({
     async function refresh() {
       if (busy || document.hidden) return;
       busy = true;
-      const [home, state, permission, sync, recent] = await Promise.allSettled([
+      const [home, state, sync, recent] = await Promise.allSettled([
         getHomeSummary(),
         getMemoryProcessing(),
-        getModelContentPermission(),
         getLiveSyncHealth(),
         getRecentConversations({ limit: 1, recentActivity: true }),
+        refreshSedimentation(),
       ]);
       busy = false;
       if (stopped) return;
@@ -572,9 +569,6 @@ export function ApplicationsHome({
         setFailed(true);
       }
       if (state.status === "fulfilled") setProcessing(state.value);
-      if (permission.status === "fulfilled")
-        setModelContentAllowed(permission.value.allowed);
-      else setModelContentAllowed(null);
       if (sync.status === "fulfilled") setSyncHealth(sync.value);
       if (recent.status === "fulfilled") {
         setLatestDialogue(recent.value.items[0] ?? null);
@@ -661,21 +655,17 @@ export function ApplicationsHome({
     (s) => s.authorized || s.detected === true || s.location_state === "found",
   );
   const stateLabel =
-    modelContentAllowed === false
-      ? "模型读取已关闭"
-      : processing?.running
-        ? "整理中"
-        : processing?.blocked_stages?.some((stage) => stage.count > 0)
-          ? "排队处理中"
-          : processing?.waiting_for_model
-            ? "等待模型"
-            : processing?.failed
-              ? "需要处理"
-              : processing?.pending
-                ? "准备中"
-                : processing
-                  ? "一切就绪"
-                  : "待核对";
+    sedimentation?.enabled === true
+      ? "整理中"
+      : sedimentation?.enabled === false
+        ? "已暂停"
+        : "待核对";
+  const stateDetail =
+    sedimentation?.enabled === false
+      ? "已停止生成新记忆"
+      : sedimentation?.enabled === true
+        ? "新的对话正在整理"
+        : "正在核对整理状态";
   const latestClock = latest ? clockParts(latest.updated_at) : null;
   const time = latestClock?.clock ?? (latest ? "时间未知" : null);
   const checked = visible ? clockParts(visible.observed_at) : null;
@@ -847,20 +837,7 @@ export function ApplicationsHome({
               <div>
                 <p>沉淀状态</p>
                 <strong className="r6-home-word">{stateLabel}</strong>
-                <small>
-                  {modelContentAllowed === false
-                    ? "新的对话不会再整理成记忆"
-                    : processing?.running
-                      ? "新的对话正在整理"
-                      : processing?.pending
-                        ? "等待队列开始处理"
-                        : "以当前处理状态为准"}
-                </small>
-                {modelContentAllowed === false ? (
-                  <R6Button variant="quiet" onClick={() => onSettings()}>
-                    打开模型内容权限
-                  </R6Button>
-                ) : null}
+                <small>{stateDetail}</small>
               </div>
               <div>
                 <p>最近更新</p>

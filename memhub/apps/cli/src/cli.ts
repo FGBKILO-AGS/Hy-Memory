@@ -81,6 +81,7 @@ import {
   readMemoryWrite,
   readScanRoots,
   removeScanRoot,
+  resetOnboarding,
   submitBackup,
   submitMemoryWrite,
   submitScan,
@@ -191,13 +192,6 @@ import {
   renderMemoryPageText,
 } from "./memory-report.js";
 import {
-  type ModelContentPermissionDocument,
-  modelContentPermissionExitCode,
-  readModelContentPermission,
-  renderModelContentPermissionText,
-  setModelContentPermission,
-} from "./model-content-permission-flow.js";
-import {
   executeModelProbe,
   inspectModelProbePlan,
   type ModelProbeFlowDocument,
@@ -217,12 +211,10 @@ import {
   executeModelProfileActivate,
   executeModelProfileEdit,
   type ModelWriteDocument,
-  type ModelWritePlan,
   modelWriteExitCode,
   planModelProfileActivate,
   planModelProfileEdit,
   renderModelWriteText,
-  validateModelWritePlan,
 } from "./model-write-flows.js";
 import { claimPlanAttempt } from "./operation-journal.js";
 import {
@@ -339,7 +331,7 @@ import {
   renderVersion,
   renderVersionDocument,
 } from "./usage.js";
-import { CLI_VERSION, PRODUCT } from "./version.js";
+import { CLI_VERSION, PRODUCT, RUNTIME_RELEASE_VERSION } from "./version.js";
 import { runWatchLoop, type WatchEvent, type WatchRead } from "./watch-loop.js";
 
 export interface RunControls {
@@ -425,7 +417,8 @@ async function selectInstallSource(
     throw new Error("release_manifest_url_unavailable");
   }
   const manifestUrl =
-    explicitManifestUrl ?? template.replaceAll("{version}", CLI_VERSION);
+    explicitManifestUrl ??
+    template.replaceAll("{version}", RUNTIME_RELEASE_VERSION);
   const allowedHosts = parseAllowedReleaseHosts(
     environment.MEMHUB_RELEASE_ALLOWED_HOSTS,
   );
@@ -470,7 +463,7 @@ async function resolveRemoteInstallPreview(
 ): Promise<ResolvedRuntimeRelease> {
   return (controls.resolveRuntimeRelease ?? resolveRuntimeRelease)({
     manifestUrl: selection.manifestUrl,
-    expectedVersion: CLI_VERSION,
+    expectedVersion: RUNTIME_RELEASE_VERSION,
     channel: selection.channel,
     platform: process.platform,
     arch: process.arch,
@@ -484,7 +477,7 @@ async function acquireRemoteInstallSource(
 ): Promise<AcquiredRuntimeDistribution> {
   return (controls.acquireRuntimeDistribution ?? acquireRuntimeDistribution)({
     manifestUrl: selection.manifestUrl,
-    expectedVersion: CLI_VERSION,
+    expectedVersion: RUNTIME_RELEASE_VERSION,
     channel: selection.channel,
     platform: process.platform,
     arch: process.arch,
@@ -697,6 +690,36 @@ async function runCommand(
   // `path list` and `adapter list` are read-only: they have no plan to confirm,
   // so they are answered here rather than falling into the two-phase branch
   // (which would reject them for having nothing to apply).
+  // Back to the cold-start screens on purpose. Deleting the app cannot do this
+  // (the completion flag lives with the memories, by design), and deleting the
+  // data to get there would cost the user everything they have stored.
+  if (named === "onboarding" && arguments_.includes("reset")) {
+    if (
+      arguments_.filter((item) => item === "--json").length > 1 ||
+      arguments_.filter((item) => item !== "--json").join(" ") !==
+        "onboarding reset"
+    ) {
+      return usage();
+    }
+    const attachment = await attachToRuntime(
+      resolveRuntimeCliConfig(environment, process.argv[1]).dataDir,
+    );
+    if (attachment === null) {
+      return runtimeUnavailable(descriptor, asJson);
+    }
+    const state = await resetOnboarding(attachment);
+    if (state === null) {
+      return reject(descriptor, asJson, "引导状态端点不可用。");
+    }
+    if (asJson) {
+      process.stdout.write(`${JSON.stringify(state)}\n`);
+      return EXIT_OK;
+    }
+    process.stdout.write(
+      `引导流程已回到首次运行（status=${state.status}），记忆数据未改动。\n`,
+    );
+    return EXIT_OK;
+  }
   if (named === "path" && arguments_.includes("list")) {
     if (
       arguments_.filter((item) => item === "--json").length > 1 ||
@@ -2461,45 +2484,6 @@ async function runCommand(
       asJson ? `${JSON.stringify(document)}\n` : renderUiWriteText(document),
     );
     return uiWriteExitCode(document);
-  }
-  if (named === "permission") {
-    const parsed = parsePermissionCommand(arguments_.slice(1));
-    if (!parsed) return usage();
-    const config = resolveRuntimeCliConfig(environment, process.argv[1]);
-    const runtime = await inspectRuntimeStatus({
-      dataDir: config.dataDir,
-      probeIdentity,
-      requireServiceReceipt: true,
-    });
-    const attached =
-      runtime.state === "running"
-        ? await attachClients(config.dataDir)
-        : { reader: null, operations: null, failure: runtime.code };
-    if (
-      runtime.state !== "running" ||
-      (parsed === "status" ? !attached.reader : !attached.operations)
-    ) {
-      const document: ModelContentPermissionDocument = {
-        schema_version: 1,
-        product: PRODUCT,
-        state: "unknown",
-        code:
-          runtime.state !== "running"
-            ? runtime.code
-            : (attached.failure ?? "runtime_attach_failed"),
-      };
-      emitModelContentPermissionDocument(document, asJson);
-      return runtime.state === "stopped" ? 3 : 1;
-    }
-    const document =
-      parsed === "status"
-        ? await readModelContentPermission(attached.reader!)
-        : await setModelContentPermission(
-            attached.operations!,
-            parsed === "allow",
-          );
-    emitModelContentPermissionDocument(document, asJson);
-    return modelContentPermissionExitCode(document);
   }
   if (named === "notes" || named === "extraction" || named === "graph") {
     const parsed = parseExtendedWriteCommand(
@@ -5124,18 +5108,6 @@ function parseHeadlessCommand(
     : null;
 }
 
-function parsePermissionCommand(
-  rest: readonly string[],
-): "status" | "allow" | "deny" | null {
-  if (rest.filter((item) => item === "--json").length > 1) return null;
-  const tokens = rest.filter((item) => item !== "--json");
-  const action = tokens[0];
-  return tokens.length === 1 &&
-    (action === "status" || action === "allow" || action === "deny")
-    ? action
-    : null;
-}
-
 function unwrapPlan(value: unknown): unknown {
   if (
     value &&
@@ -5320,17 +5292,6 @@ function emitModelReportDocument(
 ): void {
   process.stdout.write(
     asJson ? `${JSON.stringify(document)}\n` : renderModelReportText(document),
-  );
-}
-
-function emitModelContentPermissionDocument(
-  document: ModelContentPermissionDocument,
-  asJson: boolean,
-): void {
-  process.stdout.write(
-    asJson
-      ? `${JSON.stringify(document)}\n`
-      : renderModelContentPermissionText(document),
   );
 }
 
@@ -6560,7 +6521,7 @@ function parseInstallOptions(
         ...(releaseManifestUrl ? { releaseManifestUrl } : {}),
         releaseChannel:
           releaseChannel ??
-          (CLI_VERSION.includes("-") ? "prerelease" : "stable"),
+          (RUNTIME_RELEASE_VERSION.includes("-") ? "prerelease" : "stable"),
         installRoot: resolvedInstallRoot,
         home: resolvedHome,
         uid: uid ?? process.getuid?.(),

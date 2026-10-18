@@ -494,14 +494,6 @@ export const COMMANDS: readonly CommandDescriptor[] = [
     exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
   },
   {
-    name: "permission",
-    summary: "读取或直接设置全局模型内容外发许可。",
-    usage:
-      "memhub permission status [--json]\n            memhub permission allow [--json]\n            memhub permission deny [--json]",
-    options: [JSON_OPTION],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
-  },
-  {
     name: "extraction",
     summary: "设置提取窗口；默认只出计划，--confirm 后才写入。",
     usage: "memhub extraction set --window <3m|6m|1y|all> [--confirm] [--json]",
@@ -658,6 +650,14 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       JSON_OPTION,
     ],
     exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_PLAN_BLOCKED],
+  },
+  {
+    name: "onboarding",
+    summary:
+      "onboarding reset 回到首次运行的引导流程。只清除引导完成状态：不删记忆数据，也不需要卸载重装。",
+    usage: "memhub onboarding reset [--json]",
+    options: [JSON_OPTION],
+    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE],
   },
   {
     name: "help",

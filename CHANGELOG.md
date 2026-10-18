@@ -2,6 +2,26 @@
 
 Hy Memory and MemHub are versioned and released independently.
 
+## Hy Memory 2.0.3 — 2026-10-17
+
+- Added an optional runtime HTTP transport factory so embedded products can
+  enforce request budgets without wrapping or restricting SDK local-store
+  access.
+- Published
+  [`hy-memory==2.0.3`](https://pypi.org/project/hy-memory/2.0.3/) with
+  unchanged memory extraction, reconciliation, storage, and Coding/Working
+  behavior.
+
+## Unreleased
+
+- Removed MemHub's task-scoped HyPermission store wrappers and global
+  model-content consent switch. The trusted embedded Hy Memory SDK now uses
+  its native local stores directly.
+- Existing installations ignore the retired config flag, readmit previously
+  parked pre-invocation work, and drop only the obsolete
+  `hy_node_permissions` proof table. Evidence, governed memories, model
+  profiles, SDK stores, and source/host grants are preserved.
+
 ## Hy Memory 2.0.2 — 2026-10-17
 
 - Published
@@ -16,7 +36,21 @@ Hy Memory and MemHub are versioned and released independently.
   Because PyPI release metadata is immutable, the next SDK patch release must
   carry the updated license metadata; `2.0.1` retains its published metadata.
 
-## MemHub 1.0.2 — Unreleased
+## MemHub 1.0.3 — Unreleased
+
+- Updated the source version to `1.0.3` (build 7).
+- Pinned the public SDK to `hy-memory==2.0.3`.
+- Removed the HyPermission store wrappers and global model-content consent
+  switch; the trusted embedded SDK now uses native local stores.
+- Prevented uncertain writes from blocking later source work and added one
+  reconciled automatic retry after ten seconds.
+- Added product-facing memory pipeline counters and the log troubleshooting
+  runbook.
+- Allowed a verified packaged Desktop Runtime from a different commit to take
+  over an equal-build install atomically while preserving downgrade and
+  tamper refusal.
+
+## MemHub 1.0.2 — 2026-10-17
 
 - Updated the source version to `1.0.2` (build 6).
 - Pinned the public SDK to `hy-memory==2.0.2`.

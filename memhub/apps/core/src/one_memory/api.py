@@ -20,7 +20,6 @@ from copy import copy
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from functools import partial
-from importlib import import_module
 from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import UUID
@@ -101,7 +100,13 @@ from one_memory.imports.access import (
     SourceAccessError,
     root_identity_matches,
 )
-from one_memory.imports.adapters import SourceAdapter, SyncCompleteness
+from one_memory.imports.adapters import (
+    ScanFailure,
+    ScannedEvidence,
+    ScanOptions,
+    SourceAdapter,
+    SyncCompleteness,
+)
 from one_memory.imports.candidates import (
     SourceCandidateError,
     SourceCandidateSelection,
@@ -112,7 +117,11 @@ from one_memory.imports.connections import (
     ConnectionIntentReceipt,
     SourceConnectionStore,
 )
-from one_memory.imports.grants import SourceGrantReceipt, SourceGrantStore
+from one_memory.imports.grants import (
+    SourceAuthorizationState,
+    SourceGrantReceipt,
+    SourceGrantStore,
+)
 from one_memory.imports.host_packages import CapabilityState, HostPackageCapabilities
 from one_memory.imports.jobs import (
     ImportIssueRecord,
@@ -164,7 +173,6 @@ from one_memory.memory_library import (
 )
 from one_memory.memory_notes import MemoryNoteStore, memory_note_router
 from one_memory.memory_processing import (
-    MemoryBridgeProtocol,
     MemoryProcessingSupervisor,
     _conversation_chunks,
     memory_task_timeout_seconds,
@@ -178,10 +186,8 @@ from one_memory.memory_queue import (
 )
 from one_memory.memory_server.config_state import ConfigStore
 from one_memory.memory_tasks import MemoryTask, MemoryTaskStatus, MemoryTaskStore
-from one_memory.model_content_routes import model_content_router
 from one_memory.model_presets import seed_preset_profile
 from one_memory.model_probe import ModelProber, ModelProbeResult
-from one_memory.model_processing_permission_guard import ModelProcessingPermissionLease
 from one_memory.model_profiles import (
     ActiveModelProfileError,
     ModelCreationOperationConflictError,
@@ -194,6 +200,7 @@ from one_memory.model_profiles import (
     ModelProfileStore,
     ModelProfileUnavailableError,
 )
+from one_memory.model_request_audit import AuditedModelTransport, ModelRequestAuditStore
 from one_memory.model_request_budget import BudgetedModelTransport, ModelRequestBudget
 from one_memory.onboarding import OnboardingState, OnboardingStore
 from one_memory.recall import GovernedRecallTarget, RecallReceipt, RecallRequest
@@ -285,6 +292,9 @@ class SourceResponse(BaseModel):
     candidate_revision: int = 0
     candidate_change_allowed: bool = False
     candidate_change_reason: str | None = None
+    #: Why `authorized` is false, so the UI can ask for the one thing that
+    #: would fix it instead of offering every recovery at once.
+    authorization_state: SourceAuthorizationState = SourceAuthorizationState.OK
 
 
 class PreviewSourceCandidateRequest(BaseModel):
@@ -317,6 +327,22 @@ class SourceSyncState(BaseModel):
     sync_enabled: bool
 
 
+class SedimentationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: StrictBool
+
+
+class SedimentationState(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool
+    #: What the switch means for the model bill and for what still runs. Read
+    #: by the app so the setting can say so without hardcoding the wording.
+    pending_retained: bool = True
+    imports_unaffected: bool = True
+
+
 class DetectionResponse(BaseModel):
     source_id: str
     detected: bool
@@ -343,7 +369,7 @@ class ConnectSourcesRequest(BaseModel):
     import_upload_id: UUID | None = None
 
 
-ONBOARDING_LARGE_HISTORY_SESSIONS = 200
+ONBOARDING_LARGE_HISTORY_USER_TURNS = 200
 ONBOARDING_HISTORY_WINDOW = timedelta(days=3)
 
 
@@ -818,6 +844,13 @@ def create_app(
                 evidence=app.state.evidence_store,
             )
             app.state.memory_write_queue = memory_write_queue
+            # Builds through 1.0.2 parked pre-invocation jobs behind the
+            # retired model-content consent bit. The embedded SDK is trusted
+            # now, so make those durable jobs claimable on the first startup.
+            await asyncio.to_thread(
+                memory_write_queue.readmit_parked,
+                states=("waiting_for_permission",),
+            )
             repaired_identity_failures = await asyncio.to_thread(
                 memory_write_queue.repair_pre_send_identity_failures
             )
@@ -883,6 +916,7 @@ def create_app(
             )
             app.state.import_job_store = ImportJobStore(database_path)
             app.state.onboarding_store = OnboardingStore(database_path)
+            app.state.history_import_gate_released = False
             app.state.extraction_settings_store = ExtractionSettingsStore(database_path)
             app.state.source_grant_store = SourceGrantStore(
                 database_path,
@@ -905,6 +939,7 @@ def create_app(
             app.state.source_permission_locks = {
                 source_id: asyncio.Lock() for source_id in app.state.source_catalog
             }
+            app.state.sedimentation_lock = asyncio.Lock()
             _follow_workbuddy_home(app, runtime_settings.source_home)
             app.state.source_detection = {}
             app.state.secret_store = secret_store or KeyringSecretStore()
@@ -960,7 +995,7 @@ def create_app(
                 # Not fatal: without the tables every read checks exactly, as
                 # it does today.
                 app.state.memory_visibility_error = str(error)
-            app.state.model_request_budget = (
+            model_request_budget = (
                 ModelRequestBudget(
                     database_path,
                     request_limit=runtime_settings.model_request_limit,
@@ -970,6 +1005,8 @@ def create_app(
                 if runtime_settings.model_request_limit is not None
                 else None
             )
+            app.state.model_request_budget = model_request_budget
+            app.state.model_request_audit_store = ModelRequestAuditStore(database_path)
             app.state.memory_answerer = MemoryAnswerer(
                 governance=app.state.memory_governance_store,
                 filter_memories=app.state.source_read_access.memories,
@@ -1008,6 +1045,23 @@ def create_app(
                 governance=app.state.memory_governance_store,
                 data_dir=runtime_settings.data_dir,
                 extraction_settings=app.state.extraction_settings_store,
+                bridge_factory=lambda profile, api_key, data_dir: HyMemoryBridge(
+                    profile=profile,
+                    api_key=api_key,
+                    data_dir=data_dir,
+                    http_transport_factory=lambda: AuditedModelTransport(
+                        app.state.model_request_audit_store,
+                        profile_id=profile.profile_id,
+                        profile_revision=profile.revision,
+                        provider_kind=str(profile.provider_kind),
+                        model=profile.model,
+                        inner=(
+                            BudgetedModelTransport(model_request_budget)
+                            if model_request_budget is not None
+                            else None
+                        ),
+                    ),
+                ),
                 # `None` means "whatever the active profile allows". Pinned to
                 # 1 in `a59f4b5` as temporary load-shedding for an acceptance
                 # package, and left pinned after it: a hardcoded 1 is rule 9's
@@ -1016,12 +1070,9 @@ def create_app(
                 # profile concurrency 4, recall latency is unchanged while
                 # precipitation goes 4x.
                 max_concurrent_tasks=runtime_settings.precipitation_max_concurrent_tasks,
-                model_content_config=app.state.config_store,
-                permission_bridge_factory=lambda lease, secret, directory: _permission_context(
-                    app, lease, secret, directory
-                ),
                 source_writes_permitted=lambda source_id: _source_writes_on(app, source_id),
                 service_levels=app.state.service_levels,
+                sedimentation_enabled=lambda: _config_store(app).sedimentation_enabled(),
             )
             # C2 owns the single production budget (handle 5s + reserve 250ms,
             # total 5.25s, lease 10s, renew 1s, claim 250ms). The composition
@@ -1039,9 +1090,14 @@ def create_app(
                         job.job_id,
                     )
                 await asyncio.to_thread(
-                    memory_write_queue.retry_timed_out_unknown_after_reconcile,
-                    older_than=datetime.now(UTC) - timedelta(minutes=5),
+                    memory_write_queue.retry_first_unknown_after_reconcile,
+                    older_than=datetime.now(UTC) - timedelta(seconds=10),
                     limit=32,
+                )
+                await asyncio.to_thread(
+                    app.state.memory_task_store.retry_first_unknown_after_reconcile,
+                    older_than=datetime.now(UTC) - timedelta(seconds=10),
+                    limit=128,
                 )
 
             async def admit_hy_invocation(
@@ -1049,8 +1105,12 @@ def create_app(
                 mark_invoked: Callable[[], Awaitable[bool]],
             ) -> bool:
                 """Serialize pause with the last boundary before an HY call."""
-                lock = app.state.source_permission_locks.setdefault(source_id, asyncio.Lock())
-                async with lock:
+                source_lock = app.state.source_permission_locks.setdefault(
+                    source_id, asyncio.Lock()
+                )
+                async with app.state.sedimentation_lock, source_lock:
+                    if not _config_store(app).sedimentation_enabled():
+                        raise RuntimeError("model_sedimentation_disabled")
                     if not _source_writes_on(app, source_id):
                         raise RuntimeError("model_content_source_disabled")
                     return await mark_invoked()
@@ -1088,8 +1148,18 @@ def create_app(
                     + 10
                 ),
                 reconcile_unknown=reconcile_unknown_writes,
-                source_writes_permitted=lambda source_id: _source_writes_on(app, source_id),
-                source_claim_enabled=lambda source_id: _config_store(app).sync_enabled(source_id),
+                source_writes_permitted=lambda source_id: _sedimentation_claim_enabled(
+                    app, source_id
+                ),
+                # The claim gate has to be the same question the write gate
+                # asks, not a second answer to it. It used to be
+                # `sync_enabled`, the per-app toggle, and `one-memory-manual` is
+                # not a connected app: it has no entry in the configuration
+                # document, so that predicate answers False for it while the
+                # write gate admits it by its grant. Every manual note's job was
+                # therefore skipped on every drain tick — the note stayed
+                # "saved, waiting" with no task behind it, forever.
+                source_claim_enabled=lambda source_id: _sedimentation_claim_enabled(app, source_id),
             )
             app.state.memory_write_drain = memory_write_drain
             app.state.memory_write_drain_task = watched_task(
@@ -1118,10 +1188,7 @@ def create_app(
                 for chunk in _conversation_chunks(conversation, max_turns=12, completed_only=True):
                     if (
                         record not in chunk
-                        or not any(
-                            item.role == "user" and item.written_by.value == "person"
-                            for item in chunk
-                        )
+                        or not any(item.role == "user" for item in chunk)
                         or not any(item.role == "assistant" for item in chunk)
                     ):
                         continue
@@ -1134,7 +1201,6 @@ def create_app(
             app.state.matter_discovery.processor = app.state.memory_processing_supervisor
             app.state.matter_discovery.write_intake = app.state.memory_write_intake
             app.state.matter_discovery.write_queue = memory_write_queue
-            app.state.processing_coordinator = None
             app.state.memory_note_store = MemoryNoteStore(
                 app.state.evidence_store,
                 app.state.memory_processing_supervisor,
@@ -1446,7 +1512,6 @@ def create_app(
     app.include_router(matter_router(protected))
     app.include_router(memory_note_router(protected))
     app.include_router(file_import_router(protected))
-    app.include_router(model_content_router(protected))
     app.include_router(context_router(protected))
 
     def require_workbuddy_boundary(request: Request) -> None:
@@ -1736,6 +1801,30 @@ def create_app(
             "events": events,
         }
 
+    @app.get("/api/v1/diagnostics/model-usage", dependencies=protected)
+    def diagnostic_model_usage(
+        since: datetime | None = Query(default=None),  # noqa: B008
+        request_id: str | None = Query(  # noqa: B008
+            default=None, min_length=1, max_length=512
+        ),
+        limit: int = Query(default=200, ge=1, le=2_000),  # noqa: B008
+    ) -> dict[str, object]:
+        """Return content-free precipitation usage for provider reconciliation."""
+
+        normalized_since = (
+            (since if since.tzinfo is not None else since.replace(tzinfo=UTC))
+            if since is not None
+            else None
+        )
+        report = app.state.model_request_audit_store.report(
+            since=normalized_since.astimezone(UTC).isoformat()
+            if normalized_since is not None
+            else None,
+            request_id=request_id,
+            limit=limit,
+        )
+        return {"schema_version": 1, **report}
+
     @app.get(
         "/api/v1/runtime/identity",
         response_model=HealthResponse,
@@ -1873,6 +1962,20 @@ def create_app(
         """Record UI completion only; finishing or skipping is never model consent."""
         return await asyncio.to_thread(_onboarding_store(app).complete)
 
+    @app.post(
+        "/api/v1/onboarding/reset",
+        response_model=OnboardingState,
+        dependencies=protected,
+    )
+    async def reset_onboarding() -> OnboardingState:
+        """Go back to the first-run screens. Only the completion flag moves.
+
+        Memories, sources and settings live in other tables and are untouched,
+        which is the point: someone who wants to see the cold-start flow again
+        should not have to delete anything to do it.
+        """
+        return await asyncio.to_thread(_onboarding_store(app).reset)
+
     @app.get(
         "/api/v1/sources",
         response_model=list[SourceResponse],
@@ -1909,6 +2012,11 @@ def create_app(
                     totals_by_source.get(source_id, (0, 0)),
                     candidate_change_reason=app.state.source_candidate_store.change_reason(
                         registration
+                    ),
+                    authorization_state=grant_store.authorization_state(
+                        user_id="local",
+                        source_id=source_id,
+                        candidate=registration.candidate.path,
                     ),
                 )
                 for source_id, registration in _catalog(app).items()
@@ -2221,24 +2329,39 @@ def create_app(
                 raise HTTPException(status_code=409, detail=error.code) from None
             if grant is None:
                 raise HTTPException(status_code=409, detail="grant_required")
-            await _prepare_source_resume(source_id)
+            try:
+                await _prepare_source_resume(source_id)
+            except BaseException as error:
+                raise _sync_refused("sync_prepare_failed") from error
         else:
-            await _live_sync(app).stop_source(source_id)
+            try:
+                await _live_sync(app).stop_source(source_id)
+            except BaseException as error:
+                raise _sync_refused("sync_prepare_failed") from error
         try:
             await asyncio.to_thread(_config_store(app).set_sync, source_id, request.enabled)
-        except BaseException:
+        except BaseException as error:
             if request.enabled:
                 await _live_sync(app).stop_source(source_id)
             else:
                 await _prepare_source_resume(source_id)
                 await _activate_source_resume(source_id)
             await _refresh_live_watch(app)
-            raise
+            raise _sync_refused("sync_config_write_failed") from error
         try:
             if request.enabled:
-                await _activate_source_resume(source_id)
-            await _refresh_live_watch(app)
+                try:
+                    await _activate_source_resume(source_id)
+                except BaseException as error:
+                    raise _sync_refused("sync_resume_failed") from error
+            try:
+                await _refresh_live_watch(app)
+            except BaseException as error:
+                raise _sync_refused("sync_watcher_failed") from error
         except BaseException:
+            # Rolls back the desired state and settles the watcher exactly as
+            # before; the only change is that the raise above now carries a
+            # code saying which stage failed.
             await asyncio.to_thread(_config_store(app).set_sync, source_id, previous)
             if request.enabled:
                 await _live_sync(app).stop_source(source_id)
@@ -2328,7 +2451,7 @@ def create_app(
         await asyncio.to_thread(
             app.state.memory_task_store.park_source_for_permission,
             source_id=source_id,
-            error_code="model_content_permission_required",
+            error_code="hy_memory_source_revoked",
         )
         await _live_sync(app).stop_source(source_id)
         _supervisor(app).unregister_adapter(source_id)
@@ -2369,6 +2492,8 @@ def create_app(
     async def connect_sources(
         request: ConnectSourcesRequest,
     ) -> ConnectSourcesResponse:
+        if request.onboarding:
+            app.state.history_import_gate_released = False
         source_ids = tuple(dict.fromkeys(request.source_ids))
         registrations = [_require_registration(app, source_id) for source_id in source_ids]
         if request.request_id is None:
@@ -3534,6 +3659,48 @@ def create_app(
     def put_extraction_settings(request: ExtractionWindowUpdate) -> ExtractionSettings:
         return _memory_processing_supervisor(app).set_extraction_window(request.window_preset)
 
+    @app.get(
+        "/api/v1/sedimentation",
+        response_model=SedimentationState,
+        dependencies=protected,
+    )
+    def get_sedimentation() -> SedimentationState:
+        """Whether the model may still turn conversations into memories."""
+        return SedimentationState(enabled=_config_store(app).sedimentation_enabled())
+
+    @app.put(
+        "/api/v1/sedimentation",
+        response_model=SedimentationState,
+        dependencies=protected,
+    )
+    async def put_sedimentation(request: SedimentationRequest) -> SedimentationState:
+        """Start or stop model-driven sedimentation, keeping the configuration.
+
+        Stopping is the user's cost control: nothing further goes to the model
+        and already queued work waits rather than failing, so starting again
+        resumes it. Importing conversations is not affected either way.
+        """
+        store = _config_store(app)
+        changed = False
+        async with app.state.sedimentation_lock:
+            previous = store.sedimentation_enabled()
+            if previous is not request.enabled:
+                await asyncio.to_thread(store.set_sedimentation_enabled, request.enabled)
+                changed = True
+                diagnostic_event(
+                    level="info",
+                    component="memory.sedimentation",
+                    event="memory_sedimentation.toggled",
+                    outcome="succeeded",
+                    details={"enabled": request.enabled},
+                )
+        if changed and request.enabled:
+            # Work parked by the stop is picked up again rather than waiting
+            # for the next natural dispatch, but not on this request's time:
+            # see _resume_sedimentation.
+            _resume_sedimentation(app)
+        return SedimentationState(enabled=store.sedimentation_enabled())
+
     @app.post(
         "/api/v1/memory-processing/manual-extract",
         response_model=ManualExtractReceipt,
@@ -3894,12 +4061,8 @@ async def _authorize_answer_generation(
     # The explicit question is this operation's input, not a standing permission for history.
     if not question.strip() or not grounding:
         raise MemoryAnswerError("memory_answer_generation_not_authorized")
-    if not await asyncio.to_thread(_config_store(app).model_content_allowed):
-        raise MemoryAnswerError("memory_answer_generation_not_authorized")
 
     def check() -> None:
-        if not _config_store(app).model_content_allowed():
-            raise MemoryAnswerError("memory_answer_generation_not_authorized")
         if _model_profile_store(app).active_identity() != (
             profile.profile_id,
             profile.revision,
@@ -3921,29 +4084,6 @@ async def _authorize_answer_generation(
 
     await recheck()
     return recheck
-
-
-@asynccontextmanager
-async def _permission_context(
-    app: FastAPI,
-    lease: ModelProcessingPermissionLease,
-    secret: str | None,
-    directory: Path,
-) -> AsyncIterator[MemoryBridgeProtocol]:
-    module = await asyncio.to_thread(import_module, "one_memory.hy_permission_context")
-    budget = cast(ModelRequestBudget | None, app.state.model_request_budget)
-    source_id = lease.records[0].source_id if lease.records else "manual"
-    factory = module.permission_bridge_factory(
-        lambda profile, api_key, data_dir: _memory_processing_supervisor(app)._bridge(
-            profile,
-            api_key,
-            data_dir,
-            scope_key=source_id,
-        ),
-        **({"http_transport": BudgetedModelTransport(budget)} if budget else {}),
-    )
-    async with factory(lease, secret, directory) as bridge:
-        yield cast(MemoryBridgeProtocol, bridge)
 
 
 class _LazyASGIApp:
@@ -3975,6 +4115,16 @@ class _LazyASGIApp:
 
 
 app = _LazyASGIApp()
+
+
+def _sync_refused(code: str) -> HTTPException:
+    """A sync refusal that says which stage refused.
+
+    Turning the switch on takes four steps: authorize, prepare, write, resume.
+    The UI used to be told only that the switch had sprung back, and every
+    stage needs a different fix, so each one gets its own code.
+    """
+    return HTTPException(status_code=409, detail=code)
 
 
 def _granted_roots(
@@ -4028,6 +4178,7 @@ def _source_response(
     totals: tuple[int, int],
     *,
     candidate_change_reason: str | None = None,
+    authorization_state: SourceAuthorizationState = SourceAuthorizationState.OK,
 ) -> SourceResponse:
     location = inspect_source_location(
         registration.descriptor.source_id, registration.candidate.path
@@ -4240,7 +4391,7 @@ async def _onboarding_history_after(
     home: Path,
     now: datetime | None = None,
 ) -> datetime | None:
-    """Return one shared cutoff when any selected harness has large history.
+    """Return one shared cutoff when any selected harness has large, old history.
 
     The cutoff is decided before any history job is created, then persisted on
     every accepted job. This is deliberately global: independently limiting
@@ -4249,6 +4400,8 @@ async def _onboarding_history_after(
     """
     if not request.onboarding:
         return None
+    anchor = now or datetime.now(UTC)
+    cutoff = anchor - ONBOARDING_HISTORY_WINDOW
     revisions = request.source_candidate_revisions or {}
     for registration in registrations:
         source_id = registration.descriptor.source_id
@@ -4276,27 +4429,50 @@ async def _onboarding_history_after(
                 home=home,
             )
             adapter = registration.create_adapter(grant)
-            count_sessions = cast(
-                Callable[..., Awaitable[int]] | None,
-                getattr(adapter, "count_sessions", None),
-            )
-            if count_sessions is not None:
-                session_count = await count_sessions(limit=ONBOARDING_LARGE_HISTORY_SESSIONS + 1)
-            else:
-                pending = _install_state(adapter)
-                if pending is None:
-                    continue
-                session_count = (await pending).session_count
+            if await _has_large_old_history(adapter, cutoff=cutoff):
+                return cutoff
         except (OSError, SourceAccessError):
             # A supported source whose metadata count cannot be completed is
             # treated conservatively. The later connection still owns the
             # precise authorization error, while onboarding never falls back
             # to an unbounded history import.
-            session_count = ONBOARDING_LARGE_HISTORY_SESSIONS + 1
-        if session_count > ONBOARDING_LARGE_HISTORY_SESSIONS:
-            anchor = now or datetime.now(UTC)
-            return anchor - ONBOARDING_HISTORY_WINDOW
+            return cutoff
     return None
+
+
+async def _has_large_old_history(adapter: SourceAdapter, *, cutoff: datetime) -> bool:
+    """Probe one authorized Harness with the same parsers the import will use.
+
+    Stop as soon as both policy facts are proven: more than 200 genuine person
+    turns and at least one record older than the three-day cutoff. Counting
+    parsed Evidence instead of transcript files prevents one giant coding
+    session from bypassing the limit, while reusing the adapters keeps host
+    envelopes and tool-shaped user records out of the count.
+    """
+
+    user_turns = 0
+    has_old_data = False
+    async for event in adapter.scan(ScanOptions()):
+        if isinstance(event, ScanFailure):
+            # A partial probe must never turn into an unbounded first import.
+            return True
+        if not isinstance(event, ScannedEvidence):
+            continue
+        observed = event.evidence.created_at
+        if observed is None and event.cursor.observed_modified_ns > 0:
+            observed = datetime.fromtimestamp(
+                event.cursor.observed_modified_ns / 1_000_000_000,
+                tz=UTC,
+            )
+        if observed is not None:
+            if observed.tzinfo is None:
+                observed = observed.replace(tzinfo=UTC)
+            has_old_data = has_old_data or observed.astimezone(UTC) < cutoff
+        if event.evidence.role == "user":
+            user_turns += 1
+        if user_turns > ONBOARDING_LARGE_HISTORY_USER_TURNS and has_old_data:
+            return True
+    return False
 
 
 def _install_state(adapter: object) -> Awaitable[SourceInstallState] | None:
@@ -4590,7 +4766,7 @@ async def _keep_loop_heartbeat(watchdog: LoopWatchdog) -> None:
 async def _emit_resource_snapshots(interval_seconds: float = 60.0) -> None:
     while True:
         diagnostic_event(
-            level="info",
+            level="debug",
             component="core.resources",
             event="core.resource_snapshot",
             outcome="observed",
@@ -4612,6 +4788,33 @@ def _start_backfill(app: FastAPI) -> None:
         asyncio.get_running_loop(),
         lambda: _run_backfill(app),
         name="one-memory-memory-backfill",
+    )
+
+
+def _resume_sedimentation(app: FastAPI) -> None:
+    """Pick the work parked by a stop back up, off the caller's clock.
+
+    Turning the switch back on is a decision, not a job the caller waits for:
+    the choice is already stored, and what follows it is maintenance over every
+    unfinished task followed by a scan of the whole queue. On a real backlog
+    that runs for many minutes, so awaiting it here left the PUT unanswered
+    until the client gave up — the renderer showed "启用未能确认" for a switch
+    that had in fact been saved, and the switch only appeared to turn on once
+    the follow-up read came back. Measured: one toggle, twenty-plus minutes,
+    no response, client timeout at thirty seconds.
+
+    Repeated toggles reuse the running walk; it reads the switch as it goes, so
+    a stop part-way through is honoured on the next batch instead of needing a
+    cancel.
+    """
+    running = cast("asyncio.Task[None] | None", getattr(app.state, "sedimentation_resume", None))
+    if running is not None and not running.done():
+        return
+    app.state.sedimentation_resume = watched_task(
+        asyncio.get_running_loop(),
+        lambda: _memory_processing_supervisor(app).resume_allowed(),
+        component="memory.sedimentation",
+        name="one-memory-sedimentation-resume",
     )
 
 
@@ -4722,8 +4925,6 @@ async def _run_backfill(app: FastAPI) -> None:
     """
     app.state.memory_backfill_error = None
     if not app.state.settings.automatic_memory_processing:
-        return
-    if not await asyncio.to_thread(_config_store(app).model_content_allowed):
         return
     try:
         queue = app.state.memory_write_queue
@@ -4858,6 +5059,51 @@ def _source_writes_on(app: FastAPI, source_id: str) -> bool:
         receipt = _grant_store(app).receipt(user_id="local", source_id=source_id)
         return receipt is not None and receipt.revoked_at is None
     return _source_processing_enabled(app, source_id)
+
+
+def _sedimentation_claim_enabled(app: FastAPI, source_id: str) -> bool:
+    """Claim queued model work only while both global and source gates allow it."""
+
+    return (
+        _config_store(app).sedimentation_enabled()
+        and _history_import_gate_released(app)
+        and _source_writes_on(app, source_id)
+    )
+
+
+def _history_import_gate_released(app: FastAPI) -> bool:
+    """Hold first sedimentation until every accepted history import is terminal."""
+
+    if getattr(app.state, "history_import_gate_released", False):
+        return True
+    onboarding = getattr(app.state, "onboarding_store", None)
+    jobs = getattr(app.state, "import_job_store", None)
+    if onboarding is None or jobs is None:
+        return True
+    state = onboarding.get()
+    if state.status != "importing" or not state.selected_source_ids:
+        app.state.history_import_gate_released = True
+        return True
+    selected = set(state.selected_source_ids)
+    matching = [
+        job
+        for job in jobs.list_jobs()
+        if job.operation == "history"
+        and job.source_id in selected
+        and (state.started_at is None or job.created_at >= state.started_at)
+    ]
+    if {job.source_id for job in matching} != selected:
+        return False
+    active = {
+        ImportStatus.PENDING,
+        ImportStatus.RUNNING,
+        ImportStatus.PAUSED,
+        ImportStatus.INTERRUPTED,
+    }
+    released = all(job.status not in active for job in matching)
+    if released:
+        app.state.history_import_gate_released = True
+    return released
 
 
 def _model_prober(app: FastAPI) -> ModelProber:
