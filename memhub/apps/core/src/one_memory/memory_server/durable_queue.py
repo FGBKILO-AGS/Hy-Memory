@@ -38,10 +38,11 @@ from one_memory.memory_server.migrations import memory_write_jobs_sqlite_schema
 from one_memory.memory_server.queue import build_reclaim_sqlite_statements
 from one_memory.memory_server.registry import WriteRecord
 from one_memory.memory_tasks import (
-    POLICY_STOPPED_CODES as _TASK_POLICY_STOPPED_CODES,
+    NON_RETRYABLE_POST_WRITE_CODES,
+    MemoryTaskStatus,
 )
 from one_memory.memory_tasks import (
-    MemoryTaskStatus,
+    POLICY_STOPPED_CODES as _TASK_POLICY_STOPPED_CODES,
 )
 from one_memory.service_levels import ServiceLevel, service_level_context
 
@@ -1542,9 +1543,13 @@ class DurableWriteQueue:
             connection,
         ):
             row = connection.execute(
-                "SELECT state FROM memory_write_jobs WHERE job_id=?", (job_id,)
+                "SELECT state,last_error FROM memory_write_jobs WHERE job_id=?", (job_id,)
             ).fetchone()
-            if row is None or str(row["state"]) != UNKNOWN:
+            if (
+                row is None
+                or str(row["state"]) != UNKNOWN
+                or str(row["last_error"]) in NON_RETRYABLE_POST_WRITE_CODES
+            ):
                 return 0
             connection.execute(
                 """
@@ -1701,8 +1706,15 @@ class DurableWriteQueue:
             rows = connection.execute(
                 "SELECT job_id FROM memory_write_jobs "
                 "WHERE state=? AND attempts=1 AND attempts < max_attempts "
+                f"AND COALESCE(last_error, '') NOT IN "
+                f"({','.join('?' for _ in NON_RETRYABLE_POST_WRITE_CODES)}) "
                 "AND updated_at <= ? ORDER BY updated_at, job_id LIMIT ?",
-                (UNKNOWN, older_than.isoformat(), limit),
+                (
+                    UNKNOWN,
+                    *NON_RETRYABLE_POST_WRITE_CODES,
+                    older_than.isoformat(),
+                    limit,
+                ),
             ).fetchall()
             job_ids = tuple(str(row["job_id"]) for row in rows)
             if not job_ids:
@@ -1766,6 +1778,7 @@ class DurableWriteQueue:
         *,
         limit: int = 128,
         after_cursor: tuple[str, str] | None = None,
+        exclude_error_codes: tuple[str, ...] = (),
     ) -> tuple[UnknownWriteJob, ...]:
         """List unknown rows that still need an inquiry, in stable order.
 
@@ -1782,6 +1795,9 @@ class DurableWriteQueue:
         """
         if type(limit) is not int or limit < 1:
             raise ValueError("limit must be positive")
+        excluded = tuple(dict.fromkeys(exclude_error_codes))
+        if not all(isinstance(code, str) and code for code in excluded):
+            raise ValueError("exclude_error_codes must contain non-empty strings")
         cursor_clause = ""
         params: tuple[Any, ...] = ()
         if after_cursor is not None:
@@ -1794,14 +1810,20 @@ class DurableWriteQueue:
             updated_at, job_id = after_cursor
             cursor_clause = "AND (updated_at, job_id) > (?, ?)"
             params = (updated_at, job_id)
+        if excluded:
+            placeholders = ",".join("?" for _ in excluded)
+            excluded_clause = f"AND COALESCE(last_error, '') NOT IN ({placeholders})"
+        else:
+            excluded_clause = ""
         with main_database(self.database_path).read(row_factory=sqlite3.Row) as connection:
             rows = connection.execute(
                 "SELECT job_id, idempotency_key, created_at, updated_at, last_error "
                 "FROM memory_write_jobs "
                 "WHERE state=? "
                 f"{cursor_clause} "
+                f"{excluded_clause} "
                 "ORDER BY updated_at, job_id LIMIT ?",
-                (UNKNOWN, *params, limit),
+                (UNKNOWN, *params, *excluded, limit),
             ).fetchall()
         return tuple(
             UnknownWriteJob(

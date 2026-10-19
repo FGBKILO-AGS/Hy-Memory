@@ -3516,6 +3516,41 @@ def test_unknown_jobs_does_not_resolve_or_make_a_row_claimable(tmp_path) -> None
     assert queue.resolve_unknown(found[0].job_id, found=False, detail="not in HY") == DEAD
 
 
+def test_unknown_jobs_can_exclude_sticky_authority_failures_before_limit(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    sticky = [
+        queue.submit(_request(key=f"sticky-{index}", evidence=(f"sticky-e{index}",)))
+        for index in range(129)
+    ]
+    ordinary = queue.submit(_request(key="ordinary", evidence=("ordinary-e",)))
+    anchor = datetime(2026, 1, 1, tzinfo=UTC)
+    with sqlite3.connect(path) as connection, connection:
+        for index, record in enumerate(sticky):
+            connection.execute(
+                "UPDATE memory_write_jobs SET state='unknown',attempts=1,hy_invoked=1,"
+                "last_error=?,updated_at=? WHERE job_id=?",
+                (
+                    "hy_memory_write_verification_authority_invalid",
+                    (anchor + timedelta(seconds=index)).isoformat(),
+                    record.job_id,
+                ),
+            )
+        connection.execute(
+            "UPDATE memory_write_jobs SET state='unknown',attempts=1,hy_invoked=1,"
+            "last_error='model_content_outcome_unknown',updated_at=? WHERE job_id=?",
+            ((anchor + timedelta(minutes=3)).isoformat(), ordinary.job_id),
+        )
+
+    found = queue.unknown_jobs(
+        limit=128,
+        exclude_error_codes=("hy_memory_write_verification_authority_invalid",),
+    )
+
+    assert [job.job_id for job in found] == [ordinary.job_id]
+    assert all(queue.get(record.request_id).state == UNKNOWN for record in sticky)
+
+
 def test_unknown_jobs_tolerates_a_row_resolved_between_pages(tmp_path) -> None:
     """Discovery is read-only and may overlap an inquiry from another worker.
 
@@ -4896,15 +4931,16 @@ def test_a_failure_after_the_call_still_parks_as_unknown(tmp_path) -> None:
     record = queue.submit(_request(key="after-call", source="opencode"))
     claimer = DurableWriteDrain(queue, execute=_never_execute, owner="after-call-owner")
     assert claimer.claim(limit=1) == (record.job_id,)
+    recorder = _Recorder(
+        error=HyMemoryBridgeError("hy_memory_write_verification_authority_invalid"),
+        invoke_hy=True,
+    )
 
     asyncio.run(
         execute_job(
             record.job_id,
             queue=queue,
-            supervisor=_Recorder(
-                error=HyMemoryBridgeError("hy_memory_write_verification_authority_invalid"),
-                invoke_hy=True,
-            ),
+            supervisor=recorder,
             evidence=_EvidenceStore({"e1"}),
             owner="after-call-owner",
         )
@@ -4918,6 +4954,16 @@ def test_a_failure_after_the_call_still_parks_as_unknown(tmp_path) -> None:
 
     assert state == UNKNOWN
     assert invoked == 1
+    assert len(recorder.seen) == 1
+    assert (
+        queue.retry_first_unknown_after_reconcile(
+            older_than=datetime.now(UTC) + timedelta(minutes=1)
+        )
+        == 0
+    )
+    assert queue.retry_unknown_confirmed(record.job_id) == 0
+    assert DurableWriteDrain(queue, execute=_never_execute).claim(limit=1) == ()
+    assert len(recorder.seen) == 1
 
 
 def test_event_time_not_enqueue_order_drives_the_window(
