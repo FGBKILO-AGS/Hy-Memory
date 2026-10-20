@@ -32,6 +32,7 @@
 
 ## 最新动态
 
+* *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 🚀 **模型开源** 在 Hugging Face 发布 **Hy-Memory-30B-A3B** 的 **FP8**（**[Hy-Memory-30B-A3B-FP8](https://huggingface.co/tencent/Hy-Memory-30B-A3B-FP8)**）与 **GGUF**（**[Hy-Memory-30B-A3B-GGUF](https://huggingface.co/tencent/Hy-Memory-30B-A3B-GGUF)**）量化版本模型！
 * *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 📦 **正式发布 [MemHub v1.0.4](https://github.com/Tencent-Hunyuan/Hy-Memory/releases/tag/v1.0.4)** 与 **[memhub-cli 1.0.5](https://www.npmjs.com/package/memhub-cli/v/1.0.5)**，提供已签名的 macOS 桌面应用及经过验证的 macOS/Linux Runtime！
 * *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 🚀 **正式发布** **Hy Memory 2.0 (`hy-memory==2.0.4`)**（已上线 [PyPI](https://pypi.org/project/hy-memory/2.0.4/)），并开源 **Hy-Memory** monorepo 与 **[MemHub](memhub/README.md)**！
 * *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 🚀 **模型开源** 在 Hugging Face 发布 **[Hy-Memory-30B-A3B](https://huggingface.co/tencent/Hy-Memory-30B-A3B)** 长期记忆写入模型及[技术报告](https://arxiv.org/abs/2610.22196)！
