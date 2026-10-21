@@ -1913,6 +1913,7 @@ class HyMemoryClient:
         user_ids: Optional[List[str]] = None,
         agent_ids: Optional[List[str]] = None,
         layers: Optional[List[Any]] = None,
+        statuses: Optional[List[Any]] = None,
         with_evolution: bool = False,
     ) -> Dict[str, Any]:
         """
@@ -1935,6 +1936,9 @@ class HyMemoryClient:
             agent_ids: 可选，多 agent 批量列举。非空时优先于 agent_id。
             layers:   可选，只返回指定层级（字符串或 MemoryLayer）。不传时返回
                       L1_RAW 以外的全部层级，与改动前一致。
+            statuses: 可选，只返回指定生命周期（字符串或 MemoryStatus）。不传时
+                      保持兼容，只返回 ACTIVE。可显式读取 SUPERSEDED / SHADOW /
+                      NEGATED / CONFLICTED / ARCHIVED；物理删除的节点不会返回。
             with_evolution: 可选，为当前页条目附加 evolution_chain（默认关闭）。
 
         Returns:
@@ -1947,7 +1951,7 @@ class HyMemoryClient:
                 user_ids=user_ids, agent_ids=agent_ids,
                 limit=limit, offset=offset, order=order,
                 workspace_id=workspace_id, branch=branch,
-                layers=layers, with_evolution=with_evolution,
+                layers=layers, statuses=statuses, with_evolution=with_evolution,
             )
         )
 
@@ -2242,6 +2246,10 @@ class HyMemoryClient:
             self.async_get_recent_history(user_id=user_id, agent_ids=agent_ids, limit=limit)
         )
 
+    def get_write_outcome(self, request_id: str) -> Optional[Dict[str, Any]]:
+        """Return the exact durable outcome for one idempotent write request."""
+        return self._loop_thread.run(self.async_get_write_outcome(request_id))
+
     async def _close_async(self):
         if self._owns_runtime:
             from .metrics import MetricsCollector
@@ -2383,7 +2391,7 @@ class HyMemoryClient:
         except Exception as e:
             logger.warning(f"[delete] chain repair failed for {node_id}: {e}")
 
-    async def _cleanup_graph_evidence(self, deleted_node_id: str) -> None:
+    async def _cleanup_graph_evidence(self, deleted_node_id: str) -> bool:
         """
         清理已删除 VDB 节点在 Graph 中的 evidence 引用。
 
@@ -2394,13 +2402,13 @@ class HyMemoryClient:
         直接用底层 execute 删 VdbRef + DERIVED_FROM 边。
         """
         if self._graph_store is None:
-            return
+            return True
         try:
             gs = self._graph_store
             # Kuzu backend
             if hasattr(gs, '_execute') and hasattr(gs, '_available'):
                 if not gs._available:
-                    return
+                    return False
                 gs._execute(
                     "MATCH (v:VdbRef {node_id: $nid}) DETACH DELETE v;",
                     {"nid": deleted_node_id},
@@ -2412,12 +2420,72 @@ class HyMemoryClient:
                     {"nid": deleted_node_id},
                 )
             logger.debug(f"[delete] VdbRef {deleted_node_id} cleaned from Graph")
+            return True
         except Exception as e:
             logger.debug(f"[delete] VdbRef cleanup for {deleted_node_id}: {e}")
+            return False
 
     # ================================================================
     # 异步 API
     # ================================================================
+
+    async def _claim_write_outcome(
+        self,
+        *,
+        request_id: str,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        operation: str,
+    ) -> Optional[Dict[str, Any]]:
+        existing = await self._cache.claim_write_outcome(
+            request_id,
+            user_id,
+            agent_id,
+            session_id,
+            operation,
+        )
+        if existing is None:
+            return None
+        expected = (user_id, agent_id, session_id, operation)
+        actual = tuple(
+            str(existing.get(key) or "")
+            for key in ("user_id", "agent_id", "session_id", "operation")
+        )
+        if actual != expected:
+            raise ValueError("request_id is already bound to another write scope")
+        result = existing.get("result")
+        if isinstance(result, dict) and existing.get("status") in {"succeeded", "failed"}:
+            return {**result, "replayed": True}
+        return {
+            "success": False,
+            "request_id": request_id,
+            "outcome_status": str(existing.get("status") or "unknown"),
+            "error_code": "write_outcome_not_terminal",
+            "error_message": "write outcome is not terminal; query get_write_outcome",
+            "replayed": True,
+        }
+
+    async def _finish_write_outcome(
+        self,
+        request_id: str,
+        status: str,
+        result: Dict[str, Any],
+    ) -> None:
+        if not await self._cache.finish_write_outcome(request_id, status, result):
+            raise RuntimeError("write outcome disappeared before completion")
+
+    async def _mark_write_outcome_unknown(self, request_id: str) -> None:
+        await self._finish_write_outcome(
+            request_id,
+            "unknown",
+            {
+                "success": False,
+                "request_id": request_id,
+                "outcome_status": "unknown",
+                "error_code": "write_outcome_unknown",
+            },
+        )
 
     @_ensure_internal_loop
     async def async_add(
@@ -2443,27 +2511,48 @@ class HyMemoryClient:
             dict，可含 base_url / api_key / extra_headers / timeout；None = 用 client 配置。
             可用于按请求切换任意 OpenAI-compatible embedding endpoint。
         """
-        if embed_override:
-            with embed_endpoint_override(
-                base_url=embed_override.get("base_url"),
-                api_key=embed_override.get("api_key"),
-                extra_headers=embed_override.get("extra_headers"),
-                timeout=embed_override.get("timeout"),
-            ):
-                return await self._async_add_impl(
+        request_id = request_id or str(uuid.uuid4())
+        replay = await self._claim_write_outcome(
+            request_id=request_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            operation="add",
+        )
+        if replay is not None:
+            return replay
+        try:
+            if embed_override:
+                with embed_endpoint_override(
+                    base_url=embed_override.get("base_url"),
+                    api_key=embed_override.get("api_key"),
+                    extra_headers=embed_override.get("extra_headers"),
+                    timeout=embed_override.get("timeout"),
+                ):
+                    result = await self._async_add_impl(
+                        data, user_id=user_id, agent_id=agent_id, session_id=session_id,
+                        source=source,
+                        metadata=metadata, memory_at=memory_at,
+                        scene=scene, workspace_id=workspace_id, branch=branch,
+                        request_id=request_id, meta=meta,
+                    )
+            else:
+                result = await self._async_add_impl(
                     data, user_id=user_id, agent_id=agent_id, session_id=session_id,
                     source=source,
                     metadata=metadata, memory_at=memory_at,
                     scene=scene, workspace_id=workspace_id, branch=branch,
                     request_id=request_id, meta=meta,
                 )
-        return await self._async_add_impl(
-            data, user_id=user_id, agent_id=agent_id, session_id=session_id,
-            source=source,
-            metadata=metadata, memory_at=memory_at,
-            scene=scene, workspace_id=workspace_id, branch=branch,
-            request_id=request_id, meta=meta,
+        except BaseException:
+            await self._mark_write_outcome_unknown(request_id)
+            raise
+        await self._finish_write_outcome(
+            request_id,
+            "succeeded" if result.get("success") is True else "failed",
+            result,
         )
+        return result
 
     @_ensure_internal_loop
     async def async_finalize_session(
@@ -2818,8 +2907,109 @@ class HyMemoryClient:
             include_runtime_diag=True,
         )
 
+    def import_raw(
+        self,
+        content: str,
+        *,
+        user_id: str,
+        agent_id: str = "default_agent",
+        session_id: str = "default_session",
+        source: str = "default",
+        memory_at: Optional[datetime] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        raw_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Persist one exact raw record without extraction or reconciliation."""
+        return self._loop_thread.run(
+            self.async_import_raw(
+                content,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=source,
+                memory_at=memory_at,
+                metadata=metadata,
+                raw_id=raw_id,
+                request_id=request_id,
+            ),
+            include_runtime_diag=True,
+        )
+
+    def get_raw(self, raw_id: str) -> Optional[Dict[str, Any]]:
+        """Read one SDK raw record through the explicit raw API."""
+        return self._loop_thread.run(self.async_get_raw(raw_id))
+
+    def list_raw(
+        self,
+        *,
+        user_id: str,
+        agent_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        source: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+        order: str = "desc",
+    ) -> Dict[str, Any]:
+        """List raw records for an authorized SDK owner/scope."""
+        return self._loop_thread.run(
+            self.async_list_raw(
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=source,
+                limit=limit,
+                offset=offset,
+                order=order,
+            )
+        )
+
     @_ensure_internal_loop
     async def async_add_extracted(
+        self,
+        contents: Union[str, List[str]],
+        *,
+        user_id: str = "",
+        agent_id: str = "default_agent",
+        session_id: str = "default_session",
+        source: str = "default",
+        metadata: Optional[Dict[str, Any]] = None,
+        memory_at: Optional[datetime] = None,
+        request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Idempotent async wrapper for extracted-memory writes."""
+        request_id = request_id or str(uuid.uuid4())
+        replay = await self._claim_write_outcome(
+            request_id=request_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            operation="add_extracted",
+        )
+        if replay is not None:
+            return replay
+        try:
+            result = await self._async_add_extracted_impl(
+                contents,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=source,
+                metadata=metadata,
+                memory_at=memory_at,
+                request_id=request_id,
+            )
+        except BaseException:
+            await self._mark_write_outcome_unknown(request_id)
+            raise
+        await self._finish_write_outcome(
+            request_id,
+            "succeeded" if result.get("success") is True else "failed",
+            result,
+        )
+        return result
+
+    async def _async_add_extracted_impl(
         self,
         contents: Union[str, List[str]],
         *,
@@ -2907,6 +3097,183 @@ class HyMemoryClient:
             logger.warning(f"[add_extracted] failed: {result.error_message}")
 
         return resp
+
+    @staticmethod
+    def _raw_node_to_public(node) -> Dict[str, Any]:
+        def _timestamp(value):
+            return int(value.timestamp()) if isinstance(value, datetime) else None
+
+        return {
+            "raw_id": node.node_id,
+            "content": node.content,
+            "user_id": node.user_id,
+            "agent_id": node.agent_id,
+            "session_id": node.session_id,
+            "source": node.source,
+            "memory_at": _timestamp(node.memory_at),
+            "gmt_created": _timestamp(node.gmt_created),
+            "custom": node.custom or {},
+        }
+
+    @_ensure_internal_loop
+    async def async_import_raw(
+        self,
+        content: str,
+        *,
+        user_id: str,
+        agent_id: str = "default_agent",
+        session_id: str = "default_session",
+        source: str = "default",
+        memory_at: Optional[datetime] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        raw_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Persist exact source content as L1_RAW without running a model."""
+        from .utils.source_filter import normalize_source
+
+        if not isinstance(content, str) or not content:
+            raise ValueError("content is required")
+        if not user_id:
+            raise ValueError("user_id is required")
+        request_id = request_id or str(uuid.uuid4())
+        replay = await self._claim_write_outcome(
+            request_id=request_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            operation="import_raw",
+        )
+        if replay is not None:
+            return replay
+        try:
+            result = await self._async_import_raw_impl(
+                content,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=normalize_source(source),
+                memory_at=memory_at,
+                metadata=metadata,
+                raw_id=raw_id,
+                request_id=request_id,
+            )
+        except BaseException:
+            await self._mark_write_outcome_unknown(request_id)
+            raise
+        await self._finish_write_outcome(request_id, "succeeded", result)
+        return result
+
+    async def _async_import_raw_impl(
+        self,
+        content: str,
+        *,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        source: str,
+        memory_at: Optional[datetime],
+        metadata: Optional[Dict[str, Any]],
+        raw_id: Optional[str],
+        request_id: str,
+    ) -> Dict[str, Any]:
+        from .models.memory import MemoryLayer, MemoryNode, MemoryStatus, SourceType
+
+        node_id = raw_id or str(uuid.uuid4())
+        existing = await self._vector_store.get_by_id(node_id)
+        if existing is not None:
+            identity = (
+                existing.layer == MemoryLayer.L1_RAW,
+                existing.content == content,
+                existing.user_id == user_id,
+                existing.agent_id == agent_id,
+                existing.session_id == session_id,
+                existing.source == source,
+            )
+            if not all(identity):
+                raise ValueError("raw_id is already bound to different source content")
+            return {
+                "success": True,
+                "raw_id": node_id,
+                "request_id": request_id,
+                "replayed": True,
+            }
+
+        custom = dict(metadata or {})
+        custom["request_id"] = request_id
+        custom["input_kind"] = "raw_exact_import"
+        embedding = await self._embed_service.embed(content)
+        node = MemoryNode(
+            node_id=node_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            source=source,
+            layer=MemoryLayer.L1_RAW,
+            content=content,
+            source_type=SourceType.EXPLICIT,
+            status=MemoryStatus.ACTIVE,
+            is_latest=True,
+            embedding=embedding,
+            memory_at=memory_at,
+            custom=custom,
+        )
+        stored_id = await self._vector_store.upsert(node)
+        if stored_id != node_id:
+            raise RuntimeError("raw import changed the requested identity")
+        return {"success": True, "raw_id": node_id, "request_id": request_id}
+
+    @_ensure_internal_loop
+    async def async_get_raw(self, raw_id: str) -> Optional[Dict[str, Any]]:
+        from .models.memory import MemoryLayer
+
+        node = await self._vector_store.get_by_id(raw_id)
+        if node is None or node.layer != MemoryLayer.L1_RAW:
+            return None
+        return self._raw_node_to_public(node)
+
+    @_ensure_internal_loop
+    async def async_list_raw(
+        self,
+        *,
+        user_id: str,
+        agent_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        source: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+        order: str = "desc",
+    ) -> Dict[str, Any]:
+        from .models.memory import MemoryLayer, MemoryStatus
+
+        if not user_id:
+            raise ValueError("user_id is required")
+        if limit < 1 or offset < 0:
+            raise ValueError("limit must be positive and offset must be non-negative")
+        nodes = await self._vector_store.list_by_user(
+            user_id=user_id,
+            agent_id=agent_id,
+            status_filter=[MemoryStatus.ACTIVE],
+            layers=[MemoryLayer.L1_RAW],
+            include_sources=[source] if source else None,
+            limit=100_000,
+            only_latest=False,
+            with_vectors=False,
+            allow_raw_layer=True,
+        )
+        if session_id:
+            nodes = [node for node in nodes if node.session_id == session_id]
+        nodes = self._sort_memory_nodes(nodes, order=order)
+        total = len(nodes)
+        return {
+            "raw": [
+                self._raw_node_to_public(node)
+                for node in nodes[offset: offset + limit]
+            ],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
 
     @staticmethod
     def _public_search_views(
@@ -4070,6 +4437,15 @@ class HyMemoryClient:
             except Exception:
                 old_isolation_key = ""
 
+        graph_node = None
+        graph_inspection_failed = False
+        if self._graph_store is not None:
+            try:
+                graph_node = await self._graph_store.get_node(memory_id)
+            except Exception as e:
+                graph_inspection_failed = True
+                logger.warning(f"[delete] graph_store lookup failed: {e}")
+
         # ── 演化链修复（VDB 删除前执行）──
         chain_repaired = False
         if node is not None:
@@ -4085,19 +4461,27 @@ class HyMemoryClient:
 
         # 删除图数据库节点 + 清理 evidence（如有）
         graph_deleted = False
+        graph_cleanup_ok = True
         if self._graph_store is not None:
-            try:
-                await self._graph_store.delete_node(memory_id)
-                graph_deleted = True
-            except Exception as e:
-                logger.warning(f"[delete] graph_store delete failed: {e}")
+            if graph_node is not None:
+                try:
+                    graph_deleted = bool(await self._graph_store.delete_node(memory_id))
+                except Exception as e:
+                    logger.warning(f"[delete] graph_store delete failed: {e}")
             # 清理该节点作为 VdbRef 被其他 Schema 引用的情况
-            try:
-                await self._cleanup_graph_evidence(memory_id)
-            except Exception as e:
-                logger.debug(f"[delete] graph evidence cleanup failed (non-fatal): {e}")
+            if node is not None or graph_node is not None:
+                graph_cleanup_ok = await self._cleanup_graph_evidence(memory_id)
 
-        deleted_count = 1 if deleted else 0
+        found = node is not None or graph_node is not None
+        stores_complete = (
+            not graph_inspection_failed
+            and (node is None or bool(deleted))
+            and (graph_node is None or graph_deleted)
+            and graph_cleanup_ok
+        )
+        success = found and stores_complete
+        partial = found and not stores_complete and (bool(deleted) or graph_deleted)
+        deleted_count = 1 if success else 0
 
         # 清理 tag_index：此 memory 删除后，检查其每个 tag 是否还有其他 memory 引用；
         # 无引用则从 tag_index 中移除。失败静默降级，不影响 delete 语义。
@@ -4136,10 +4520,14 @@ class HyMemoryClient:
         _parsed = {
             "memory_id": memory_id,
             **_ident,
-            "found": node is not None,
+            "found": found,
             "vdb_deleted": bool(deleted),
+            "graph_found": graph_node is not None,
             "graph_deleted": graph_deleted,
+            "graph_cleanup_ok": graph_cleanup_ok,
+            "graph_inspection_failed": graph_inspection_failed,
             "deleted_count": deleted_count,
+            "partial": partial,
             "chain_repaired": chain_repaired,
         }
         if node is not None:
@@ -4156,8 +4544,17 @@ class HyMemoryClient:
         )
 
         return {
-            "success": deleted,
+            "success": success,
             "deleted_count": deleted_count,
+            "partial": partial,
+            "vdb_deleted": bool(deleted),
+            "graph_deleted": graph_deleted,
+            "graph_cleanup_ok": graph_cleanup_ok,
+            "error_code": (
+                "delete_incomplete"
+                if graph_inspection_failed or (found and not stores_complete)
+                else None
+            ),
             "request_id": request_id,
             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
         }
@@ -4445,6 +4842,20 @@ class HyMemoryClient:
         return out
 
     @staticmethod
+    def _normalize_statuses(statuses: Optional[List[Any]]) -> Optional[List]:
+        """Normalize public lifecycle filters without inventing product states."""
+        from .models.memory import MemoryStatus
+
+        if not statuses:
+            return None
+        out: List[MemoryStatus] = []
+        for item in statuses:
+            status = item if isinstance(item, MemoryStatus) else MemoryStatus(str(item).lower())
+            if status not in out:
+                out.append(status)
+        return out
+
+    @staticmethod
     def _sort_memory_nodes(nodes: List, *, order: str) -> List:
         reverse = (order.lower() != "asc")
 
@@ -4472,14 +4883,16 @@ class HyMemoryClient:
         user_ids: Optional[List[str]] = None,
         agent_ids: Optional[List[str]] = None,
         layers: Optional[List] = None,
+        statuses: Optional[List] = None,
         with_evolution: bool = False,
     ) -> Dict[str, Any]:
         from .models.memory import MemoryLayer, MemoryStatus
         from .pipelines._retrieval.user_level_l0 import collapse_user_level_l0_hits
 
-        # 过滤条件维持改动前原样（仅 status=ACTIVE），本次只加多值枚举。
-        # 不叠加 only_latest：正常数据下 writer 对 is_latest/status 成对写，两者等效，
-        # 加了只能多拦脏数据，却会改变现网 list 的返回口径。
+        # Default stays ACTIVE for compatibility. An explicit filter is how
+        # callers inspect SDK-owned superseded/shadow lifecycle records.
+        effective_statuses = statuses or [MemoryStatus.ACTIVE]
+        # 不叠加 only_latest：正常数据下 writer 对 is_latest/status 成对写，两者等效。
         # 列表页只需 payload（content/tags/custom/链头信息）与排序字段，
         # 不涉及向量运算，一概 with_vectors=False，避免拉回大量 embedding。
         #
@@ -4491,7 +4904,7 @@ class HyMemoryClient:
             agent_id=agent_id,
             user_ids=user_ids,
             agent_ids=agent_ids,
-            status_filter=[MemoryStatus.ACTIVE],
+            status_filter=effective_statuses,
             layers=layers,
             with_vectors=False,
         )
@@ -4505,7 +4918,7 @@ class HyMemoryClient:
             l0_nodes = await self._vector_store.list_by_user(
                 user_id=user_id,
                 user_ids=user_ids,
-                status_filter=[MemoryStatus.ACTIVE],
+                status_filter=effective_statuses,
                 layers=[MemoryLayer.L0_BASIC_INFO],
                 with_vectors=False,
             )
@@ -4579,9 +4992,10 @@ class HyMemoryClient:
         user_ids: Optional[List[str]] = None,
         agent_ids: Optional[List[str]] = None,
         layers: Optional[List] = None,
+        statuses: Optional[List] = None,
     ) -> Optional[Dict[str, Any]]:
         """列出图库 L6/L7 节点；无图数据、不可用或 layers 不含图层时返回 None。"""
-        from .models.memory import MemoryLayer, MemoryNode
+        from .models.memory import MemoryLayer, MemoryNode, MemoryStatus
 
         graph_layers = [MemoryLayer.L6_SCHEMA, MemoryLayer.L7_INTENTION]
         if layers:
@@ -4619,6 +5033,11 @@ class HyMemoryClient:
                 for layer in graph_layers
             ])
             graph_nodes = [n for chunk in chunks for n in chunk]
+            effective_statuses = statuses or [MemoryStatus.ACTIVE]
+            graph_nodes = [
+                node for node in graph_nodes
+                if getattr(node, "status", None) in effective_statuses
+            ]
 
             graph_nodes = self._sort_memory_nodes(graph_nodes, order=order)
             total = len(graph_nodes)
@@ -4649,6 +5068,7 @@ class HyMemoryClient:
         offset: int,
         request_id: str,
         t0: float,
+        statuses: Optional[List] = None,
     ) -> Dict[str, Any]:
         """按 workspace_id（+可选 branch）纯过滤列出经验层完整详情。
 
@@ -4664,6 +5084,9 @@ class HyMemoryClient:
             "offset": offset,
             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
         }
+        from .models.memory import MemoryStatus
+        if statuses and MemoryStatus.ACTIVE not in statuses:
+            return empty
         try:
             await self._get_coding_writer()  # 副作用：lazy init store
         except Exception as e:
@@ -4692,6 +5115,7 @@ class HyMemoryClient:
                 "files": list(d.files),
                 "source_fact_ids": list(d.source_fact_ids),
                 "confidence": d.confidence,
+                "status": MemoryStatus.ACTIVE.value,
                 "updated_at": d.updated_at.isoformat() if d.updated_at else None,
                 "source": d.source,
             }
@@ -4726,6 +5150,7 @@ class HyMemoryClient:
         user_ids: Optional[List[str]] = None,
         agent_ids: Optional[List[str]] = None,
         layers: Optional[List[Any]] = None,
+        statuses: Optional[List[Any]] = None,
         with_evolution: bool = False,
     ) -> Dict[str, Any]:
         """
@@ -4745,6 +5170,12 @@ class HyMemoryClient:
             - 不传时行为与改动前一致：返回 L1_RAW 以外的全部层级。
               显式指定则完全以传入为准，包含只要 L1_RAW 的场景。
             - 指定的层级都不在图库（L6/L7）时跳过图库查询，返回中省略 graph 键。
+
+        statuses（默认空）：
+            - 不传时保持兼容，只返回 ACTIVE。
+            - 可传 MemoryStatus 或其字符串值，读取 SDK 内现存的 superseded /
+              shadow / negated / conflicted / archived 记录。
+            - delete 是物理删除，不存在可列出的 deleted 状态。
 
         with_evolution（默认 False）：
             - 为 VDB 条目附加 `evolution_chain`（latest → oldest），结构与 search 一致，
@@ -4779,12 +5210,14 @@ class HyMemoryClient:
         request_id = str(uuid.uuid4())
         set_request_id(request_id)
         t0 = time.perf_counter()
+        effective_statuses = self._normalize_statuses(statuses)
 
         # workspace_id 非空 → 走 coding memory 列表路径
         if workspace_id:
             return await self._list_coding(
                 user_id=user_id, workspace_id=workspace_id, branch=branch,
                 limit=limit, offset=offset, request_id=request_id, t0=t0,
+                statuses=effective_statuses,
             )
 
         effective_layers = self._normalize_layers(layers)
@@ -4793,13 +5226,14 @@ class HyMemoryClient:
             user_id=user_id, agent_id=agent_id,
             user_ids=user_ids, agent_ids=agent_ids,
             limit=limit, offset=offset, order=order,
-            layers=effective_layers, with_evolution=with_evolution,
+            layers=effective_layers, statuses=effective_statuses,
+            with_evolution=with_evolution,
         )
         graph = await self._list_graph_bucket(
             user_id=user_id, agent_id=agent_id,
             user_ids=user_ids, agent_ids=agent_ids,
             limit=limit, offset=offset, order=order,
-            layers=effective_layers,
+            layers=effective_layers, statuses=effective_statuses,
         )
 
         elapsed = round((time.perf_counter() - t0) * 1000, 2)
@@ -6146,6 +6580,13 @@ class HyMemoryClient:
     # ================================================================
     # History API（异步）
     # ================================================================
+
+    @_ensure_internal_loop
+    async def async_get_write_outcome(self, request_id: str) -> Optional[Dict[str, Any]]:
+        """Read a durable write result without scanning memory records."""
+        if not request_id:
+            raise ValueError("request_id is required")
+        return await self._cache.get_write_outcome(request_id)
 
     @_ensure_internal_loop
     async def async_history(self, memory_id: str) -> List[Dict[str, Any]]:
