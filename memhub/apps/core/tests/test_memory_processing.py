@@ -304,6 +304,100 @@ def _runner(tmp_path, stores, bridge):
     )
 
 
+def test_sdk_authority_executes_one_write_job_without_task_or_governance_mirror(
+    tmp_path,
+) -> None:
+    stores = _setup(tmp_path)
+    evidence, profiles, tasks, governance, secrets, _profile = stores
+    record = _put(
+        evidence,
+        message_id="sdk-authority",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="记住只调用一次 SDK。",
+    )
+
+    class Bridge(FakeBridge):
+        async def ingest(self, request) -> HyMemoryIngestResult:
+            self.requests.append(request)
+            return HyMemoryIngestResult(
+                success=True,
+                raw_ids=("raw-1",),
+                memories=(
+                    HyMemoryOutput(
+                        memory_id="memory-1",
+                        content="只调用一次 SDK。",
+                        layer="L2_FACT",
+                    ),
+                ),
+            )
+
+    def forbidden():
+        raise AssertionError("SDK authority must not open Governance derivation")
+
+    governance.hy_derivation = forbidden  # type: ignore[method-assign]
+    bridge = Bridge()
+    supervisor = MemoryProcessingSupervisor(
+        tasks=tasks,
+        profiles=profiles,
+        secrets=secrets,
+        evidence=evidence,
+        governance=governance,
+        data_dir=tmp_path,
+        bridge_factory=lambda _profile, _secret, _data_dir: bridge,
+        sdk_authority=lambda: True,
+    )
+
+    invoked = []
+
+    async def mark_invoked() -> None:
+        invoked.append(True)
+
+    result = asyncio.run(
+        supervisor.process_sdk_job(
+            (record,),
+            request_id="write-job-1",
+            before_hy_invocation=mark_invoked,
+        )
+    )
+
+    assert invoked == [True]
+    assert len(bridge.requests) == 1
+    assert bridge.requests[0].request_id == "write-job-1"
+    assert result.raw_ids == ("raw-1",)
+    assert tuple(memory.memory_id for memory in result.memories) == ("memory-1",)
+    assert tasks.list() == []
+    assert governance.get("memory-1", user_id="local") is None
+
+
+def test_sdk_authority_digest_never_publishes_governance_schema(tmp_path) -> None:
+    stores = _setup(tmp_path)
+    evidence, profiles, tasks, governance, secrets, _profile = stores
+    bridge = FakeBridge()
+    bridge.stored_agent_ids = ("cursor",)
+
+    def forbidden():
+        raise AssertionError("SDK digest must not derive Governance authority")
+
+    governance.hy_derivation = forbidden  # type: ignore[method-assign]
+    supervisor = MemoryProcessingSupervisor(
+        tasks=tasks,
+        profiles=profiles,
+        secrets=secrets,
+        evidence=evidence,
+        governance=governance,
+        data_dir=tmp_path,
+        bridge_factory=lambda _profile, _secret, _data_dir: bridge,
+        sdk_authority=lambda: True,
+    )
+
+    result = asyncio.run(supervisor.digest())
+
+    assert result["scope_count"] == 1
+    assert result["schemas_recorded"] == 0
+    assert bridge.digest_calls == [("local", "cursor")]
+
+
 def test_memory_task_logs_six_step_durations_without_content(tmp_path) -> None:
     stores = _setup(tmp_path)
     evidence, _profiles, tasks, _governance, _secrets, profile = stores
