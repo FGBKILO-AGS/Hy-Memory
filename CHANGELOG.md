@@ -40,6 +40,9 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Added a MemHub-managed native Hermes MemoryProvider with automatic prefetch,
+  persistent per-session memory-ID deduplication, authorized Broker reads, and
+  recall-context stripping to prevent memory recursion.
 - Added an extensible MemHub interface-localization layer with Simplified
   Chinese, English, and Spanish catalogs shared by Web and Electron-native
   surfaces. Interface language remains independent from memory content and
