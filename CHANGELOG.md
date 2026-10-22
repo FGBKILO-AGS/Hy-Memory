@@ -119,7 +119,17 @@ Hy Memory and MemHub are versioned and released independently.
   Because PyPI release metadata is immutable, the next SDK patch release must
   carry the updated license metadata; `2.0.1` retains its published metadata.
 
-## MemHub 1.0.3 — Unreleased
+## MemHub 1.0.5 — Unreleased
+
+- Updated the source version to `1.0.5` (build 14).
+- Pinned the public SDK to the stable `hy-memory==2.0.5` release.
+
+## MemHub 1.0.4 — 2026-10-18
+
+- Updated the source version to `1.0.4` (build 13).
+- Published the `v1.0.4` source and release metadata.
+
+## MemHub 1.0.3 — 2026-10-17
 
 - Updated the source version to `1.0.3` (build 7).
 - Pinned the public SDK to `hy-memory==2.0.3`.
