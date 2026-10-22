@@ -363,7 +363,7 @@ def test_sdk_cutover_is_offline_confirmed_and_returns_marker(tmp_path, monkeypat
         lambda **_kwargs: SimpleNamespace(
             migration_id="migration-1",
             backup_bundle_id="bundle-1",
-            sdk_version="2.0.5.dev3",
+            sdk_version="2.0.5",
             completed_at="2026-10-21T00:00:00Z",
         ),
     )
@@ -393,7 +393,7 @@ def test_sdk_cutover_is_offline_confirmed_and_returns_marker(tmp_path, monkeypat
     assert code == 0
     document = output.getvalue().replace(" ", "")
     assert '"state":"cutover"' in document
-    assert '"sdk_version":"2.0.5.dev3"' in document
+    assert '"sdk_version":"2.0.5"' in document
 
 
 def test_sdk_cutover_never_runs_while_runtime_is_live(tmp_path, monkeypatch) -> None:

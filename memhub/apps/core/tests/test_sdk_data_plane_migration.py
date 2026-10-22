@@ -219,7 +219,7 @@ def test_startup_cutover_freezes_pending_job_input_and_preserves_the_queue(store
         database_path=store.database_path,
         migration_id="m1",
         bundle_id="bundle-1",
-        sdk_version="2.0.5.dev3",
+        sdk_version="2.0.5",
     )
     assert marker.migration_id == "m1"
     assert legacy_tables_present(store.database_path)
@@ -683,7 +683,7 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
             migration_id="migration",
             bundle_id="bundle",
             source_runtime_build="v1.0.4",
-            target_sdk_version="2.0.5.dev3",
+            target_sdk_version="2.0.5",
             source_schema_version=55,
             namespace_fingerprint="namespace",
             backend_fingerprint="backend",
@@ -719,7 +719,7 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
             migration_id="migration",
             bundle_id="bundle",
             source_runtime_build="v1.0.4",
-            target_sdk_version="2.0.5.dev3",
+            target_sdk_version="2.0.5",
             source_schema_version=55,
             namespace_fingerprint="namespace",
             backend_fingerprint="backend",
@@ -752,7 +752,7 @@ def test_offline_backfill_blocks_cutover_when_an_item_is_quarantined(store):
             migration_id="migration",
             bundle_id="bundle",
             source_runtime_build="v1.0.4",
-            target_sdk_version="2.0.5.dev3",
+            target_sdk_version="2.0.5",
             source_schema_version=55,
             namespace_fingerprint="namespace",
             backend_fingerprint="backend",

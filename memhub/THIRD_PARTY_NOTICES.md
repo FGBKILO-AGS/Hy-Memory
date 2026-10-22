@@ -2,14 +2,14 @@
 
 MemHub itself is licensed under Apache-2.0 (see `LICENSE`).
 It bundles the runtime dependencies listed below.
-Generated from the installed dependency tree on 2026-10-22T08:09:31Z
+Generated from the installed dependency tree on 2026-10-22T13:18:16Z
 by `python3 scripts/generate_sbom.py`. Do not edit by hand.
 
 Per-package license texts are not reproduced here yet; the license
 column is filled in as part of release review, and the SBOM records
 `NOASSERTION` until then rather than guessing.
 
-## hy-memory 2.0.5.dev3
+## hy-memory 2.0.5
 
 License: Apache-2.0
 
