@@ -163,6 +163,13 @@ Before cleanup, every surviving reference is rewritten to its canonical SDK
 ID. Alias, item-ledger, and detailed cutover tables are then dropped; the
 authority singleton and verified bundle remain.
 
+Backfill never mutates the live SDK root. Startup first copies the complete
+local SDK data plane, including SDK-only records, to a same-filesystem staging
+home. Exact legacy writes and reconciliation run there. Cutover renames the
+live root to a protective path, renames staging into place, and only then
+commits SDK authority. A failed commit restores the previous root; restart
+recovery resolves any interrupted rename before opening SDK stores.
+
 ## 8. Queue and unknown outcomes
 
 Queue rows and leases remain MemHub management state.
@@ -172,8 +179,11 @@ Queue rows and leases remain MemHub management state.
 - Its worker calls SDK `add()` once. The SDK owns raw persistence plus
   extraction/reconciliation; a successful job stores only the returned raw ID,
   canonical memory IDs and terminal outcome.
-- Exact `import_raw()` is a historical migration primitive, not the first half
-  of a two-stage normal write path.
+- Legacy raw and semantic backfill is an App-owned privileged offline
+  operation while Runtime writers are stopped. It writes SDK stores directly;
+  no migration-only import/get/list method is added to public
+  `HyMemoryClient`, and this is not the first half of a two-stage normal write
+  path.
 
 - `hy_invoked=0` may be safely retried after normal lease recovery.
 - `memory_write_jobs.hy_invoked=1`, `state=unknown`, or any non-terminal SDK
