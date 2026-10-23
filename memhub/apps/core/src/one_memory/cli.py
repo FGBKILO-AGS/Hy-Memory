@@ -31,12 +31,59 @@ def _end_by(seconds: str | None) -> None:
 if __name__ == "__main__" and sys.argv[1:2] == ["capture"]:
     _end_by(os.environ.get("ONE_MEMORY_CAPTURE_DEADLINE_S"))
 
+import errno  # noqa: E402
 import json  # noqa: E402
-from collections.abc import Sequence  # noqa: E402
+import re  # noqa: E402
+from collections.abc import Iterator, Sequence  # noqa: E402
 from typing import TextIO  # noqa: E402
 
 from one_memory.config import load_settings  # noqa: E402
 from one_memory.runtime_client import RuntimeStatus, inspect_runtime  # noqa: E402
+
+# A single `sdk_migration_backfill_failed` told the person nothing: running out
+# of disk, a model that was never configured, and a Coding/Working-Fact gap are
+# three different next steps, and the startup dialog can only act on the name it
+# is given. These are the names that reach it.
+_SAFE_MIGRATION_CODE = re.compile(r"^[a-z][a-z0-9_]{0,95}$")
+_OUT_OF_SPACE = frozenset({errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)})
+
+
+def _exception_chain(error: BaseException) -> Iterator[BaseException]:
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def migration_failure_code(
+    error: BaseException, *, fallback: str = "sdk_migration_backfill_failed"
+) -> str:
+    """Name a migration failure; never guess a code from free text.
+
+    Errs toward the caller's generic code: an exception this does not recognize
+    keeps its message out of the document Desktop reads.
+    """
+    chain = list(_exception_chain(error))
+    for item in chain:
+        if isinstance(item, OSError) and item.errno in _OUT_OF_SPACE:
+            return "sdk_migration_disk_space_insufficient"
+    for item in chain:
+        code = getattr(item, "code", "")
+        if not isinstance(code, str) or not _SAFE_MIGRATION_CODE.match(code):
+            continue
+        if code.startswith(("sdk_data_plane_", "sdk_migration_")):
+            return code
+        if code.startswith("hy_sdk_productivity_"):
+            # The Coding inventory could not be read or classified; that is a
+            # data-shape problem the person cannot fix by retrying.
+            return "sdk_migration_coding_inventory_failed"
+        if code == "hy_sdk_memory_import_failed" and any(
+            "working_fact" in str(part) for part in chain
+        ):
+            return "sdk_migration_working_fact_conflict"
+    return fallback
 
 
 def main() -> None:
@@ -345,9 +392,16 @@ def migration_bundle(options: Sequence[str], stream: TextIO) -> int:
         document = {
             "schema_version": 1,
             "state": "failed",
-            "code": error.code,
+            "code": migration_failure_code(error, fallback=error.code),
         }
-        _write_restore(stream, as_json, document, f"迁移备份失败：{error.code}")
+        _write_restore(stream, as_json, document, f"迁移备份失败：{document['code']}")
+        return 1
+    except OSError as error:
+        # A full disk while copying is the most common first-launch failure and
+        # the only one the person fixes by deleting something.
+        code = migration_failure_code(error, fallback="sdk_migration_bundle_copy_failed")
+        document = {"schema_version": 1, "state": "failed", "code": code}
+        _write_restore(stream, as_json, document, f"迁移备份失败：{code}")
         return 1
     document = {
         "schema_version": 1,
@@ -461,14 +515,15 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
     except SecretStoreUnavailableError:
         code = "secure_storage_unavailable"
     except Exception as error:
+        message = str(error)
         code = (
-            str(error)
-            if str(error)
+            message
+            if message
             in {
                 "model_profile_not_active",
                 "model_secret_unavailable",
             }
-            else "sdk_migration_preflight_failed"
+            else migration_failure_code(error, fallback="sdk_migration_preflight_failed")
         )
     else:
         namespace_fingerprint = hashlib.sha256(HY_MEMORY_NAMESPACE.encode()).hexdigest()
@@ -497,8 +552,8 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
                 paths=staging,
                 database_path=database,
             )
-        except Exception:
-            code = "sdk_migration_staging_failed"
+        except Exception as error:
+            code = migration_failure_code(error, fallback="sdk_migration_staging_failed")
             staging_data_dir = None
 
         async def run_backfill() -> BackfillResult:
@@ -525,13 +580,9 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
                 await asyncio.to_thread(lease.close)
 
         try:
-            result = (
-                asyncio.run(run_backfill())
-                if staging_data_dir is not None
-                else None
-            )
-        except Exception:
-            code = "sdk_migration_backfill_failed"
+            result = asyncio.run(run_backfill()) if staging_data_dir is not None else None
+        except Exception as error:
+            code = migration_failure_code(error)
         else:
             if result is None:
                 document = {"schema_version": 1, "state": "failed", "code": code}
@@ -708,18 +759,11 @@ def sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
                     migration_id=marker.migration_id,
                     namespace=HY_MEMORY_NAMESPACE,
                 )
-                staging_cleanup = (
-                    staging.protective_root.exists()
-                    or staging.staging_home.exists()
-                )
+                staging_cleanup = staging.protective_root.exists() or staging.staging_home.exists()
             document = {
                 "schema_version": 1,
                 "authority": "sdk",
-                "state": (
-                    "cleanup_required"
-                    if legacy_tables or staging_cleanup
-                    else "complete"
-                ),
+                "state": ("cleanup_required" if legacy_tables or staging_cleanup else "complete"),
                 "migration_id": marker.migration_id if marker else None,
                 "generation": generation,
                 "legacy_tables": list(legacy_tables),
@@ -759,9 +803,7 @@ def sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
                 "authority": "legacy",
                 "state": "required" if any(counts.values()) else "empty",
                 "migration_id": (
-                    str(active_migration["migration_id"])
-                    if active_migration is not None
-                    else None
+                    str(active_migration["migration_id"]) if active_migration is not None else None
                 ),
                 "bundle_id": (
                     str(active_migration["backup_bundle_id"])
