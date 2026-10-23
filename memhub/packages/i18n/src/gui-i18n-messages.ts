@@ -52,6 +52,8 @@ const languageChineseMessages = {
   languageLoadError: "无法加载语言设置，请重试。",
   nativeErrorTitle: "MemHub 无法启动",
   startupPreparing: "正在启动，正在准备记忆服务…",
+  startupUpgradeHint:
+    "首次启动或升级记忆数据可能需要几分钟，完成后会自动进入应用。",
 } as const;
 
 const languageSpanishMessages: Record<
@@ -71,6 +73,8 @@ const languageSpanishMessages: Record<
   languageLoadError: "No se pudo cargar el idioma. Inténtalo de nuevo.",
   nativeErrorTitle: "MemHub no pudo iniciarse",
   startupPreparing: "Iniciando y preparando el servicio de memorias…",
+  startupUpgradeHint:
+    "El primer inicio o la actualización de tus memorias puede tardar unos minutos. La aplicación se abrirá automáticamente al terminar.",
 };
 
 type Catalog = {

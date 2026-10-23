@@ -126,6 +126,21 @@ const SAFE_STABLE_RUNTIME_ERROR_CODES = new Set([
   "installed_version_conflict",
   "distribution_downgrade_refused",
   "install_current_unmanaged",
+  // Migration runs before the app window exists, so these are the only names
+  // a first launch can be given. They stay codes here and become sentences in
+  // STABLE_RUNTIME_USER_MESSAGES: a person reading the dialog never sees them.
+  "model_profile_not_active",
+  "model_secret_unavailable",
+  "sdk_migration_preflight_failed",
+  "sdk_migration_disk_space_insufficient",
+  "sdk_migration_staging_failed",
+  "sdk_migration_backfill_failed",
+  "sdk_migration_working_fact_conflict",
+  "sdk_migration_coding_inventory_failed",
+  "sdk_migration_bundle_copy_failed",
+  "sdk_migration_response_invalid",
+  "sdk_migration_status_unavailable",
+  "sdk_migration_incomplete",
 ]);
 
 export function stableRuntimeErrorCode(error: unknown): string {
@@ -191,6 +206,30 @@ export const STABLE_RUNTIME_USER_MESSAGES: Record<string, string> = {
     "已安装的运行环境比这个安装包更新，无法用旧安装包启动。请安装最新版本的 MemHub；你的记忆数据不会受到影响。",
   install_current_unmanaged:
     "运行环境的安装目录被改动过，无法安全接管。请重新安装 MemHub，你的记忆数据不会受到影响。",
+  model_profile_not_active:
+    "还没有配置可用的模型，无法升级记忆数据格式。请在旧版本中完成模型配置后重启；你的记忆数据不会受到影响。",
+  model_secret_unavailable:
+    "模型密钥读不到（可能被系统钥匙串拒绝）。请允许 MemHub 访问钥匙串后重新启动；你的记忆数据不会受到影响。",
+  sdk_migration_disk_space_insufficient:
+    "磁盘空间不足，升级记忆数据格式时中断了。请至少腾出与记忆数据同等大小的可用空间（可在「关于本机 → 储存空间」查看），然后重新启动 MemHub；升级会自动继续，原有记忆数据不会丢失。",
+  sdk_migration_staging_failed:
+    "升级准备工作没有完成，通常是磁盘空间不足或文件被占用。请清理磁盘空间后重新启动；原有记忆数据不会丢失。",
+  sdk_migration_bundle_copy_failed:
+    "升级前备份没有写完，通常是磁盘空间不足。请清理磁盘空间后重新启动；原有记忆数据不会丢失。",
+  sdk_migration_working_fact_conflict:
+    "旧版数据里有一条 Coding 记忆的记录类型在升级中无法安全对应。为避免写错你的记忆，升级已停止。请把这个提示反馈给我们；原有记忆数据不会丢失。",
+  sdk_migration_coding_inventory_failed:
+    "读取旧版 Coding 记忆时发现无法识别的结构，升级已停止。请把这个提示反馈给我们；原有记忆数据不会丢失。",
+  sdk_migration_backfill_failed:
+    "升级记忆数据格式时失败，已停止且没有切换数据源。请重新启动重试；如果仍然失败，请把这个提示反馈给我们，原有记忆数据不会丢失。",
+  sdk_migration_preflight_failed:
+    "升级前的检查没有通过，升级已停止。请重新启动重试；如果仍然失败，请把这个提示反馈给我们，原有记忆数据不会丢失。",
+  sdk_migration_status_unavailable:
+    "读不到升级状态，无法判断是否需要升级。请重新启动 MemHub；如果仍然失败，请重新安装，你的记忆数据不会受到影响。",
+  sdk_migration_response_invalid:
+    "升级过程返回了无法识别的内容，已停止。原有记忆数据不会丢失；请重新启动重试，如果仍然失败，请把这个提示反馈给我们。",
+  sdk_migration_incomplete:
+    "记忆数据格式升级没有完成，MemHub 暂时无法打开。请重新启动重试；如果仍然失败，请把这个提示反馈给我们，原有记忆数据不会丢失。",
   desktop_start_failed:
     "MemHub 启动失败。请重新启动；如果仍然打不开，请重新安装，你的记忆数据不会受到影响。",
 };

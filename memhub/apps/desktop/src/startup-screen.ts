@@ -37,6 +37,19 @@ export function startupScreenHtml(locale: GuiLocale = "zh-CN"): string {
           "Helvetica Neue", Arial, sans-serif;
         -webkit-font-smoothing: antialiased;
       }
+      /* A frameless window still needs somewhere to grab; without this the
+         whole wait is undraggable. */
+      .window-drag-region {
+        position: absolute;
+        z-index: 1;
+        top: 0;
+        right: 0;
+        left: 0;
+        height: 58px;
+        -webkit-app-region: drag;
+        -webkit-user-select: none;
+        user-select: none;
+      }
       @media (prefers-color-scheme: dark) {
         body {
           background: #15181d;
@@ -60,6 +73,13 @@ export function startupScreenHtml(locale: GuiLocale = "zh-CN"): string {
         margin: 0;
         font-size: 13px;
         opacity: 0.62;
+      }
+      p.hint {
+        max-width: 320px;
+        font-size: 12px;
+        line-height: 1.55;
+        text-align: center;
+        opacity: 0.45;
       }
       .bar {
         position: relative;
@@ -101,9 +121,11 @@ export function startupScreenHtml(locale: GuiLocale = "zh-CN"): string {
     </style>
   </head>
   <body>
+    <div class="window-drag-region" aria-hidden="true"></div>
     <main>
       <h1>MemHub</h1>
       <p>${translate(locale, "startupPreparing")}</p>
+      <p class="hint">${translate(locale, "startupUpgradeHint")}</p>
       <div class="bar"><span></span></div>
     </main>
   </body>
