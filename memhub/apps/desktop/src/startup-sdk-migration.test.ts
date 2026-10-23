@@ -32,6 +32,7 @@ it("fences hook capture only while startup migration is running", async () => {
 
 it("runs bundle backfill and cutover inside the startup maintenance fence", async () => {
   const calls: string[][] = [];
+  const ordering: string[] = [];
   const execute = vi.fn(async (_core, args: string[]) => {
     calls.push(args);
     const command = args[0];
@@ -57,7 +58,19 @@ it("runs bundle backfill and cutover inside the startup maintenance fence", asyn
     action: () => Promise<T>,
   ): Promise<T> => {
     fenceCalls.push(dataDir);
-    return action();
+    ordering.push("runtime-fence:start");
+    const result = await action();
+    ordering.push("runtime-fence:end");
+    return result;
+  };
+  const orderedCaptureFence = async <T>(
+    _dataDir: string,
+    action: () => Promise<T>,
+  ): Promise<T> => {
+    ordering.push("capture-fence:start");
+    const result = await action();
+    ordering.push("capture-fence:end");
+    return result;
   };
 
   const result = await runStartupSdkMigration({
@@ -66,11 +79,17 @@ it("runs bundle backfill and cutover inside the startup maintenance fence", asyn
     runtimeBuild: "build-13",
     execute,
     fence,
-    captureFence,
+    captureFence: orderedCaptureFence,
   });
 
   expect(result).toEqual({ state: "cutover" });
   expect(fenceCalls).toEqual(["/data"]);
+  expect(ordering).toEqual([
+    "capture-fence:start",
+    "runtime-fence:start",
+    "runtime-fence:end",
+    "capture-fence:end",
+  ]);
   expect(calls.map((args) => args[0])).toEqual([
     "sdk-migration-status",
     "migration-bundle",

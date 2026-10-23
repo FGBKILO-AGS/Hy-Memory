@@ -185,6 +185,10 @@ class SdkMigrationClient(Protocol):
         variant: str | None,
     ) -> Awaitable[tuple[HySdkMemoryRecord, str] | None]: ...
 
+    def list_productivity_memories(
+        self,
+    ) -> Awaitable[tuple[dict[str, object], ...]]: ...
+
     def delete_productivity_memory(
         self,
         memory_id: str,
@@ -293,18 +297,17 @@ def read_legacy_raw_inventory(
                    role,written_by,created_at,imported_at,verbatim,content_hash,revision
             FROM evidence
             WHERE content_kind='raw_conversation'
-              AND COALESCE(created_at, imported_at) >= ?
               AND (
                     (role='user' AND written_by='person')
                     OR role='assistant'
                   )
-            ORDER BY source_id,conversation_id,COALESCE(created_at,imported_at),
+            ORDER BY source_id,conversation_id,workspace,
+                     COALESCE(created_at,imported_at),
                      COALESCE(ingest_seq,rowid),evidence_id
-            """,
-            (cutoff.astimezone(UTC).isoformat(),),
+            """
         ).fetchall()
     turns: list[LegacyRawInventory] = []
-    current_key: tuple[str, str, str] | None = None
+    current_key: tuple[str, str, str, str] | None = None
     current: list[sqlite3.Row] = []
 
     def finish() -> None:
@@ -314,19 +317,25 @@ def read_legacy_raw_inventory(
         if not assistants:
             return
         rows_for_turn = [current[0], *assistants]
+        completed_at = _parse_datetime(
+            assistants[-1]["created_at"] or assistants[-1]["imported_at"]
+        )
+        if completed_at is not None and completed_at.tzinfo is None:
+            completed_at = completed_at.replace(tzinfo=UTC)
+        if completed_at is None or completed_at.astimezone(UTC) < cutoff.astimezone(UTC):
+            return
         evidence_ids = [str(row["evidence_id"]) for row in rows_for_turn]
         source = str(current[0]["source_id"])
         session_id = str(current[0]["conversation_id"])
         digest = hashlib.sha256(
             "\0".join((source, session_id, *evidence_ids)).encode()
         ).hexdigest()
-        user_text = sanitize_model_input(
-            str(rows_for_turn[0]["verbatim"]).strip()
-        )[:_RAW_USER_MAX_CHARACTERS]
+        raw_user_text = str(rows_for_turn[0]["verbatim"] or "")
+        user_text = sanitize_model_input(raw_user_text)[:_RAW_USER_MAX_CHARACTERS]
         content_parts = [f"[user]: {user_text}"]
-        truncated = len(str(rows_for_turn[0]["verbatim"]).strip()) > len(user_text)
+        truncated = len(raw_user_text) > len(user_text)
         for row in assistants:
-            sanitized = sanitize_model_input(str(row["verbatim"]).strip())
+            sanitized = sanitize_model_input(str(row["verbatim"] or ""))
             text = sanitized
             prefix = "[assistant]: "
             remaining = _RAW_TURN_MAX_CHARACTERS - len("\n".join(content_parts)) - 1
@@ -370,6 +379,7 @@ def read_legacy_raw_inventory(
             str(row["source_id"]),
             str(row["conversation_id"]),
             str(row["user_id"]),
+            str(row["workspace"] or ""),
         )
         if key != current_key:
             finish()
@@ -388,13 +398,39 @@ def classify_memory_inventory(
     sdk: tuple[SdkMemoryInventory, ...],
 ) -> tuple[MemoryMigrationDecision, ...]:
     """Classify every legacy and SDK memory; no item may silently disappear."""
-    sdk_by_id = {item.memory_id: item for item in sdk}
-    claimed_sdk_ids: set[str] = set()
+    sdk_by_id: dict[str, list[SdkMemoryInventory]] = {}
+    for sdk_item in sdk:
+        sdk_by_id.setdefault(sdk_item.memory_id, []).append(sdk_item)
+    claimed_sdk_items: set[tuple[str, str | None, str | None]] = set()
     decisions: list[MemoryMigrationDecision] = []
     for item in legacy:
-        current = sdk_by_id.get(item.canonical_memory_id)
+        candidates = [
+            candidate
+            for candidate in sdk_by_id.get(item.canonical_memory_id, ())
+            if (
+                candidate.productivity_kind == item.productivity_kind
+                and (
+                    item.productivity_kind is None
+                    or item.productivity_variant is None
+                    or candidate.productivity_variant == item.productivity_variant
+                )
+            )
+        ]
+        if len(candidates) > 1:
+            claimed_sdk_items.update(_sdk_inventory_key(candidate) for candidate in candidates)
+            decisions.append(
+                MemoryMigrationDecision(
+                    item_key=f"memory:{item.legacy_memory_id}",
+                    action="quarantine",
+                    legacy_memory_id=item.legacy_memory_id,
+                    canonical_memory_id=item.canonical_memory_id,
+                    reason="sdk_memory_id_ambiguous",
+                )
+            )
+            continue
+        current = candidates[0] if candidates else None
         if current is not None:
-            claimed_sdk_ids.add(current.memory_id)
+            claimed_sdk_items.add(_sdk_inventory_key(current))
         if item.status == "deleted":
             decisions.append(
                 MemoryMigrationDecision(
@@ -474,10 +510,10 @@ def classify_memory_inventory(
         )
 
     for sdk_item in sdk:
-        if sdk_item.memory_id not in claimed_sdk_ids:
+        if _sdk_inventory_key(sdk_item) not in claimed_sdk_items:
             decisions.append(
                 MemoryMigrationDecision(
-                    item_key=f"sdk:{sdk_item.memory_id}",
+                    item_key=_sdk_item_key(sdk_item),
                     action="adopt",
                     legacy_memory_id=None,
                     canonical_memory_id=sdk_item.memory_id,
@@ -487,6 +523,25 @@ def classify_memory_inventory(
     return tuple(decisions)
 
 
+def _sdk_inventory_key(
+    item: SdkMemoryInventory,
+) -> tuple[str, str | None, str | None]:
+    return (
+        item.memory_id,
+        item.productivity_kind,
+        item.productivity_variant,
+    )
+
+
+def _sdk_item_key(item: SdkMemoryInventory) -> str:
+    namespace = (
+        f"{item.productivity_variant}:{item.productivity_kind}"
+        if item.productivity_kind is not None
+        else "chat"
+    )
+    return f"sdk:{namespace}:{item.memory_id}"
+
+
 async def read_sdk_memory_inventory(
     client: SdkMigrationClient,
     *,
@@ -494,7 +549,7 @@ async def read_sdk_memory_inventory(
     user_id: str = "local",
     page_size: int = 500,
 ) -> tuple[SdkMemoryInventory, ...]:
-    records: dict[str, SdkMemoryInventory] = {}
+    records: list[SdkMemoryInventory] = []
     offset = 0
     while True:
         page = await client.list_memories(
@@ -505,41 +560,45 @@ async def read_sdk_memory_inventory(
             order="asc",
         )
         for memory in page.memories:
-            records[memory.memory_id] = SdkMemoryInventory(
-                memory_id=memory.memory_id,
-                user_id=memory.user_id,
-                agent_id=memory.agent_id,
-                content_hash=content_hash(memory.content),
-                status=memory.status,
+            records.append(
+                SdkMemoryInventory(
+                    memory_id=memory.memory_id,
+                    user_id=memory.user_id,
+                    agent_id=memory.agent_id,
+                    content_hash=content_hash(memory.content),
+                    status=memory.status,
+                )
             )
         consumed = len(page.memories)
         offset += consumed
         if consumed == 0 or offset >= page.total:
             break
-    for item in legacy:
-        if (
-            item.productivity_kind is None
-            or item.canonical_memory_id in records
-        ):
-            continue
-        resolved = await client.read_productivity_memory(
-            item.canonical_memory_id,
-            kind=item.productivity_kind,
-            variant=item.productivity_variant,
+    del legacy
+    for memory in await client.list_productivity_memories():
+        try:
+            records.append(
+                SdkMemoryInventory(
+                    memory_id=str(memory["memory_id"]),
+                    user_id=str(memory["user_id"]),
+                    agent_id=str(memory["agent_id"]),
+                    content_hash=content_hash(str(memory["content"])),
+                    status=str(memory["status"]),
+                    productivity_kind=str(memory["kind"]),
+                    productivity_variant=str(memory["variant"]),
+                )
+            )
+        except KeyError as error:
+            raise RuntimeError("invalid productivity inventory row") from error
+    return tuple(
+        sorted(
+            records,
+            key=lambda item: (
+                item.memory_id,
+                item.productivity_kind or "",
+                item.productivity_variant or "",
+            ),
         )
-        if resolved is None:
-            continue
-        memory, actual_variant = resolved
-        records[memory.memory_id] = SdkMemoryInventory(
-            memory_id=memory.memory_id,
-            user_id=memory.user_id,
-            agent_id=memory.agent_id,
-            content_hash=content_hash(memory.content),
-            status=memory.status or "active",
-            productivity_kind=item.productivity_kind,
-            productivity_variant=actual_variant,
-        )
-    return tuple(records[key] for key in sorted(records))
+    )
 
 
 def record_memory_migration_plan(
@@ -551,12 +610,12 @@ def record_memory_migration_plan(
 ) -> tuple[MemoryMigrationDecision, ...]:
     decisions = classify_memory_inventory(legacy, sdk)
     legacy_by_id = {item.legacy_memory_id: item for item in legacy}
-    sdk_by_id = {item.memory_id: item for item in sdk}
+    sdk_by_item_key = {_sdk_item_key(item): item for item in sdk}
     for decision in decisions:
         source_hash = (
             legacy_by_id[decision.legacy_memory_id].content_hash
             if decision.legacy_memory_id is not None
-            else sdk_by_id[decision.canonical_memory_id].content_hash
+            else sdk_by_item_key[decision.item_key].content_hash
         )
         operation_key = hashlib.sha256(
             f"{migration_id}:{decision.item_key}:{decision.action}:{source_hash}".encode()

@@ -101,6 +101,55 @@ class HySdkMigration:
         )
         return _memory_page(raw, limit=limit, offset=offset)
 
+    async def list_productivity_memories(self) -> tuple[dict[str, object], ...]:
+        raw = await _sdk_call(
+            "hy_sdk_productivity_inventory_failed",
+            self._loop_thread.run,
+            self._list_productivity_memories(),
+        )
+        return tuple(raw)
+
+    async def _list_productivity_memories(self) -> list[dict[str, object]]:
+        records: list[dict[str, object]] = []
+        for variant in ("working", "coding"):
+            store = await self.client._coding_store_for_exact_get(variant)
+            if store is None:
+                continue
+            with store._lock:
+                experiences = store._conn.execute(
+                    "SELECT experience_id,user_id,agent_id,solution "
+                    "FROM coding_memory_meta ORDER BY experience_id"
+                ).fetchall()
+                facts = store._conn.execute(
+                    "SELECT fact_id,user_id,agent_id,statement,status "
+                    "FROM working_fact ORDER BY fact_id"
+                ).fetchall()
+            records.extend(
+                {
+                    "memory_id": str(row["experience_id"]),
+                    "content": str(row["solution"]),
+                    "status": "active",
+                    "user_id": str(row["user_id"]),
+                    "agent_id": str(row["agent_id"]),
+                    "kind": "experience",
+                    "variant": variant,
+                }
+                for row in experiences
+            )
+            records.extend(
+                {
+                    "memory_id": str(row["fact_id"]),
+                    "content": str(row["statement"]),
+                    "status": str(row["status"]),
+                    "user_id": str(row["user_id"]),
+                    "agent_id": str(row["agent_id"]),
+                    "kind": "fact",
+                    "variant": variant,
+                }
+                for row in facts
+            )
+        return records
+
     async def read_productivity_memory(
         self,
         memory_id: str,
