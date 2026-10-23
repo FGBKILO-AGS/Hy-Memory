@@ -14,13 +14,14 @@ from pathlib import Path
 import pytest
 
 PRIMARY_MARKERS = ("unit", "contract", "integration", "performance", "live")
-EXPECTED_TEST_FILE_COUNT = 322
-EXPECTED_TEST_FILES_SHA256 = "d242783adb4015ebdbb5c099f3b5aa88a99c828ca6fddc8ca8d6c74c56e48945"
+EXPECTED_TEST_FILE_COUNT = 323
+EXPECTED_TEST_FILES_SHA256 = "10a2327bd047a281511980f5b558c1ea64d857f0fff550e4bd96cb53800205ba"
 
 # Pure transformations, validation models, parity checks and state machines.
 # This list is intentionally small: uncertain files default to contract.
 UNIT_FILES = frozenset(
     {
+        "test_cli_migration_error_codes.py",
         "test_context_v2_contract_parity.py",
         "test_daemon_contract.py",
         "test_diagnostic_payload_keys.py",

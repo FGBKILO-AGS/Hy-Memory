@@ -1933,6 +1933,8 @@ const baseEnglishMessages = {
   languageLoadError: "Could not load the language setting. Please retry.",
   nativeErrorTitle: "MemHub could not start",
   startupPreparing: "Starting and preparing the memory service…",
+  startupUpgradeHint:
+    "The first launch or a memory-data upgrade can take a few minutes. MemHub opens automatically when it is done.",
 } as const;
 
 export const englishMessages = {

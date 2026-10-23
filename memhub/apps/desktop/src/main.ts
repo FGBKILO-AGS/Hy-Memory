@@ -113,6 +113,7 @@ import {
   installServiceWithDisabledFallback,
   isInstalledApplicationsApp,
   stableRuntimeErrorCode,
+  stableRuntimeUserMessage,
   startStableRuntimeRepair,
 } from "./stable-runtime";
 import { STARTUP_SCREEN_URL, startupScreenHtml } from "./startup-screen";
@@ -1098,7 +1099,7 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
             ? "blocked"
             : "skipped",
       ...(migration.code === undefined ? {} : { error_code: migration.code }),
-      details: { state: migration.state },
+      details: { runtime_state: migration.state },
     });
     requireCompletedStartupSdkMigration(migration);
   };
@@ -1671,7 +1672,7 @@ if (desktopVersion !== null) {
           languagePreferences?.read().locale ?? "zh-CN",
           "nativeErrorTitle",
         ),
-        error instanceof Error ? error.message : "desktop_unavailable",
+        stableRuntimeUserMessage(error),
       );
     },
   });
