@@ -130,6 +130,7 @@ This exception does not extend to VDB, Coding, prompt, reconcile, or lifecycle.
 
 - Storage backends：仅 SDK config/env（Chroma/FAISS/Qdrant、Kuzu/Neo4j、cache/history sqlite|mysql、coding sqlite 等）。
 - Queue：pending `memory_write_jobs` 只表示尚未调用 SDK 的待处理请求，因此没有 SDK raw/memory ID。worker 单次调用 SDK `add()`；SDK 内部完成 raw 写入与 extraction/reconciliation，成功后 MemHub 仅将返回的 raw ID / memory IDs 记作 job outcome。旧用户启动迁移在 Runtime writers 停止期间直接操作 SDK 存储，不向公开 `HyMemoryClient` 增加迁移专用方法，也不拆分正常写路径。
+- Raw retention：SDK L1 raw 只保留最近三天；每个完整 turn 只保存真人 user 与 assistant，tool 不进入 raw。高层 Chat/Coding/Working memory 不受该窗口影响。
 - Recall：Host Bridge / Core 先做宿主安装凭据与 tool grant，再调 **SDK search/get**。当前产品没有逐 memory 的 A-harness→B-harness 可见性开关，默认允许跨 harness 搜索；未来若增加来源限制，直接透传 SDK `source` / `include_sources` / `exclude_sources`，不在 MemHub 建 memory ACL。
 - Context wire：cutover marker 提交前只使用 legacy Context v1；提交后 Host Bridge 只使用 SDK-native Context v2。两种 schema 原样校验、原样返回，不把 SDK item 补造成 v1 的 `revision`、`evidence_ids`、`paths` 或 `adoption`，已选择的 v2 路径失败时也不回退 legacy 权威。
 - Ask wire：marker 前保留 Governance Ask v1；marker 后 Web / Host Bridge 只调用 SDK Ask v2。v2 的引用只含 SDK 原生 `memory_id/content/layer/status/source/gmt_created`，生成过程中重复 `get` 校验同一 SDK 快照，不补造 revision、Evidence 或 scopes，SDK 失败不回退 v1。
@@ -138,6 +139,8 @@ This exception does not extend to VDB, Coding, prompt, reconcile, or lifecycle.
 - SDK backfill 只写同文件系统的私有 staging 副本；验证后先原子切换 SDK
   root，再提交 authority marker。切换或 marker 提交失败必须恢复原 live root；
   App 不得在 migration `deferred` 状态继续启动 Runtime。
+- 迁移期间宿主 capture hook 由 Desktop 活跃 PID marker 静默挡住，不再追加
+  Evidence；cutover 后先从宿主 History checkpoint 补齐遗漏 turn，再恢复 live sync。
 - Matter 若未来重新开发，需以新的 SDK-native 合同重新设计，不继承当前占位 schema。
 
 Pinned SDK 版本见发布锁文件 / `MEMORY.md`（随发布更新）。

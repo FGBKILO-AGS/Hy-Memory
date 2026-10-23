@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,18 @@ from one_memory.memory_server.durable_queue import COMPLETED, DurableWriteQueue
 from one_memory.sdk_write_processor import SdkWriteCoordinator
 from one_memory.semantic_deadline import SemanticMemoryHit
 
+logger = logging.getLogger(__name__)
+RAW_RETENTION_DAYS = 3
+RAW_RETENTION_CHECK_SECONDS = 6 * 60 * 60
+_RAW_STATUSES = (
+    "active",
+    "superseded",
+    "shadow",
+    "negated",
+    "conflicted",
+    "archived",
+)
+
 
 class SdkMemoryRuntime:
     """Product services that remain after legacy task/governance writes retire."""
@@ -43,6 +57,68 @@ class SdkMemoryRuntime:
         self.write_queue = write_queue
         self.extraction_settings = extraction_settings
         self.data_dir = data_dir
+        self._raw_retention_task: asyncio.Task[None] | None = None
+
+    def start_raw_retention(self) -> None:
+        if self._raw_retention_task is None or self._raw_retention_task.done():
+            self._raw_retention_task = asyncio.create_task(
+                self._raw_retention_loop(),
+                name="one-memory-sdk-raw-retention",
+            )
+
+    async def prune_expired_raw(self, *, now: datetime | None = None) -> int:
+        cutoff = (now or datetime.now(UTC)) - timedelta(days=RAW_RETENTION_DAYS)
+        cutoff_timestamp = int(cutoff.timestamp())
+        client = await self.read_handle.client()
+        deleted = 0
+        while True:
+            page = await asyncio.to_thread(
+                client.list_memories,
+                user_id="local",
+                layers=["l1_raw"],
+                statuses=list(_RAW_STATUSES),
+                order="asc",
+                limit=500,
+                offset=0,
+            )
+            bucket = page.get("vdb") if isinstance(page, dict) else None
+            rows = bucket.get("memories") if isinstance(bucket, dict) else None
+            if not isinstance(rows, list) or not rows:
+                return deleted
+            expired = [
+                row
+                for row in rows
+                if isinstance(row, dict)
+                and isinstance(row.get("memory_id"), str)
+                and int(row.get("memory_at") or row.get("gmt_created") or 0)
+                < cutoff_timestamp
+            ]
+            if not expired:
+                return deleted
+            removed_page = 0
+            for row in expired:
+                result = await asyncio.to_thread(client.delete, row["memory_id"])
+                if isinstance(result, dict) and result.get("success") is True:
+                    count = int(result.get("deleted_count") or 0)
+                    deleted += count
+                    removed_page += count
+            if removed_page == 0:
+                return deleted
+
+    async def _raw_retention_loop(self) -> None:
+        while True:
+            await asyncio.sleep(RAW_RETENTION_CHECK_SECONDS)
+            try:
+                removed = await self.prune_expired_raw()
+                if removed:
+                    logger.info("sdk_raw_retention_deleted count=%d", removed)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.warning(
+                    "sdk_raw_retention_failed error_type=%s",
+                    type(error).__name__,
+                )
 
     async def semantic_recall(
         self,
@@ -279,7 +355,12 @@ class SdkMemoryRuntime:
         return None
 
     async def shutdown(self) -> None:
-        return None
+        if self._raw_retention_task is None:
+            return
+        self._raw_retention_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await self._raw_retention_task
+        self._raw_retention_task = None
 
 
 def _agent_ids(raw: object) -> tuple[str, ...]:

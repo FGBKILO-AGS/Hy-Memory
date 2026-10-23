@@ -19,6 +19,9 @@ Before the cutover marker is committed:
 - SDK stores are inspected and backfilled, but are not merged into live search;
 - new imports, writes, queue drains, corrections, deletes and session delivery
   are paused.
+- Host capture commands detect the live Desktop migration fence and return
+  silently without writing Evidence. After cutover, History catch-up runs from
+  the existing source cursor before ordinary live sync.
 
 After the cutover marker is committed:
 
@@ -49,12 +52,9 @@ The migration preflight records and validates:
 - embedding model identity and dimensions;
 - source grants, model profiles, config, queue leases, and pending operations.
 
-The migration fails closed when the installed SDK lacks:
-
-- complete lifecycle/raw inventory;
-- exact raw and exact memory import;
-- durable request outcome lookup;
-- consistent snapshot/export and restore.
+The migration fails closed when it cannot inspect every SDK memory namespace
+(Chat, Coding Experience, Working Fact), write a missing ordinary memory, or
+create and restore a consistent data-plane snapshot.
 
 MemHub tags `v1.0.0` through `v1.0.4` all use the `governed-v2` namespace and
 the same SDK SQL table families (`memory_operations_v2`, `pipeline_logs_v2`,
@@ -71,10 +71,10 @@ because an earlier App wrote it.
 
 While Core and Runtime writers are stopped, build four inventories:
 
-- `E`: Evidence rows and revisions;
+- `E`: completed user/assistant turns from the rolling three-day legacy window;
 - `G`: current Governance rows, statuses, supersession links, and latest content;
 - `M`: task-output mappings from legacy `memory_id` to SDK `hy_memory_id`;
-- `S`: complete SDK inventory, including raw and non-active lifecycle records.
+- `S`: complete SDK inventory, including Coding/Working and non-active records.
 
 Every item must end in exactly one class:
 
@@ -85,7 +85,7 @@ Every item must end in exactly one class:
 | Governance-only | current legacy memory has no SDK entity | exact import without extraction |
 | SDK-only | SDK entity has no legacy mirror | retain and adopt |
 | divergent | both exist but content, owner or lifecycle differs | reconcile explicit user intent or quarantine |
-| raw-only | Evidence has no SDK raw receipt | exact raw import |
+| raw turn missing | canonical recent turn has no matching SDK raw | write one bounded L1 raw turn |
 | unknown outcome | a task may have reached SDK without a confirmed result | SDK outcome inquiry; never blind retry |
 
 An unclassified item blocks cutover.
@@ -102,26 +102,30 @@ The current product has no MemHub revision history or Undo.
 - SDK supersession remains an SDK lifecycle relationship. Existing SDK chains
   are retained. Governance links are used only to repair a missing SDK chain
   during exact import.
+- Mapped Coding Experience and Working Fact IDs are resolved in their native
+  SDK stores and adopted without conversion to Chat layers. A mapped ID missing
+  from its native store blocks cutover rather than fabricating another type.
 - Pending correction/delete records are settled before ordinary backfill.
 
 `update(memory_id, content)` modifies the same SDK ID. There is no product CAS,
 revision number, or restore operation.
 
-## 5. Evidence to SDK raw
+## 5. Legacy Evidence to bounded SDK raw
 
-Evidence must not be replayed through ordinary `add()`: doing so would extract
-and reconcile again, changing semantic memories.
+Evidence rows are message-level legacy storage, not SDK raw chunks. Migration
+uses them only to rebuild completed turns from the three days preceding the
+stable migration start time:
 
-The SDK exact-raw import preserves:
+- one human `user` opener plus its following `assistant` records becomes one
+  deterministic L1 raw node;
+- tool rows and agent-authored user envelopes are excluded;
+- a turn is bounded to 60,000 characters and records whether it was truncated;
+- existing SDK raw outside this canonical set is removed in staging;
+- high-level Chat/Coding/Working memories are retained independently of raw.
 
-- source, conversation/session, workspace, role and author;
-- original event time and stable source ordering;
-- verbatim content and source identity;
-- a deterministic migration key.
-
-The operation is idempotent and returns an SDK raw ID. Evidence revisions and
-repairs are preserved in the migration bundle for audit; only the current
-accepted raw record becomes the normal product read.
+No extraction or reconciliation is rerun while rebuilding raw. After cutover,
+the normal Cursor History catch-up scans forward from its source checkpoint and
+recovers turns skipped while capture was fenced.
 
 ## 6. Full migration bundle
 

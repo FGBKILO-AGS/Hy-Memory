@@ -1,10 +1,15 @@
+import asyncio
 import io
+import json
 import sqlite3
 from types import SimpleNamespace
 
 from one_memory import cli
 from one_memory.config import Settings
+from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
+from one_memory.memory_server.migrations import MIGRATIONS
 from one_memory.runtime_client import RuntimeStatus
+from one_memory.sdk_data_plane_migration import SdkDataPlaneMigrationStore
 
 
 def test_restore_requires_a_source(tmp_path, monkeypatch) -> None:
@@ -436,3 +441,41 @@ def test_sdk_migration_status_distinguishes_empty_and_legacy_data(tmp_path, monk
     assert cli.run(["sdk-migration-status", "--json"], output=required) == 0
     assert '"state": "required"' in required.getvalue()
     assert '"raw": 1' in required.getvalue()
+
+
+def test_sdk_migration_status_exposes_a_resumable_active_identity(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        cli,
+        "load_settings",
+        lambda: Settings(_env_file=None, data_dir=tmp_path),
+    )
+    database = tmp_path / "one-memory.sqlite3"
+    asyncio.run(migrate(SqliteMigrationStore(database), MIGRATIONS))
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO evidence ("
+            "evidence_id,idempotency_key,user_id,source_id,conversation_id,"
+            "content_kind,role,written_by,verbatim,content_hash,revision,"
+            "imported_at,updated_at"
+            ") VALUES ('e1','k','local','cursor','s','raw_conversation',"
+            "'user','person','hello','hash',1,'now','now')"
+        )
+    SdkDataPlaneMigrationStore(database).start(
+        migration_id="sdk-authority-v2-0123456789abcdef",
+        source_runtime_build="17",
+        target_sdk_version="2.0.5",
+        source_schema_version=MIGRATIONS[-1].version,
+        namespace_fingerprint="namespace",
+        backend_fingerprint="backend",
+        backup_bundle_id=(
+            "sdk-authority-v2-0123456789abcdef-pre-cutover"
+        ),
+    )
+
+    output = io.StringIO()
+    assert cli.run(["sdk-migration-status", "--json"], output=output) == 0
+    document = json.loads(output.getvalue())
+    assert document["migration_id"] == "sdk-authority-v2-0123456789abcdef"
+    assert document["bundle_id"] == (
+        "sdk-authority-v2-0123456789abcdef-pre-cutover"
+    )

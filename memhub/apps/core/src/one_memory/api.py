@@ -1151,6 +1151,8 @@ def create_app(
                 extraction_settings=app.state.extraction_settings_store,
                 data_dir=runtime_settings.data_dir,
             )
+            if app.state.memory_authority is MemoryAuthority.SDK:
+                app.state.sdk_memory_runtime.start_raw_retention()
             # C2 owns the single production budget (handle 5s + reserve 250ms,
             # total 5.25s, lease 10s, renew 1s, claim 250ms). The composition
             # root only consumes it: no local formula, and the 250ms claim

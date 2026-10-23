@@ -7,12 +7,13 @@ import json
 import sqlite3
 from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
 from one_memory.database_access import main_database
-from one_memory.hy_sdk_types import HySdkMemoryPage, HySdkRawPage
+from one_memory.hy_sdk_types import HySdkMemoryPage, HySdkMemoryRecord, HySdkRawPage
+from one_memory.input_sanitization import sanitize_model_input
 from one_memory.sdk_data_plane_migration import SdkDataPlaneMigrationStore
 
 
@@ -35,6 +36,8 @@ class LegacyMemoryInventory:
     tags: tuple[str, ...]
     supersedes: tuple[str, ...]
     superseded_by: tuple[str, ...]
+    productivity_kind: str | None = None
+    productivity_variant: str | None = None
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,8 @@ class SdkMemoryInventory:
     agent_id: str
     content_hash: str
     status: str
+    productivity_kind: str | None = None
+    productivity_variant: str | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +97,17 @@ _KIND_LAYER = {
     "schema": "l6_schema",
     "intention": "l7_intention",
 }
+_PRODUCTIVITY_LAYER = {
+    "coding_experience": ("experience", "coding"),
+    "working_experience": ("experience", "working"),
+    "coding_fact": ("fact", "coding"),
+    # Historical receipts called every productivity fact "working_fact",
+    # including facts stored beside a coding-variant experience. Resolve the
+    # actual variant from the SDK exact lookup instead of trusting this label.
+    "working_fact": ("fact", None),
+}
+_RAW_TURN_MAX_CHARACTERS = 60_000
+_RAW_USER_MAX_CHARACTERS = 30_000
 
 SDK_LIFECYCLE_STATUSES = (
     "active",
@@ -161,6 +177,25 @@ class SdkMigrationClient(Protocol):
 
     def delete(self, memory_id: str) -> Awaitable[dict[str, object]]: ...
 
+    def read_productivity_memory(
+        self,
+        memory_id: str,
+        *,
+        kind: str,
+        variant: str | None,
+    ) -> Awaitable[tuple[HySdkMemoryRecord, str] | None]: ...
+
+    def delete_productivity_memory(
+        self,
+        memory_id: str,
+        *,
+        kind: str,
+        variant: str | None,
+        user_id: str,
+    ) -> Awaitable[dict[str, object]]: ...
+
+    def delete_raw(self, raw_id: str) -> Awaitable[dict[str, object]]: ...
+
 
 def read_legacy_memory_inventory(database_path: Path) -> tuple[LegacyMemoryInventory, ...]:
     """Read legacy memory intent without constructing a Governance writer."""
@@ -204,6 +239,7 @@ def read_legacy_memory_inventory(database_path: Path) -> tuple[LegacyMemoryInven
             tags = tuple(value for value in tags_value if isinstance(value, str))
             kind = str(row["kind"])
             status = str(row["status"])
+            productivity = _PRODUCTIVITY_LAYER.get(mapped_layer or "")
             records.append(
                 LegacyMemoryInventory(
                     legacy_memory_id=legacy_id,
@@ -225,6 +261,8 @@ def read_legacy_memory_inventory(database_path: Path) -> tuple[LegacyMemoryInven
                     tags=tags,
                     supersedes=tuple(supersedes.get(legacy_id, ())),
                     superseded_by=tuple(superseded_by.get(legacy_id, ())),
+                    productivity_kind=productivity[0] if productivity else None,
+                    productivity_variant=productivity[1] if productivity else None,
                 )
             )
     return tuple(records)
@@ -239,43 +277,110 @@ def _parse_datetime(value: object) -> datetime | None:
         return None
 
 
-def read_legacy_raw_inventory(database_path: Path) -> tuple[LegacyRawInventory, ...]:
+def read_legacy_raw_inventory(
+    database_path: Path,
+    *,
+    cutoff: datetime,
+) -> tuple[LegacyRawInventory, ...]:
+    """Rebuild recent legacy messages into one user/assistant raw per turn."""
+    if cutoff.tzinfo is None:
+        cutoff = cutoff.replace(tzinfo=UTC)
     with main_database(database_path).read(row_factory=sqlite3.Row) as connection:
         rows = connection.execute(
             """
             SELECT evidence_id,user_id,source_id,workspace,project,
                    conversation_id,message_id,source_ordinal,content_kind,
                    role,written_by,created_at,imported_at,verbatim,content_hash,revision
-            FROM evidence ORDER BY COALESCE(ingest_seq,rowid),evidence_id
-            """
+            FROM evidence
+            WHERE content_kind='raw_conversation'
+              AND COALESCE(created_at, imported_at) >= ?
+              AND (
+                    (role='user' AND written_by='person')
+                    OR role='assistant'
+                  )
+            ORDER BY source_id,conversation_id,COALESCE(created_at,imported_at),
+                     COALESCE(ingest_seq,rowid),evidence_id
+            """,
+            (cutoff.astimezone(UTC).isoformat(),),
         ).fetchall()
-    return tuple(
-        LegacyRawInventory(
-            evidence_id=str(row["evidence_id"]),
-            user_id=str(row["user_id"]),
-            agent_id="one-memory",
-            session_id=str(row["conversation_id"]),
-            source=str(row["source_id"]),
-            content=str(row["verbatim"]),
-            content_hash=str(row["content_hash"]),
-            memory_at=_parse_datetime(row["created_at"] or row["imported_at"]),
-            metadata={
-                key: row[key]
-                for key in (
-                    "workspace",
-                    "project",
-                    "message_id",
-                    "source_ordinal",
-                    "content_kind",
-                    "role",
-                    "written_by",
-                    "revision",
-                )
-                if row[key] is not None
-            },
+    turns: list[LegacyRawInventory] = []
+    current_key: tuple[str, str, str] | None = None
+    current: list[sqlite3.Row] = []
+
+    def finish() -> None:
+        if not current or str(current[0]["role"]) != "user":
+            return
+        assistants = [row for row in current[1:] if str(row["role"]) == "assistant"]
+        if not assistants:
+            return
+        rows_for_turn = [current[0], *assistants]
+        evidence_ids = [str(row["evidence_id"]) for row in rows_for_turn]
+        source = str(current[0]["source_id"])
+        session_id = str(current[0]["conversation_id"])
+        digest = hashlib.sha256(
+            "\0".join((source, session_id, *evidence_ids)).encode()
+        ).hexdigest()
+        user_text = sanitize_model_input(
+            str(rows_for_turn[0]["verbatim"]).strip()
+        )[:_RAW_USER_MAX_CHARACTERS]
+        content_parts = [f"[user]: {user_text}"]
+        truncated = len(str(rows_for_turn[0]["verbatim"]).strip()) > len(user_text)
+        for row in assistants:
+            sanitized = sanitize_model_input(str(row["verbatim"]).strip())
+            text = sanitized
+            prefix = "[assistant]: "
+            remaining = _RAW_TURN_MAX_CHARACTERS - len("\n".join(content_parts)) - 1
+            if remaining <= len(prefix):
+                truncated = True
+                break
+            available = remaining - len(prefix)
+            if len(sanitized) > available:
+                text = text[:available]
+                truncated = True
+            content_parts.append(f"{prefix}{text}")
+            if len(text) < len(sanitized):
+                break
+        content = "\n".join(content_parts)
+        if not content:
+            return
+        turns.append(
+            LegacyRawInventory(
+                evidence_id=f"turn:{digest}",
+                user_id=str(current[0]["user_id"]),
+                agent_id="all-apps",
+                session_id=session_id,
+                source=source,
+                content=content,
+                content_hash=content_hash(content),
+                memory_at=_parse_datetime(
+                    current[0]["created_at"] or current[0]["imported_at"]
+                ),
+                metadata={
+                    "evidence_ids": evidence_ids,
+                    "workspace": current[0]["workspace"],
+                    "project": current[0]["project"],
+                    "input_kind": "legacy_turn",
+                    "truncated": truncated,
+                },
+            )
         )
-        for row in rows
-    )
+
+    for row in rows:
+        key = (
+            str(row["source_id"]),
+            str(row["conversation_id"]),
+            str(row["user_id"]),
+        )
+        if key != current_key:
+            finish()
+            current_key, current = key, []
+        if str(row["role"]) == "user":
+            finish()
+            current = [row]
+        elif current:
+            current.append(row)
+    finish()
+    return tuple(turns)
 
 
 def classify_memory_inventory(
@@ -313,6 +418,17 @@ def classify_memory_inventory(
             )
             continue
         if current is None:
+            if item.productivity_kind is not None:
+                decisions.append(
+                    MemoryMigrationDecision(
+                        item_key=f"memory:{item.legacy_memory_id}",
+                        action="quarantine",
+                        legacy_memory_id=item.legacy_memory_id,
+                        canonical_memory_id=item.canonical_memory_id,
+                        reason="mapped_productivity_memory_missing",
+                    )
+                )
+                continue
             decisions.append(
                 MemoryMigrationDecision(
                     item_key=f"memory:{item.legacy_memory_id}",
@@ -323,7 +439,19 @@ def classify_memory_inventory(
                 )
             )
             continue
-        if (
+        if item.productivity_kind is not None and (
+            current.user_id == item.user_id
+            and current.productivity_kind == item.productivity_kind
+            and (
+                item.productivity_variant is None
+                or current.productivity_variant == item.productivity_variant
+            )
+        ):
+            action = (
+                "matched" if item.legacy_memory_id == item.canonical_memory_id else "record_alias"
+            )
+            reason = "existing_productivity_identity"
+        elif (
             current.content_hash == item.content_hash
             and current.status == item.status
             and current.user_id == item.user_id
@@ -362,6 +490,7 @@ def classify_memory_inventory(
 async def read_sdk_memory_inventory(
     client: SdkMigrationClient,
     *,
+    legacy: tuple[LegacyMemoryInventory, ...] = (),
     user_id: str = "local",
     page_size: int = 500,
 ) -> tuple[SdkMemoryInventory, ...]:
@@ -387,6 +516,29 @@ async def read_sdk_memory_inventory(
         offset += consumed
         if consumed == 0 or offset >= page.total:
             break
+    for item in legacy:
+        if (
+            item.productivity_kind is None
+            or item.canonical_memory_id in records
+        ):
+            continue
+        resolved = await client.read_productivity_memory(
+            item.canonical_memory_id,
+            kind=item.productivity_kind,
+            variant=item.productivity_variant,
+        )
+        if resolved is None:
+            continue
+        memory, actual_variant = resolved
+        records[memory.memory_id] = SdkMemoryInventory(
+            memory_id=memory.memory_id,
+            user_id=memory.user_id,
+            agent_id=memory.agent_id,
+            content_hash=content_hash(memory.content),
+            status=memory.status or "active",
+            productivity_kind=item.productivity_kind,
+            productivity_variant=actual_variant,
+        )
     return tuple(records[key] for key in sorted(records))
 
 
@@ -457,7 +609,15 @@ async def execute_memory_migration_plan(
             continue
         if decision.action in {"delete", "verified_deleted"}:
             if decision.action == "delete":
-                await client.delete(decision.canonical_memory_id)
+                if item is not None and item.productivity_kind is not None:
+                    await client.delete_productivity_memory(
+                        decision.canonical_memory_id,
+                        kind=item.productivity_kind,
+                        variant=item.productivity_variant,
+                        user_id=item.user_id,
+                    )
+                else:
+                    await client.delete(decision.canonical_memory_id)
             store.settle_item(
                 migration_id=migration_id,
                 item_key=decision.item_key,
@@ -595,10 +755,10 @@ def classify_raw_inventory(
             decisions.append(
                 RawMigrationDecision(
                     item_key=f"sdk-raw:{raw.raw_id}",
-                    action="adopt",
+                    action="delete",
                     evidence_id=None,
                     raw_id=raw.raw_id,
-                    reason="sdk_only",
+                    reason="outside_canonical_three_day_turns",
                 )
             )
     return tuple(decisions)
@@ -644,11 +804,12 @@ async def execute_raw_migration_plan(
 ) -> None:
     legacy_by_id = {item.evidence_id: item for item in legacy}
     for decision in decisions:
-        if decision.action == "adopt":
+        if decision.action == "delete":
+            await client.delete_raw(decision.raw_id)
             store.settle_item(
                 migration_id=migration_id,
                 item_key=decision.item_key,
-                state="adopted",
+                state="deleted",
                 target_memory_id=decision.raw_id,
             )
             continue
@@ -677,8 +838,15 @@ async def execute_raw_migration_plan(
             target_memory_id=decision.raw_id,
             target_hash=item.content_hash,
         )
-        store.record_raw_alias(
-            migration_id=migration_id,
-            legacy_evidence_id=item.evidence_id,
-            canonical_raw_id=decision.raw_id,
-        )
+        evidence_ids = item.metadata.get("evidence_ids")
+        for evidence_id in (
+            evidence_ids
+            if isinstance(evidence_ids, list)
+            else [item.evidence_id]
+        ):
+            if isinstance(evidence_id, str) and evidence_id:
+                store.record_raw_alias(
+                    migration_id=migration_id,
+                    legacy_evidence_id=evidence_id,
+                    canonical_raw_id=decision.raw_id,
+                )
