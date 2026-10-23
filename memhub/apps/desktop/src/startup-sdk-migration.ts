@@ -63,8 +63,8 @@ export async function runStartupSdkMigration(
     status.document.authority === "sdk" &&
     status.document.state === "cleanup_required"
   ) {
-    return fence(options.dataDir, () =>
-      captureFence(options.dataDir, async () => {
+    return captureFence(options.dataDir, () =>
+      fence(options.dataDir, async () => {
         const cleanup = await execute(
           options.core,
           ["sdk-cleanup", "--yes", "--json"],
@@ -97,8 +97,8 @@ export async function runStartupSdkMigration(
     ? previousMigrationId
     : `${MIGRATION_PREFIX}-${generation}`;
   const bundleId = canResume ? previousBundleId : `${migrationId}-pre-cutover`;
-  return fence(options.dataDir, () =>
-    captureFence(options.dataDir, async () => {
+  return captureFence(options.dataDir, () =>
+    fence(options.dataDir, async () => {
       const bundle = await execute(
         options.core,
         [

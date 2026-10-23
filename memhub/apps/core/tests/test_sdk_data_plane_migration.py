@@ -442,7 +442,7 @@ def test_inventory_classification_covers_every_legacy_and_sdk_state():
     assert by_key["memory:delete-existing"].action == "delete"
     assert by_key["memory:divergent"].action == "quarantine"
     assert by_key["memory:unknown-layer"].reason == "legacy_layer_unknown"
-    assert by_key["sdk:sdk-only"].action == "adopt"
+    assert by_key["sdk:chat:sdk-only"].action == "adopt"
     assert len(decisions) == 8
 
 
@@ -484,9 +484,21 @@ class _MigrationClient:
                 return memory, candidate
         return None
 
-    async def delete_productivity_memory(
-        self, memory_id, *, kind, variant, user_id
-    ):
+    async def list_productivity_memories(self):
+        return tuple(
+            {
+                "memory_id": memory.memory_id,
+                "content": memory.content,
+                "status": memory.status or "active",
+                "user_id": memory.user_id,
+                "agent_id": memory.agent_id,
+                "kind": kind,
+                "variant": variant,
+            }
+            for (_memory_id, kind, variant), memory in self.productivity.items()
+        )
+
+    async def delete_productivity_memory(self, memory_id, *, kind, variant, user_id):
         self.deleted_productivity.append((memory_id, kind, variant, user_id))
         return {"success": True, "deleted_count": 1}
 
@@ -568,10 +580,17 @@ def test_sdk_inventory_adopts_mapped_productivity_ids_and_deletes_user_removed_f
             user_id="local",
             agent_id="scope",
         ),
+        ("sdk-only", "experience", "working"): HySdkMemoryRecord(
+            memory_id="sdk-only",
+            content="sdk only",
+            layer="experience",
+            status="active",
+            is_latest=True,
+            user_id="local",
+            agent_id="another-scope",
+        ),
     }
-    sdk = asyncio.run(
-        read_sdk_memory_inventory(client, legacy=(active, deleted))
-    )
+    sdk = asyncio.run(read_sdk_memory_inventory(client, legacy=(active, deleted)))
     _start(store)
     decisions = record_memory_migration_plan(
         store,
@@ -582,6 +601,7 @@ def test_sdk_inventory_adopts_mapped_productivity_ids_and_deletes_user_removed_f
     by_key = {decision.item_key: decision for decision in decisions}
     assert by_key["memory:exp"].action == "matched"
     assert by_key["memory:fact"].action == "delete"
+    assert by_key["sdk:working:experience:sdk-only"].action == "adopt"
 
     asyncio.run(
         execute_memory_migration_plan(
@@ -593,9 +613,26 @@ def test_sdk_inventory_adopts_mapped_productivity_ids_and_deletes_user_removed_f
         )
     )
     assert client.imported == []
-    assert client.deleted_productivity == [
-        ("fact", "fact", None, "local")
-    ]
+    assert client.deleted_productivity == [("fact", "fact", None, "local")]
+
+
+def test_productivity_id_in_both_variants_is_quarantined():
+    legacy = (_legacy("fact", layer="working_fact"),)
+    sdk = (
+        _sdk(
+            "fact",
+            productivity_kind="fact",
+            productivity_variant="working",
+        ),
+        _sdk(
+            "fact",
+            productivity_kind="fact",
+            productivity_variant="coding",
+        ),
+    )
+    (decision, *_sdk_only) = classify_memory_inventory(legacy, sdk)
+    assert decision.action == "quarantine"
+    assert decision.reason == "sdk_memory_id_ambiguous"
 
 
 def test_recorded_plan_executes_import_delete_alias_and_adoption(store):
@@ -650,42 +687,109 @@ def test_legacy_raw_inventory_builds_recent_user_assistant_turns_without_tools(s
             """,
             (
                 (
-                    "u1", "k1", "local", "cursor", "/repo", "project",
-                    "session", "m1", "1", "raw_conversation", "user",
-                    "person", "2026-10-22T00:00:00+00:00", "question",
-                    content_hash("question"), 1, "2026-10-22T00:00:00+00:00",
-                    "2026-10-22T00:00:00+00:00", 1,
+                    "u1",
+                    "k1",
+                    "local",
+                    "cursor",
+                    "/repo",
+                    "project",
+                    "session",
+                    "m1",
+                    "1",
+                    "raw_conversation",
+                    "user",
+                    "person",
+                    "2026-10-22T00:00:00+00:00",
+                    "question",
+                    content_hash("question"),
+                    1,
+                    "2026-10-22T00:00:00+00:00",
+                    "2026-10-22T00:00:00+00:00",
+                    1,
                 ),
                 (
-                    "t1", "k2", "local", "cursor", "/repo", "project",
-                    "session", "m2", "2", "raw_conversation", "tool",
-                    "tool", "2026-10-22T00:00:01+00:00", "secret tool output",
-                    content_hash("secret tool output"), 1,
+                    "t1",
+                    "k2",
+                    "local",
+                    "cursor",
+                    "/repo",
+                    "project",
+                    "session",
+                    "m2",
+                    "2",
+                    "raw_conversation",
+                    "tool",
+                    "tool",
                     "2026-10-22T00:00:01+00:00",
-                    "2026-10-22T00:00:01+00:00", 2,
+                    "secret tool output",
+                    content_hash("secret tool output"),
+                    1,
+                    "2026-10-22T00:00:01+00:00",
+                    "2026-10-22T00:00:01+00:00",
+                    2,
                 ),
                 (
-                    "a1", "k3", "local", "cursor", "/repo", "project",
-                    "session", "m3", "3", "raw_conversation", "assistant",
-                    "agent", "2026-10-22T00:00:02+00:00", "answer",
-                    content_hash("answer"), 1, "2026-10-22T00:00:02+00:00",
-                    "2026-10-22T00:00:02+00:00", 3,
+                    "a1",
+                    "k3",
+                    "local",
+                    "cursor",
+                    "/repo",
+                    "project",
+                    "session",
+                    "m3",
+                    "3",
+                    "raw_conversation",
+                    "assistant",
+                    "agent",
+                    "2026-10-22T00:00:02+00:00",
+                    "answer",
+                    content_hash("answer"),
+                    1,
+                    "2026-10-22T00:00:02+00:00",
+                    "2026-10-22T00:00:02+00:00",
+                    3,
                 ),
                 (
-                    "old-u", "k4", "local", "cursor", "/repo", "project",
-                    "old-session", "m4", "4", "raw_conversation", "user",
-                    "person", "2026-10-01T00:00:00+00:00", "old question",
-                    content_hash("old question"), 1,
+                    "old-u",
+                    "k4",
+                    "local",
+                    "cursor",
+                    "/repo",
+                    "project",
+                    "old-session",
+                    "m4",
+                    "4",
+                    "raw_conversation",
+                    "user",
+                    "person",
                     "2026-10-01T00:00:00+00:00",
-                    "2026-10-01T00:00:00+00:00", 4,
+                    "old question",
+                    content_hash("old question"),
+                    1,
+                    "2026-10-01T00:00:00+00:00",
+                    "2026-10-01T00:00:00+00:00",
+                    4,
                 ),
                 (
-                    "old-a", "k5", "local", "cursor", "/repo", "project",
-                    "old-session", "m5", "5", "raw_conversation", "assistant",
-                    "agent", "2026-10-01T00:00:01+00:00", "old answer",
-                    content_hash("old answer"), 1,
+                    "old-a",
+                    "k5",
+                    "local",
+                    "cursor",
+                    "/repo",
+                    "project",
+                    "old-session",
+                    "m5",
+                    "5",
+                    "raw_conversation",
+                    "assistant",
+                    "agent",
                     "2026-10-01T00:00:01+00:00",
-                    "2026-10-01T00:00:01+00:00", 5,
+                    "old answer",
+                    content_hash("old answer"),
+                    1,
+                    "2026-10-01T00:00:01+00:00",
+                    "2026-10-01T00:00:01+00:00",
+                    5,
                 ),
             ),
         )
@@ -701,6 +805,86 @@ def test_legacy_raw_inventory_builds_recent_user_assistant_turns_without_tools(s
     assert raw.metadata["evidence_ids"] == ["u1", "a1"]
     assert "tool" not in raw.content
     assert raw.memory_at.isoformat() == "2026-10-22T00:00:00+00:00"
+
+
+def test_raw_turn_cutoff_uses_completion_time_and_keeps_workspaces_separate(store):
+    database = store.database_path
+    rows = (
+        ("u0", "k0", "shared", "w0", "user", "person", "before", "2026-10-19T23:59:00+00:00", 1),
+        ("a0", "k1", "shared", "w0", "assistant", "agent", "after", "2026-10-20T00:01:00+00:00", 2),
+        ("u1", "k2", "same-session", "w1", "user", "person", "one", "2026-10-21T00:00:00+00:00", 3),
+        (
+            "a1",
+            "k3",
+            "same-session",
+            "w1",
+            "assistant",
+            "agent",
+            "first",
+            "2026-10-21T00:01:00+00:00",
+            4,
+        ),
+        ("u2", "k4", "same-session", "w2", "user", "person", "two", "2026-10-21T00:02:00+00:00", 5),
+        (
+            "a2",
+            "k5",
+            "same-session",
+            "w2",
+            "assistant",
+            "agent",
+            "second",
+            "2026-10-21T00:03:00+00:00",
+            6,
+        ),
+    )
+    with main_database(database).write() as connection, connection:
+        connection.executemany(
+            """
+            INSERT INTO evidence (
+                evidence_id,idempotency_key,user_id,source_id,conversation_id,
+                workspace,content_kind,role,written_by,verbatim,content_hash,
+                revision,created_at,imported_at,updated_at,ingest_seq
+            ) VALUES (?,?,'local','cursor',?,?,'raw_conversation',?,?,?,? ,1,?,?,?,?)
+            """,
+            tuple(
+                (
+                    evidence_id,
+                    key,
+                    session,
+                    workspace,
+                    role,
+                    written_by,
+                    text,
+                    content_hash(text),
+                    timestamp,
+                    timestamp,
+                    timestamp,
+                    sequence,
+                )
+                for (
+                    evidence_id,
+                    key,
+                    session,
+                    workspace,
+                    role,
+                    written_by,
+                    text,
+                    timestamp,
+                    sequence,
+                ) in rows
+            ),
+        )
+
+    turns = read_legacy_raw_inventory(
+        database,
+        cutoff=datetime.fromisoformat("2026-10-20T00:00:00+00:00"),
+    )
+    assert {turn.content for turn in turns} == {
+        "[user]: before\n[assistant]: after",
+        "[user]: one\n[assistant]: first",
+        "[user]: two\n[assistant]: second",
+    }
+    assert {turn.metadata["workspace"] for turn in turns} == {"w0", "w1", "w2"}
 
 
 def _legacy_raw(evidence_id, *, content="verbatim"):
@@ -937,9 +1121,7 @@ class _MigrationVectorStore:
 
     async def list_by_user(self, *, user_id, layers, **_kwargs):
         return [
-            node
-            for node in self.nodes.values()
-            if node.user_id == user_id and node.layer in layers
+            node for node in self.nodes.values() if node.user_id == user_id and node.layer in layers
         ]
 
 
@@ -969,10 +1151,19 @@ class _MigrationFactVector:
 class _MigrationCodingStore:
     def __init__(self):
         self._conn = sqlite3.connect(":memory:", check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
         self._conn.execute(
-            "CREATE TABLE working_fact (fact_id TEXT PRIMARY KEY, user_id TEXT)"
+            "CREATE TABLE coding_memory_meta ("
+            "experience_id TEXT PRIMARY KEY,user_id TEXT,agent_id TEXT,solution TEXT)"
         )
-        self._conn.execute("INSERT INTO working_fact VALUES ('fact-1','local')")
+        self._conn.execute(
+            "CREATE TABLE working_fact ("
+            "fact_id TEXT PRIMARY KEY,user_id TEXT,agent_id TEXT,"
+            "statement TEXT,status TEXT)"
+        )
+        self._conn.execute(
+            "INSERT INTO working_fact VALUES ('fact-1','local','scope','fact body','active')"
+        )
         self._conn.commit()
         self._lock = threading.Lock()
         self._fact_vec = _MigrationFactVector()
@@ -1044,6 +1235,7 @@ def test_offline_migration_writes_sdk_stores_without_public_client_import_method
         )
     )
     raw_page = asyncio.run(migration.read_raw_inventory(user_id="local"))
+    productivity = asyncio.run(migration.list_productivity_memories())
     deleted = asyncio.run(
         migration.delete_productivity_memory(
             "fact-1",
@@ -1056,17 +1248,23 @@ def test_offline_migration_writes_sdk_stores_without_public_client_import_method
     assert raw_result["raw_id"] == "raw-1"
     assert memory_result["memory_id"] == "memory-1"
     assert [item.raw_id for item in raw_page.raw] == ["raw-1"]
+    assert productivity == (
+        {
+            "memory_id": "fact-1",
+            "content": "fact body",
+            "status": "active",
+            "user_id": "local",
+            "agent_id": "scope",
+            "kind": "fact",
+            "variant": "coding",
+        },
+    )
     assert client._vector_store.nodes["raw-1"].layer is MemoryLayer.L1_RAW
     assert client._vector_store.nodes["memory-1"].status is MemoryStatus.ACTIVE
     assert client._graph_store.nodes["memory-1"].content == "prefers tea"
     assert deleted["deleted_count"] == 1
     assert client._coding._fact_vec.deleted == ["fact-1"]
-    assert (
-        client._coding._conn.execute(
-            "SELECT COUNT(*) FROM working_fact"
-        ).fetchone()[0]
-        == 0
-    )
+    assert client._coding._conn.execute("SELECT COUNT(*) FROM working_fact").fetchone()[0] == 0
     assert not hasattr(client, "import_raw")
     assert not hasattr(client, "import_memory_exact")
 
