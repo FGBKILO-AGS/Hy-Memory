@@ -9,6 +9,7 @@ import sqlite3
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from one_memory.database_access import main_database
@@ -406,14 +407,27 @@ async def run_sdk_data_plane_backfill(
     store.set_phase(migration_id, phase="inventory", state="running")
 
     legacy_memories = read_legacy_memory_inventory(database_path)
-    sdk_memories = await read_sdk_memory_inventory(client)
+    sdk_memories = await read_sdk_memory_inventory(client, legacy=legacy_memories)
     memory_decisions = record_memory_migration_plan(
         store,
         migration_id=migration_id,
         legacy=legacy_memories,
         sdk=sdk_memories,
     )
-    legacy_raw = read_legacy_raw_inventory(database_path)
+    with main_database(database_path).read(row_factory=sqlite3.Row) as database:
+        started = database.execute(
+            "SELECT created_at FROM sdk_data_plane_migrations WHERE migration_id=?",
+            (migration_id,),
+        ).fetchone()
+    if started is None:
+        raise DataPlaneMigrationError("sdk_data_plane_migration_start_missing")
+    started_at = datetime.fromisoformat(str(started["created_at"]))
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=UTC)
+    legacy_raw = read_legacy_raw_inventory(
+        database_path,
+        cutoff=started_at.astimezone(UTC) - timedelta(days=3),
+    )
     sdk_raw = await read_sdk_raw_inventory(client)
     raw_decisions = record_raw_migration_plan(
         store,

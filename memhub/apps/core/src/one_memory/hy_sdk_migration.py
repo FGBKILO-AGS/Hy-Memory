@@ -58,6 +58,16 @@ class MigrationClient(Protocol):
 
     def get_write_outcome(self, request_id: str) -> Mapping[str, object] | None: ...
 
+    def get(
+        self,
+        memory_id: str,
+        *,
+        kind: str | None = None,
+        variant: str | None = None,
+    ) -> Mapping[str, object] | None: ...
+
+    async def _coding_store_for_exact_get(self, variant: str) -> Any: ...
+
 
 class HySdkMigration:
     """Typed offline adapter over one initialized SDK data plane."""
@@ -90,6 +100,89 @@ class HySdkMigration:
             order=order,
         )
         return _memory_page(raw, limit=limit, offset=offset)
+
+    async def read_productivity_memory(
+        self,
+        memory_id: str,
+        *,
+        kind: str,
+        variant: str | None,
+    ) -> tuple[HySdkMemoryRecord, str] | None:
+        raw = await _sdk_call(
+            "hy_sdk_productivity_get_failed",
+            self.client.get,
+            memory_id,
+            kind=kind,
+            variant=variant,
+        )
+        if raw is None:
+            return None
+        if not isinstance(raw, Mapping) or raw.get("variant") not in {
+            "working",
+            "coding",
+        }:
+            raise HySdkMigrationError("hy_sdk_productivity_variant_invalid")
+        return HySdkMemoryRecord.from_sdk(raw), str(raw["variant"])
+
+    async def delete_productivity_memory(
+        self,
+        memory_id: str,
+        *,
+        kind: str,
+        variant: str | None,
+        user_id: str,
+    ) -> dict[str, object]:
+        raw = await _sdk_call(
+            "hy_sdk_productivity_delete_failed",
+            self._loop_thread.run,
+            self._delete_productivity_memory(
+                memory_id,
+                kind=kind,
+                variant=variant,
+                user_id=user_id,
+            ),
+        )
+        return _successful_result(raw, "hy_sdk_productivity_delete_failed")
+
+    async def _delete_productivity_memory(
+        self,
+        memory_id: str,
+        *,
+        kind: str,
+        variant: str | None,
+        user_id: str,
+    ) -> dict[str, object]:
+        if kind not in {"experience", "fact"}:
+            raise ValueError("productivity kind must be experience or fact")
+        matches: list[tuple[Any, str]] = []
+        for candidate in ((variant,) if variant is not None else ("working", "coding")):
+            store = await self.client._coding_store_for_exact_get(candidate)
+            if store is None:
+                continue
+            existing = (
+                await store.get_by_id(memory_id, user_id=user_id)
+                if kind == "experience"
+                else await store.get_fact(memory_id, user_id=user_id)
+            )
+            if existing is not None:
+                matches.append((store, candidate))
+        if len(matches) > 1:
+            raise ValueError("productivity memory id is ambiguous across variants")
+        if not matches:
+            return {"success": True, "deleted_count": 0}
+        store, _actual_variant = matches[0]
+        if kind == "experience":
+            deleted = await store.delete(memory_id, user_id=user_id)
+        elif kind == "fact":
+            await store._fact_vec.delete(memory_id)
+            with store._lock:
+                store._conn.execute(
+                    "DELETE FROM working_fact WHERE fact_id=? AND user_id=?",
+                    (memory_id, user_id),
+                )
+                store._conn.commit()
+            deleted = True
+        return {"success": True, "deleted_count": int(deleted)}
 
     async def write_legacy_memory(
         self,
@@ -267,7 +360,7 @@ class HySdkMigration:
         nodes = await self._vector_store.list_by_user(
             user_id=user_id,
             agent_id=agent_id,
-            status_filter=[MemoryStatus.ACTIVE],
+            status_filter=list(MemoryStatus),
             layers=[MemoryLayer.L1_RAW],
             include_sources=[source] if source else None,
             limit=100_000,
@@ -317,6 +410,21 @@ class HySdkMigration:
             ),
         )
         return _successful_result(raw, "hy_sdk_raw_import_failed")
+
+    async def delete_raw(self, raw_id: str) -> dict[str, object]:
+        raw = await _sdk_call(
+            "hy_sdk_raw_delete_failed",
+            self._loop_thread.run,
+            self._delete_raw(raw_id),
+        )
+        return _successful_result(raw, "hy_sdk_raw_delete_failed")
+
+    async def _delete_raw(self, raw_id: str) -> dict[str, object]:
+        existing = await self._vector_store.get_by_id(raw_id)
+        if existing is None or existing.layer is not MemoryLayer.L1_RAW:
+            return {"success": True, "deleted_count": 0}
+        deleted = await self._vector_store.delete(raw_id)
+        return {"success": True, "deleted_count": int(bool(deleted))}
 
     async def _write_legacy_raw(
         self,

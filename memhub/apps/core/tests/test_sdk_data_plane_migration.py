@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
+import threading
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from hy_memory.models.memory import MemoryLayer, MemoryStatus
@@ -23,6 +27,7 @@ from one_memory.sdk_data_plane_migration import (
     MemoryAuthority,
     SdkDataPlaneMigrationStore,
 )
+from one_memory.sdk_memory_runtime import SdkMemoryRuntime
 from one_memory.sdk_migration_bundle import create_sdk_migration_bundle
 from one_memory.sdk_migration_inventory import (
     LegacyMemoryInventory,
@@ -366,6 +371,12 @@ def _legacy(
     status="active",
     layer="l2_fact",
 ):
+    productivity = {
+        "coding_experience": ("experience", "coding"),
+        "working_experience": ("experience", "working"),
+        "coding_fact": ("fact", "coding"),
+        "working_fact": ("fact", None),
+    }.get(layer)
     return LegacyMemoryInventory(
         legacy_memory_id=legacy_id,
         canonical_memory_id=canonical_id or legacy_id,
@@ -380,16 +391,27 @@ def _legacy(
         tags=(),
         supersedes=(),
         superseded_by=(),
+        productivity_kind=productivity[0] if productivity else None,
+        productivity_variant=productivity[1] if productivity else None,
     )
 
 
-def _sdk(memory_id, *, content="body", status="active"):
+def _sdk(
+    memory_id,
+    *,
+    content="body",
+    status="active",
+    productivity_kind=None,
+    productivity_variant=None,
+):
     return SdkMemoryInventory(
         memory_id=memory_id,
         user_id="local",
         agent_id="one-memory",
         content_hash=content_hash(content),
         status=status,
+        productivity_kind=productivity_kind,
+        productivity_variant=productivity_variant,
     )
 
 
@@ -430,7 +452,10 @@ class _MigrationClient:
         self.imported = []
         self.imported_raw = []
         self.deleted = []
+        self.deleted_productivity = []
+        self.deleted_raw = []
         self.raw = ()
+        self.productivity = {}
 
     async def list_memories(self, *, limit, offset, **_kwargs):
         page = self.memories[offset : offset + limit]
@@ -449,6 +474,22 @@ class _MigrationClient:
         self.deleted.append(memory_id)
         return {"success": True, "deleted_count": 1}
 
+    async def read_productivity_memory(self, memory_id, *, kind, variant):
+        if variant is not None:
+            memory = self.productivity.get((memory_id, kind, variant))
+            return None if memory is None else (memory, variant)
+        for candidate in ("working", "coding"):
+            memory = self.productivity.get((memory_id, kind, candidate))
+            if memory is not None:
+                return memory, candidate
+        return None
+
+    async def delete_productivity_memory(
+        self, memory_id, *, kind, variant, user_id
+    ):
+        self.deleted_productivity.append((memory_id, kind, variant, user_id))
+        return {"success": True, "deleted_count": 1}
+
     async def read_raw_inventory(self, *, limit, offset, **_kwargs):
         rows = self.raw[offset : offset + limit]
         return HySdkRawPage(
@@ -461,6 +502,10 @@ class _MigrationClient:
     async def write_legacy_raw(self, **kwargs):
         self.imported_raw.append(kwargs)
         return {"success": True, "raw_id": kwargs["raw_id"]}
+
+    async def delete_raw(self, raw_id):
+        self.deleted_raw.append(raw_id)
+        return {"success": True, "deleted_count": 1}
 
     async def get_sdk_memory(self, memory_id):
         return next(
@@ -497,6 +542,59 @@ def test_sdk_inventory_is_paged_without_dropping_lifecycle_records():
         ("active", "active"),
         ("old", "superseded"),
         ("shadow", "shadow"),
+    ]
+
+
+def test_sdk_inventory_adopts_mapped_productivity_ids_and_deletes_user_removed_fact(store):
+    active = _legacy("exp", layer="coding_experience")
+    deleted = _legacy("fact", layer="working_fact", status="deleted")
+    client = _MigrationClient()
+    client.productivity = {
+        ("exp", "experience", "coding"): HySdkMemoryRecord(
+            memory_id="exp",
+            content="sdk experience",
+            layer="experience",
+            status="active",
+            is_latest=True,
+            user_id="local",
+            agent_id="scope",
+        ),
+        ("fact", "fact", "coding"): HySdkMemoryRecord(
+            memory_id="fact",
+            content="sdk fact",
+            layer="fact",
+            status="active",
+            is_latest=True,
+            user_id="local",
+            agent_id="scope",
+        ),
+    }
+    sdk = asyncio.run(
+        read_sdk_memory_inventory(client, legacy=(active, deleted))
+    )
+    _start(store)
+    decisions = record_memory_migration_plan(
+        store,
+        migration_id="m1",
+        legacy=(active, deleted),
+        sdk=sdk,
+    )
+    by_key = {decision.item_key: decision for decision in decisions}
+    assert by_key["memory:exp"].action == "matched"
+    assert by_key["memory:fact"].action == "delete"
+
+    asyncio.run(
+        execute_memory_migration_plan(
+            client,
+            store,
+            migration_id="m1",
+            legacy=(active, deleted),
+            decisions=decisions,
+        )
+    )
+    assert client.imported == []
+    assert client.deleted_productivity == [
+        ("fact", "fact", None, "local")
     ]
 
 
@@ -538,32 +636,71 @@ def test_recorded_plan_executes_import_delete_alias_and_adoption(store):
     assert progress.counts == {"adopted": 1, "deleted": 2, "verified": 3}
 
 
-def test_legacy_raw_inventory_preserves_exact_source_metadata(store):
+def test_legacy_raw_inventory_builds_recent_user_assistant_turns_without_tools(store):
     database = store.database_path
     with main_database(database).write() as connection, connection:
-        connection.execute(
+        connection.executemany(
             """
             INSERT INTO evidence (
                 evidence_id,idempotency_key,user_id,source_id,workspace,project,
                 conversation_id,message_id,source_ordinal,content_kind,role,
                 written_by,created_at,verbatim,content_hash,revision,
                 imported_at,updated_at,ingest_seq
-            ) VALUES (
-                'e1','key','local','cursor','/repo','project','session','message',
-                '7','raw_conversation','user','person','2026-10-01T00:00:00+00:00',
-                'verbatim',?,2,'2026-10-02T00:00:00+00:00',
-                '2026-10-02T00:00:00+00:00',1
-            )
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
-            (content_hash("verbatim"),),
+            (
+                (
+                    "u1", "k1", "local", "cursor", "/repo", "project",
+                    "session", "m1", "1", "raw_conversation", "user",
+                    "person", "2026-10-22T00:00:00+00:00", "question",
+                    content_hash("question"), 1, "2026-10-22T00:00:00+00:00",
+                    "2026-10-22T00:00:00+00:00", 1,
+                ),
+                (
+                    "t1", "k2", "local", "cursor", "/repo", "project",
+                    "session", "m2", "2", "raw_conversation", "tool",
+                    "tool", "2026-10-22T00:00:01+00:00", "secret tool output",
+                    content_hash("secret tool output"), 1,
+                    "2026-10-22T00:00:01+00:00",
+                    "2026-10-22T00:00:01+00:00", 2,
+                ),
+                (
+                    "a1", "k3", "local", "cursor", "/repo", "project",
+                    "session", "m3", "3", "raw_conversation", "assistant",
+                    "agent", "2026-10-22T00:00:02+00:00", "answer",
+                    content_hash("answer"), 1, "2026-10-22T00:00:02+00:00",
+                    "2026-10-22T00:00:02+00:00", 3,
+                ),
+                (
+                    "old-u", "k4", "local", "cursor", "/repo", "project",
+                    "old-session", "m4", "4", "raw_conversation", "user",
+                    "person", "2026-10-01T00:00:00+00:00", "old question",
+                    content_hash("old question"), 1,
+                    "2026-10-01T00:00:00+00:00",
+                    "2026-10-01T00:00:00+00:00", 4,
+                ),
+                (
+                    "old-a", "k5", "local", "cursor", "/repo", "project",
+                    "old-session", "m5", "5", "raw_conversation", "assistant",
+                    "agent", "2026-10-01T00:00:01+00:00", "old answer",
+                    content_hash("old answer"), 1,
+                    "2026-10-01T00:00:01+00:00",
+                    "2026-10-01T00:00:01+00:00", 5,
+                ),
+            ),
         )
-    (raw,) = read_legacy_raw_inventory(database)
-    assert raw.evidence_id == "e1"
+    (raw,) = read_legacy_raw_inventory(
+        database,
+        cutoff=datetime.fromisoformat("2026-10-20T00:00:00+00:00"),
+    )
+    assert raw.evidence_id.startswith("turn:")
     assert raw.session_id == "session"
     assert raw.source == "cursor"
-    assert raw.metadata["role"] == "user"
-    assert raw.metadata["revision"] == 2
-    assert raw.memory_at.isoformat() == "2026-10-01T00:00:00+00:00"
+    assert raw.agent_id == "all-apps"
+    assert raw.content == "[user]: question\n[assistant]: answer"
+    assert raw.metadata["evidence_ids"] == ["u1", "a1"]
+    assert "tool" not in raw.content
+    assert raw.memory_at.isoformat() == "2026-10-22T00:00:00+00:00"
 
 
 def _legacy_raw(evidence_id, *, content="verbatim"):
@@ -591,7 +728,7 @@ def _sdk_raw(raw_id, *, content="verbatim"):
     )
 
 
-def test_raw_inventory_matches_exact_scope_imports_missing_and_adopts_sdk_only(store):
+def test_raw_inventory_matches_turns_imports_missing_and_deletes_noncanonical_sdk_raw(store):
     legacy = (_legacy_raw("e1"), _legacy_raw("e2", content="missing"))
     sdk = (_sdk_raw("raw-existing"), _sdk_raw("raw-sdk-only", content="sdk-only"))
     decisions = classify_raw_inventory(legacy, sdk)
@@ -600,7 +737,7 @@ def test_raw_inventory_matches_exact_scope_imports_missing_and_adopts_sdk_only(s
     assert by_key["raw:e1"].raw_id == "raw-existing"
     assert by_key["raw:e2"].action == "import_exact"
     assert by_key["raw:e2"].raw_id == "evidence:e2"
-    assert by_key["sdk-raw:raw-sdk-only"].action == "adopt"
+    assert by_key["sdk-raw:raw-sdk-only"].action == "delete"
 
     _start(store)
     recorded = record_raw_migration_plan(
@@ -620,7 +757,8 @@ def test_raw_inventory_matches_exact_scope_imports_missing_and_adopts_sdk_only(s
         )
     )
     assert [item["raw_id"] for item in client.imported_raw] == ["evidence:e2"]
-    assert store.progress("m1").counts == {"adopted": 1, "verified": 2}
+    assert client.deleted_raw == ["raw-sdk-only"]
+    assert store.progress("m1").counts == {"deleted": 1, "verified": 2}
 
 
 def test_sdk_raw_inventory_pages_all_records():
@@ -675,6 +813,20 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
             """,
             (content_hash("verbatim"),),
         )
+        connection.execute(
+            """
+            INSERT INTO evidence (
+                evidence_id,idempotency_key,user_id,source_id,conversation_id,
+                content_kind,role,written_by,verbatim,content_hash,revision,
+                imported_at,updated_at,ingest_seq
+            ) VALUES (
+                'a1','assistant-key','local','cursor','session','raw_conversation',
+                'assistant','agent','reply',?,1,
+                '2026-10-21T00:00:01+00:00','2026-10-21T00:00:01+00:00',2
+            )
+            """,
+            (content_hash("reply"),),
+        )
     client = _MigrationClient()
     result = asyncio.run(
         run_sdk_data_plane_backfill(
@@ -694,7 +846,9 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
     assert result.phase == "reconciled"
     assert result.counts == {"verified": 2}
     assert [item["memory_id"] for item in client.imported] == ["memory-1"]
-    assert [item["raw_id"] for item in client.imported_raw] == ["evidence:e1"]
+    assert len(client.imported_raw) == 1
+    assert client.imported_raw[0]["content"] == "[user]: verbatim\n[assistant]: reply"
+    migrated_raw_id = client.imported_raw[0]["raw_id"]
     assert store.authority() is MemoryAuthority.LEGACY
     # Simulate a process dying after both SDK side effects but before startup
     # could finish. The next inventory observes them as matched rather than
@@ -703,13 +857,13 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
     client.memories = (_record("memory-1", content="preference"),)
     client.raw = (
         HySdkRawRecord(
-            raw_id="evidence:e1",
-            content="verbatim",
+            raw_id=migrated_raw_id,
+            content="[user]: verbatim\n[assistant]: reply",
             user_id="local",
-            agent_id="one-memory",
+            agent_id="all-apps",
             session_id="session",
             source="cursor",
-            custom={"role": "user", "written_by": "person"},
+            custom={"input_kind": "legacy_turn"},
         ),
     )
     resumed = asyncio.run(
@@ -803,12 +957,44 @@ class _MigrationGraphStore:
         return node.node_id
 
 
+class _MigrationFactVector:
+    def __init__(self):
+        self.deleted = []
+
+    async def delete(self, memory_id):
+        self.deleted.append(memory_id)
+        return True
+
+
+class _MigrationCodingStore:
+    def __init__(self):
+        self._conn = sqlite3.connect(":memory:", check_same_thread=False)
+        self._conn.execute(
+            "CREATE TABLE working_fact (fact_id TEXT PRIMARY KEY, user_id TEXT)"
+        )
+        self._conn.execute("INSERT INTO working_fact VALUES ('fact-1','local')")
+        self._conn.commit()
+        self._lock = threading.Lock()
+        self._fact_vec = _MigrationFactVector()
+
+    async def get_fact(self, memory_id, *, user_id):
+        row = self._conn.execute(
+            "SELECT 1 FROM working_fact WHERE fact_id=? AND user_id=?",
+            (memory_id, user_id),
+        ).fetchone()
+        return object() if row is not None else None
+
+
 class _PrivilegedMigrationClient:
     def __init__(self):
         self._loop_thread = _MigrationLoop()
         self._vector_store = _MigrationVectorStore()
         self._embed_service = _MigrationEmbedder()
         self._graph_store = _MigrationGraphStore()
+        self._coding = _MigrationCodingStore()
+
+    async def _coding_store_for_exact_get(self, variant):
+        return self._coding if variant == "coding" else None
 
     def list_memories(self, **_kwargs):
         return {"vdb": {"memories": [], "total": 0}, "request_id": "list"}
@@ -858,6 +1044,14 @@ def test_offline_migration_writes_sdk_stores_without_public_client_import_method
         )
     )
     raw_page = asyncio.run(migration.read_raw_inventory(user_id="local"))
+    deleted = asyncio.run(
+        migration.delete_productivity_memory(
+            "fact-1",
+            kind="fact",
+            variant=None,
+            user_id="local",
+        )
+    )
 
     assert raw_result["raw_id"] == "raw-1"
     assert memory_result["memory_id"] == "memory-1"
@@ -865,6 +1059,14 @@ def test_offline_migration_writes_sdk_stores_without_public_client_import_method
     assert client._vector_store.nodes["raw-1"].layer is MemoryLayer.L1_RAW
     assert client._vector_store.nodes["memory-1"].status is MemoryStatus.ACTIVE
     assert client._graph_store.nodes["memory-1"].content == "prefers tea"
+    assert deleted["deleted_count"] == 1
+    assert client._coding._fact_vec.deleted == ["fact-1"]
+    assert (
+        client._coding._conn.execute(
+            "SELECT COUNT(*) FROM working_fact"
+        ).fetchone()[0]
+        == 0
+    )
     assert not hasattr(client, "import_raw")
     assert not hasattr(client, "import_memory_exact")
 
@@ -896,6 +1098,57 @@ def test_raw_http_dto_uses_the_unified_memory_list_shape():
     )
     assert page.raw[0].raw_id == "raw-1"
     assert page.raw[0].custom == {"role": "user"}
+
+
+def test_sdk_raw_retention_keeps_only_the_latest_three_days():
+    now = datetime(2026, 10, 23, tzinfo=UTC)
+
+    class Client:
+        def __init__(self):
+            self.rows = [
+                {
+                    "memory_id": "old",
+                    "memory_at": int((now - timedelta(days=4)).timestamp()),
+                },
+                {
+                    "memory_id": "recent",
+                    "memory_at": int((now - timedelta(days=2)).timestamp()),
+                },
+            ]
+
+        def list_memories(self, **_kwargs):
+            return {
+                "vdb": {
+                    "memories": list(self.rows),
+                    "total": len(self.rows),
+                    "limit": 500,
+                    "offset": 0,
+                }
+            }
+
+        def delete(self, memory_id):
+            before = len(self.rows)
+            self.rows = [row for row in self.rows if row["memory_id"] != memory_id]
+            return {
+                "success": True,
+                "deleted_count": before - len(self.rows),
+            }
+
+    client = Client()
+
+    class Handle:
+        async def client(self):
+            return client
+
+    runtime = SdkMemoryRuntime(
+        coordinator=None,
+        read_handle=Handle(),
+        write_queue=None,
+        extraction_settings=None,
+        data_dir=Path("."),
+    )
+    assert asyncio.run(runtime.prune_expired_raw(now=now)) == 1
+    assert [row["memory_id"] for row in client.rows] == ["recent"]
 
 
 def _staging_fixture(tmp_path, store):

@@ -1,10 +1,34 @@
+import { access, mkdtemp, readFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import {
   requireCompletedStartupSdkMigration,
   runStartupSdkMigration,
+  withSdkMigrationCaptureFence,
 } from "./startup-sdk-migration";
 
 const core = { command: "/core/one-memory", args: [] };
+const captureFence = async <T>(
+  _dataDir: string,
+  action: () => Promise<T>,
+): Promise<T> => action();
+
+it("fences hook capture only while startup migration is running", async () => {
+  const dataDir = await mkdtemp(
+    path.join(os.tmpdir(), "memhub-sdk-migration-"),
+  );
+  const marker = path.join(dataDir, ".sdk-migration-capture-fence.json");
+
+  await withSdkMigrationCaptureFence(dataDir, async () => {
+    const document = JSON.parse(await readFile(marker, "utf8")) as {
+      pid: number;
+    };
+    expect(document.pid).toBe(process.pid);
+  });
+
+  await expect(access(marker)).rejects.toThrow();
+});
 
 it("runs bundle backfill and cutover inside the startup maintenance fence", async () => {
   const calls: string[][] = [];
@@ -42,6 +66,7 @@ it("runs bundle backfill and cutover inside the startup maintenance fence", asyn
     runtimeBuild: "build-13",
     execute,
     fence,
+    captureFence,
   });
 
   expect(result).toEqual({ state: "cutover" });
@@ -73,6 +98,7 @@ it("does not stop Runtime when authority is already SDK or the home is empty", a
       runtimeBuild: "build-13",
       execute: vi.fn(async () => ({ exitCode: 0, document })),
       fence,
+      captureFence,
     });
     expect(result).toEqual({ state: "not_required" });
     expect(fenced).toBe(false);
@@ -86,6 +112,7 @@ it("reports an unreadable migration status as deferred", async () => {
     runtimeBuild: "build-13",
     execute: vi.fn(async () => ({ exitCode: 1, document: {} })),
     fence: async (_dataDir, action) => action(),
+    captureFence,
   });
 
   expect(result).toEqual({
@@ -116,6 +143,7 @@ it("resumes legacy table cleanup under the maintenance fence", async () => {
         : { exitCode: 0, document: { state: "clean" } };
     }),
     fence: async (_dataDir, action) => action(),
+    captureFence,
   });
 
   expect(result).toEqual({ state: "cutover" });
@@ -146,10 +174,50 @@ it("keeps legacy authority when backfill is blocked", async () => {
     runtimeBuild: "build-13",
     execute,
     fence: async (_dataDir, action) => action(),
+    captureFence,
   });
 
   expect(result).toEqual({ state: "deferred", code: "quarantine" });
   expect(execute.mock.calls.map((call) => call[1][0])).not.toContain(
     "sdk-cutover",
+  );
+});
+
+it("reuses one v2 migration identity after a blocked startup", async () => {
+  const calls: string[][] = [];
+  const migrationId = "sdk-authority-v2-0123456789abcdef";
+  const bundleId = `${migrationId}-pre-cutover`;
+  const execute = vi.fn(async (_core, args: string[]) => {
+    calls.push(args);
+    return args[0] === "sdk-migration-status"
+      ? {
+          exitCode: 0,
+          document: {
+            authority: "legacy",
+            state: "required",
+            generation: "ffffffffffffffff",
+            migration_id: migrationId,
+            bundle_id: bundleId,
+          },
+        }
+      : args[0] === "sdk-migrate"
+        ? { exitCode: 4, document: { state: "blocked", code: "quarantine" } }
+        : { exitCode: 0, document: { state: "reused" } };
+  });
+
+  await runStartupSdkMigration({
+    dataDir: "/data",
+    core,
+    runtimeBuild: "build-17",
+    execute,
+    fence: async (_dataDir, action) => action(),
+    captureFence,
+  });
+
+  expect(calls.find((args) => args[0] === "migration-bundle")).toContain(
+    bundleId,
+  );
+  expect(calls.find((args) => args[0] === "sdk-migrate")).toContain(
+    migrationId,
   );
 });

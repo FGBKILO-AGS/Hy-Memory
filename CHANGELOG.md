@@ -4,6 +4,12 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Fixed legacy-to-SDK startup migration to adopt native Coding Experience and
+  Working Fact IDs instead of importing them as Chat layers. Raw migration now
+  rebuilds bounded user/assistant turns from the latest three days, excludes
+  tools, and enforces the same rolling retention after cutover.
+- Paused host capture writes with a live Desktop migration fence; Cursor
+  History catch-up resumes from its existing checkpoint after cutover.
 - Removed MemHub's private `hy_memory_bridge` implementation. MemHub now calls
   public `HyMemoryClient` methods at runtime; prompt/reconcile/response
   monkey-patches and private VDB/Coding runtime access were deleted. Kuzu Graph

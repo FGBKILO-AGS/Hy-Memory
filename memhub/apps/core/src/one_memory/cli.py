@@ -744,11 +744,30 @@ def sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
                         else 0
                     ),
                 }
+                active_migration = (
+                    database.execute(
+                        "SELECT migration_id,backup_bundle_id "
+                        "FROM sdk_data_plane_migrations "
+                        "WHERE state IN ('running','blocked','ready') "
+                        "ORDER BY created_at DESC LIMIT 1"
+                    ).fetchone()
+                    if "sdk_data_plane_migrations" in tables
+                    else None
+                )
             document = {
                 "schema_version": 1,
                 "authority": "legacy",
                 "state": "required" if any(counts.values()) else "empty",
-                "migration_id": None,
+                "migration_id": (
+                    str(active_migration["migration_id"])
+                    if active_migration is not None
+                    else None
+                ),
+                "bundle_id": (
+                    str(active_migration["backup_bundle_id"])
+                    if active_migration is not None
+                    else None
+                ),
                 "counts": counts,
                 "generation": generation,
             }

@@ -1,8 +1,11 @@
 import { spawn } from "node:child_process";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { withRuntimeMaintenanceFence } from "@one-memory/runtime-control";
 
-const MIGRATION_PREFIX = "sdk-authority-v1";
+const MIGRATION_PREFIX = "sdk-authority-v2";
 const MAX_OUTPUT_BYTES = 1024 * 1024;
+const CAPTURE_FENCE = ".sdk-migration-capture-fence.json";
 
 export interface StartupMigrationResult {
   state: "not_required" | "cutover" | "deferred";
@@ -39,6 +42,7 @@ interface StartupMigrationOptions {
     dataDir: string,
   ) => Promise<CommandResult>;
   fence?: <T>(dataDir: string, action: () => Promise<T>) => Promise<T>;
+  captureFence?: <T>(dataDir: string, action: () => Promise<T>) => Promise<T>;
 }
 
 export async function runStartupSdkMigration(
@@ -46,6 +50,7 @@ export async function runStartupSdkMigration(
 ): Promise<StartupMigrationResult> {
   const execute = options.execute ?? executeCoreCommand;
   const fence = options.fence ?? withRuntimeMaintenanceFence;
+  const captureFence = options.captureFence ?? withSdkMigrationCaptureFence;
   const status = await execute(
     options.core,
     ["sdk-migration-status", "--json"],
@@ -58,16 +63,18 @@ export async function runStartupSdkMigration(
     status.document.authority === "sdk" &&
     status.document.state === "cleanup_required"
   ) {
-    return fence(options.dataDir, async () => {
-      const cleanup = await execute(
-        options.core,
-        ["sdk-cleanup", "--yes", "--json"],
-        options.dataDir,
-      );
-      return cleanup.exitCode === 0 && cleanup.document.state === "clean"
-        ? { state: "cutover" }
-        : deferred(cleanup);
-    });
+    return fence(options.dataDir, () =>
+      captureFence(options.dataDir, async () => {
+        const cleanup = await execute(
+          options.core,
+          ["sdk-cleanup", "--yes", "--json"],
+          options.dataDir,
+        );
+        return cleanup.exitCode === 0 && cleanup.document.state === "clean"
+          ? { state: "cutover" }
+          : deferred(cleanup);
+      }),
+    );
   }
   if (
     status.document.authority === "sdk" ||
@@ -79,57 +86,89 @@ export async function runStartupSdkMigration(
   if (typeof generation !== "string" || !/^[a-f0-9]{16}$/.test(generation)) {
     return { state: "deferred", code: "sdk_migration_generation_invalid" };
   }
-  const migrationId = `${MIGRATION_PREFIX}-${generation}`;
-  const bundleId = `${migrationId}-pre-cutover`;
-  return fence(options.dataDir, async () => {
-    const bundle = await execute(
-      options.core,
-      [
-        "migration-bundle",
-        "--bundle-id",
-        bundleId,
-        "--runtime-build",
-        options.runtimeBuild,
-        "--yes",
-        "--json",
-      ],
-      options.dataDir,
-    );
-    if (bundle.exitCode !== 0) return deferred(bundle);
-    const backfill = await execute(
-      options.core,
-      [
-        "sdk-migrate",
-        "--migration-id",
-        migrationId,
-        "--bundle-id",
-        bundleId,
-        "--yes",
-        "--json",
-      ],
-      options.dataDir,
-    );
-    if (backfill.exitCode !== 0 || backfill.document.state !== "ready") {
-      return deferred(backfill);
-    }
-    const cutover = await execute(
-      options.core,
-      [
-        "sdk-cutover",
-        "--migration-id",
-        migrationId,
-        "--bundle-id",
-        bundleId,
-        "--yes",
-        "--json",
-      ],
-      options.dataDir,
-    );
-    if (cutover.exitCode !== 0 || cutover.document.state !== "cutover") {
-      return deferred(cutover);
-    }
-    return { state: "cutover" };
-  });
+  const previousMigrationId = status.document.migration_id;
+  const previousBundleId = status.document.bundle_id;
+  const canResume =
+    typeof previousMigrationId === "string" &&
+    previousMigrationId.startsWith(`${MIGRATION_PREFIX}-`) &&
+    typeof previousBundleId === "string" &&
+    previousBundleId === `${previousMigrationId}-pre-cutover`;
+  const migrationId = canResume
+    ? previousMigrationId
+    : `${MIGRATION_PREFIX}-${generation}`;
+  const bundleId = canResume ? previousBundleId : `${migrationId}-pre-cutover`;
+  return fence(options.dataDir, () =>
+    captureFence(options.dataDir, async () => {
+      const bundle = await execute(
+        options.core,
+        [
+          "migration-bundle",
+          "--bundle-id",
+          bundleId,
+          "--runtime-build",
+          options.runtimeBuild,
+          "--yes",
+          "--json",
+        ],
+        options.dataDir,
+      );
+      if (bundle.exitCode !== 0) return deferred(bundle);
+      const backfill = await execute(
+        options.core,
+        [
+          "sdk-migrate",
+          "--migration-id",
+          migrationId,
+          "--bundle-id",
+          bundleId,
+          "--yes",
+          "--json",
+        ],
+        options.dataDir,
+      );
+      if (backfill.exitCode !== 0 || backfill.document.state !== "ready") {
+        return deferred(backfill);
+      }
+      const cutover = await execute(
+        options.core,
+        [
+          "sdk-cutover",
+          "--migration-id",
+          migrationId,
+          "--bundle-id",
+          bundleId,
+          "--yes",
+          "--json",
+        ],
+        options.dataDir,
+      );
+      if (cutover.exitCode !== 0 || cutover.document.state !== "cutover") {
+        return deferred(cutover);
+      }
+      return { state: "cutover" };
+    }),
+  );
+}
+
+export async function withSdkMigrationCaptureFence<T>(
+  dataDir: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  await mkdir(dataDir, { recursive: true, mode: 0o700 });
+  const marker = path.join(dataDir, CAPTURE_FENCE);
+  const temporary = `${marker}.${process.pid}.tmp`;
+  await writeFile(
+    temporary,
+    `${JSON.stringify({ schema_version: 1, pid: process.pid })}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+  await rename(temporary, marker);
+  try {
+    return await action();
+  } finally {
+    await rm(marker, { force: true });
+    await rm(temporary, { force: true });
+  }
 }
 
 function deferred(result: CommandResult): StartupMigrationResult {
