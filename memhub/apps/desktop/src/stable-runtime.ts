@@ -248,3 +248,16 @@ export function stableRuntimeUserMessage(error: unknown): string {
     ""
   );
 }
+
+/** What the startup dialog body says.
+ *
+ * A code we wrote copy for becomes a sentence. Every other code is shown as it
+ * is: this dialog is the last thing a person sees before the app closes, and an
+ * unexpected failure is more useful as the code support can look up than as a
+ * reassuring sentence that erases which failure actually fired. */
+export function stableRuntimeFailureDetail(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return STABLE_RUNTIME_USER_MESSAGES.desktop_start_failed ?? "";
+  }
+  return STABLE_RUNTIME_USER_MESSAGES[error.message] ?? error.message;
+}

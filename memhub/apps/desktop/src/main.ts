@@ -113,7 +113,7 @@ import {
   installServiceWithDisabledFallback,
   isInstalledApplicationsApp,
   stableRuntimeErrorCode,
-  stableRuntimeUserMessage,
+  stableRuntimeFailureDetail,
   startStableRuntimeRepair,
 } from "./stable-runtime";
 import { STARTUP_SCREEN_URL, startupScreenHtml } from "./startup-screen";
@@ -1672,7 +1672,7 @@ if (desktopVersion !== null) {
           languagePreferences?.read().locale ?? "zh-CN",
           "nativeErrorTitle",
         ),
-        stableRuntimeUserMessage(error),
+        stableRuntimeFailureDetail(error),
       );
     },
   });

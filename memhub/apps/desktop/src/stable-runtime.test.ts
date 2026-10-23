@@ -16,6 +16,7 @@ import {
   isDisabledServiceInstallError,
   isInstalledApplicationsApp,
   stableRuntimeErrorCode,
+  stableRuntimeFailureDetail,
   stableRuntimeUserMessage,
   startStableRuntimeRepair,
 } from "./stable-runtime";
@@ -296,5 +297,24 @@ describe("startup install errors", () => {
     );
     expect(coding).toContain("Coding");
     expect(coding).toContain("不会丢失");
+  });
+});
+
+describe("startup dialog body", () => {
+  it("keeps a code we have no copy for, so support can see which failure fired", () => {
+    expect(stableRuntimeFailureDetail(new Error("page_load_failed"))).toBe(
+      "page_load_failed",
+    );
+    expect(
+      stableRuntimeFailureDetail(new Error("runtime_broker_unavailable")),
+    ).toBe("runtime_broker_unavailable");
+  });
+
+  it("shows the sentence we wrote for a migration failure", () => {
+    const detail = stableRuntimeFailureDetail(
+      new Error("sdk_migration_disk_space_insufficient"),
+    );
+    expect(detail).toContain("磁盘空间不足");
+    expect(detail).not.toContain("sdk_migration_disk_space_insufficient");
   });
 });
