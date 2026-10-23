@@ -137,6 +137,8 @@ const SAFE_STABLE_RUNTIME_ERROR_CODES = new Set([
   "sdk_migration_backfill_failed",
   "sdk_migration_working_fact_conflict",
   "sdk_migration_coding_inventory_failed",
+  "sdk_migration_work_pending",
+  "sdk_migration_cutover_failed",
   "sdk_migration_bundle_copy_failed",
   "sdk_migration_response_invalid",
   "sdk_migration_status_unavailable",
@@ -222,6 +224,10 @@ export const STABLE_RUNTIME_USER_MESSAGES: Record<string, string> = {
     "读取旧版 Coding 记忆时发现无法识别的结构，升级已停止。请把这个提示反馈给我们；原有记忆数据不会丢失。",
   sdk_migration_backfill_failed:
     "升级记忆数据格式时失败，已停止且没有切换数据源。请重新启动重试；如果仍然失败，请把这个提示反馈给我们，原有记忆数据不会丢失。",
+  sdk_migration_work_pending:
+    "记忆数据已经升级完成，但还有之前没处理完的记忆任务，所以暂时不能切换数据源。请保持 MemHub 打开几分钟，等这些任务处理完再重新启动；原有记忆数据不会丢失。",
+  sdk_migration_cutover_failed:
+    "切换数据源时失败，原有记忆数据仍然完整可用。请重新启动重试；如果仍然失败，请把这个提示反馈给我们。",
   sdk_migration_preflight_failed:
     "升级前的检查没有通过，升级已停止。请重新启动重试；如果仍然失败，请把这个提示反馈给我们，原有记忆数据不会丢失。",
   sdk_migration_status_unavailable:

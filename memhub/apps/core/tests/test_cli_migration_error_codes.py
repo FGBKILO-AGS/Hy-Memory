@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from one_memory.cli import migration_failure_code
+from one_memory.cli import cutover_failure_code, migration_failure_code
 
 
 class _Coded(RuntimeError):
@@ -106,6 +106,7 @@ def test_the_chain_survives_a_cycle() -> None:
         "sdk_migration_disk_space_insufficient",
         "sdk_migration_working_fact_conflict",
         "sdk_migration_coding_inventory_failed",
+        "sdk_migration_work_pending",
     ],
 )
 def test_the_codes_the_desktop_translates_stay_in_sync(code: str) -> None:
@@ -113,3 +114,18 @@ def test_the_codes_the_desktop_translates_stay_in_sync(code: str) -> None:
     desktop = Path(__file__).resolve().parents[2] / "desktop" / "src" / "stable-runtime.ts"
     assert desktop.is_file(), desktop
     assert f'"{code}"' in desktop.read_text(encoding="utf-8")
+
+
+def test_cutover_work_counts_do_not_become_the_dialog_text() -> None:
+    """The blocker code carries a JSON body; the person gets one name."""
+    blocked = _Coded('sdk_data_plane_cutover_work_pending:{"memory_tasks":591}')
+
+    assert cutover_failure_code(blocked) == "sdk_migration_work_pending"
+    assert (
+        cutover_failure_code(_Coded("sdk_data_plane_cutover_missing"))
+        == "sdk_data_plane_cutover_missing"
+    )
+    assert (
+        cutover_failure_code(RuntimeError("/Users/someone/private"))
+        == "sdk_migration_cutover_failed"
+    )

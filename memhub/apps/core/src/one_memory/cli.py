@@ -415,6 +415,21 @@ def migration_bundle(options: Sequence[str], stream: TextIO) -> int:
     return 0
 
 
+def cutover_failure_code(error: BaseException) -> str:
+    """The cutover's own codes, minus the counts it appends to one of them.
+
+    `sdk_data_plane_cutover_work_pending` carries a JSON body of table names and
+    counts. That belongs in the diagnostic event, not in the single string the
+    startup dialog reads, so it collapses to one name here.
+    """
+    code = getattr(error, "code", "")
+    if isinstance(code, str) and code.startswith("sdk_data_plane_cutover_work_pending"):
+        return "sdk_migration_work_pending"
+    if isinstance(code, str) and _SAFE_MIGRATION_CODE.match(code):
+        return code
+    return "sdk_migration_cutover_failed"
+
+
 def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
     """Backfill legacy memory/raw into SDK while keeping legacy authority."""
     migration_id: str | None = None
@@ -696,7 +711,7 @@ def sdk_cutover(options: Sequence[str], stream: TextIO) -> int:
             database_path=database_path,
         )
     except (DataPlaneMigrationError, MigrationBundleRejected, OSError) as error:
-        code = getattr(error, "code", str(error))
+        code = cutover_failure_code(error)
         document = {
             "schema_version": 1,
             "state": "blocked",
