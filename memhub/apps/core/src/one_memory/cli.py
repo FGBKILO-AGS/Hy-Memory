@@ -1,5 +1,3 @@
-import asyncio
-import hashlib
 import os
 import signal
 import socket
@@ -115,16 +113,10 @@ def run(arguments: Sequence[str], *, output: TextIO | None = None) -> int:
     command, *options = arguments
     if command == "restore":
         return restore(options, stream)
-    if command == "migration-bundle":
-        return migration_bundle(options, stream)
     if command == "sdk-migrate":
         return sdk_migrate(options, stream)
-    if command == "sdk-cutover":
-        return sdk_cutover(options, stream)
     if command == "sdk-migration-status":
         return sdk_migration_status(options, stream)
-    if command == "sdk-cleanup":
-        return sdk_cleanup(options, stream)
     if command == "boundary" and not options:
         from one_memory.workbuddy_boundary import write_hook
 
@@ -145,11 +137,8 @@ def run(arguments: Sequence[str], *, output: TextIO | None = None) -> int:
         stream.write(
             "Usage: one-memory [serve [--maintenance|--reader]|status [--json]|doctor [--json]"
             "|restore --source <managed-backup> --yes [--json]"
-            "|migration-bundle --bundle-id <id> --runtime-build <build> --yes [--json]"
-            "|sdk-migrate --migration-id <id> --bundle-id <id> --yes [--json]"
-            "|sdk-cutover --migration-id <id> --bundle-id <id> --yes [--json]"
+            "|sdk-migrate --runtime-build <build> --yes [--json]"
             "|sdk-migration-status [--json]"
-            "|sdk-cleanup --yes [--json]"
             "|boundary [--peek|--ack TOKEN]|capture SOURCE]\n"
         )
         return 2
@@ -291,19 +280,20 @@ def _write_restore(
         stream.write(f"{text}\n")
 
 
-def migration_bundle(options: Sequence[str], stream: TextIO) -> int:
-    """Create a complete management + SDK bundle while Runtime is stopped."""
-    bundle_id: str | None = None
+def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
+    """Bring a stopped home to SDK authority in one resumable command.
+
+    Backs up the home, makes queue work independent of the legacy tables,
+    commits SDK authority and drops those tables. The SDK already holds every
+    memory and raw turn, so nothing is copied. With `--json`, each step is one
+    progress line and the last line is the result.
+    """
     runtime_build: str | None = None
     confirmed = False
     as_json = False
     index = 0
     while index < len(options):
         option = options[index]
-        if option == "--bundle-id" and index + 1 < len(options):
-            bundle_id = options[index + 1]
-            index += 2
-            continue
         if option == "--runtime-build" and index + 1 < len(options):
             runtime_build = options[index + 1]
             index += 2
@@ -318,133 +308,8 @@ def migration_bundle(options: Sequence[str], stream: TextIO) -> int:
             continue
         stream.write(f"one-memory: 参数无效：{option}\n")
         return 2
-    if not bundle_id or not runtime_build:
-        stream.write("one-memory: migration-bundle 需要 --bundle-id <id> --runtime-build <build>\n")
-        return 2
-
-    settings = load_settings()
-    status = inspect_runtime(settings.data_dir)
-    if status.state != "stopped":
-        document = {
-            "schema_version": 1,
-            "state": "blocked",
-            "code": "sdk_migration_bundle_runtime_running",
-            "runtime_state": status.state,
-        }
-        _write_restore(stream, as_json, document, "Runtime 仍在运行；不能创建迁移备份。")
-        return 4
-    if not confirmed:
-        document = {
-            "schema_version": 1,
-            "state": "preview",
-            "bundle_id": bundle_id,
-            "requires_confirmation": True,
-        }
-        _write_restore(stream, as_json, document, "预览通过；加 --yes 后创建完整迁移备份。")
-        return 4
-
-    from one_memory.sdk_migration_bundle import (
-        MigrationBundleRejected,
-        create_sdk_migration_bundle,
-        inspect_sdk_migration_bundle,
-    )
-
-    try:
-        result = create_sdk_migration_bundle(
-            data_dir=settings.data_dir,
-            bundle_id=bundle_id,
-            runtime_build=runtime_build,
-            runtime_stopped=True,
-        )
-    except MigrationBundleRejected as error:
-        if error.code == "sdk_migration_bundle_exists":
-            try:
-                manifest = inspect_sdk_migration_bundle(
-                    data_dir=settings.data_dir,
-                    bundle_id=bundle_id,
-                )
-            except MigrationBundleRejected:
-                pass
-            else:
-                document = {
-                    "schema_version": 1,
-                    "state": "reused",
-                    "bundle_id": bundle_id,
-                    "file_count": manifest.get("file_count"),
-                    "total_bytes": manifest.get("total_bytes"),
-                }
-                _write_restore(
-                    stream,
-                    as_json,
-                    document,
-                    f"已验证并复用迁移备份：{bundle_id}",
-                )
-                return 0
-        document = {
-            "schema_version": 1,
-            "state": "failed",
-            "code": migration_failure_code(error, fallback=error.code),
-        }
-        _write_restore(stream, as_json, document, f"迁移备份失败：{document['code']}")
-        return 1
-    except OSError as error:
-        # A full disk while copying is the most common first-launch failure and
-        # the only one the person fixes by deleting something.
-        code = migration_failure_code(error, fallback="sdk_migration_bundle_copy_failed")
-        document = {"schema_version": 1, "state": "failed", "code": code}
-        _write_restore(stream, as_json, document, f"迁移备份失败：{code}")
-        return 1
-    document = {
-        "schema_version": 1,
-        "state": "created",
-        "bundle_id": result.bundle_id,
-        "bundle_path": str(result.bundle_path),
-        "file_count": result.file_count,
-        "total_bytes": result.total_bytes,
-    }
-    _write_restore(stream, as_json, document, f"完整迁移备份已创建：{result.bundle_path}")
-    return 0
-
-
-def cutover_failure_code(error: BaseException) -> str:
-    code = getattr(error, "code", "")
-    if isinstance(code, str) and _SAFE_MIGRATION_CODE.match(code):
-        return code
-    return "sdk_migration_cutover_failed"
-
-
-def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
-    """Make legacy queue work self-contained while keeping legacy authority.
-
-    The SDK already holds every memory and raw turn, so nothing is copied.
-    """
-    migration_id: str | None = None
-    bundle_id: str | None = None
-    confirmed = False
-    as_json = False
-    index = 0
-    while index < len(options):
-        option = options[index]
-        if option == "--migration-id" and index + 1 < len(options):
-            migration_id = options[index + 1]
-            index += 2
-            continue
-        if option == "--bundle-id" and index + 1 < len(options):
-            bundle_id = options[index + 1]
-            index += 2
-            continue
-        if option == "--yes":
-            confirmed = True
-            index += 1
-            continue
-        if option == "--json":
-            as_json = True
-            index += 1
-            continue
-        stream.write(f"one-memory: 参数无效：{option}\n")
-        return 2
-    if not migration_id or not bundle_id:
-        stream.write("one-memory: sdk-migrate 需要 --migration-id <id> --bundle-id <id>\n")
+    if not runtime_build:
+        stream.write("one-memory: sdk-migrate 需要 --runtime-build <build>\n")
         return 2
 
     settings = load_settings()
@@ -459,178 +324,53 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
         _write_restore(stream, as_json, document, "Runtime 仍在运行；不能迁移。")
         return 4
     if not confirmed:
-        document = {
-            "schema_version": 1,
-            "state": "preview",
-            "migration_id": migration_id,
-            "bundle_id": bundle_id,
-            "requires_confirmation": True,
-            "commits_cutover": False,
-        }
-        _write_restore(
-            stream,
-            as_json,
-            document,
-            "预览通过；加 --yes 后准备迁移，但不会切换 authority。",
-        )
+        document = {"schema_version": 1, "state": "preview", "requires_confirmation": True}
+        _write_restore(stream, as_json, document, "预览通过；加 --yes 后执行迁移。")
         return 4
 
-    from one_memory.database_access import close_main_databases
     from one_memory.hy_runtime_config import HY_MEMORY_NAMESPACE, HY_MEMORY_VERSION
-    from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
-    from one_memory.memory_server.migrations import MIGRATIONS
-    from one_memory.sdk_data_plane_migration import SdkDataPlaneMigrationStore
-    from one_memory.sdk_migration_bundle import (
-        MigrationBundleRejected,
-        inspect_sdk_migration_bundle,
-    )
-    from one_memory.sdk_migration_runner import (
-        PREPARED_PHASE,
-        prepare_legacy_work_for_cutover,
-        recover_abandoned_staging,
-    )
+    from one_memory.sdk_migration_runner import run_startup_migration
 
-    database = settings.data_dir / "one-memory.sqlite3"
-    try:
-        manifest = inspect_sdk_migration_bundle(
-            data_dir=settings.data_dir,
-            bundle_id=bundle_id,
-        )
-        asyncio.run(migrate(SqliteMigrationStore(database), MIGRATIONS))
-        close_main_databases()
-        recover_abandoned_staging(
-            data_dir=settings.data_dir,
-            database_path=database,
-            namespace=HY_MEMORY_NAMESPACE,
-        )
-        store = SdkDataPlaneMigrationStore(database)
-        store.start(
-            migration_id=migration_id,
-            source_runtime_build=str(manifest.get("runtime_build") or ""),
-            target_sdk_version=HY_MEMORY_VERSION,
-            source_schema_version=MIGRATIONS[-1].version,
-            namespace_fingerprint=hashlib.sha256(HY_MEMORY_NAMESPACE.encode()).hexdigest(),
-            backend_fingerprint=hashlib.sha256(b"chroma:kuzu:sqlite").hexdigest(),
-            backup_bundle_id=bundle_id,
-        )
-        preparation = prepare_legacy_work_for_cutover(database)
-        store.set_phase(migration_id, phase=PREPARED_PHASE, state="ready")
-    except MigrationBundleRejected as error:
-        code = error.code
-    except Exception as error:
-        code = migration_failure_code(error, fallback="sdk_migration_preflight_failed")
-    else:
-        document = {
-            "schema_version": 1,
-            "state": "ready",
-            "phase": PREPARED_PHASE,
-            "migration_id": migration_id,
-            **preparation.as_document(),
-            "commits_cutover": False,
-        }
-        _write_restore(stream, as_json, document, "迁移准备已完成；authority 尚未切换。")
-        return 0
-
-    document = {"schema_version": 1, "state": "failed", "code": code}
-    _write_restore(stream, as_json, document, f"迁移准备失败：{code}")
-    return 1
-
-
-def sdk_cutover(options: Sequence[str], stream: TextIO) -> int:
-    """Commit SDK authority once the backup is verified and the queue is self-contained."""
-    migration_id: str | None = None
-    bundle_id: str | None = None
-    confirmed = False
-    as_json = False
-    index = 0
-    while index < len(options):
-        option = options[index]
-        if option == "--migration-id" and index + 1 < len(options):
-            migration_id = options[index + 1]
-            index += 2
-            continue
-        if option == "--bundle-id" and index + 1 < len(options):
-            bundle_id = options[index + 1]
-            index += 2
-            continue
-        if option == "--yes":
-            confirmed = True
-            index += 1
-            continue
-        if option == "--json":
-            as_json = True
-            index += 1
-            continue
-        stream.write(f"one-memory: 参数无效：{option}\n")
-        return 2
-    if not migration_id or not bundle_id:
-        stream.write("one-memory: sdk-cutover 需要 --migration-id <id> --bundle-id <id>\n")
-        return 2
-    settings = load_settings()
-    status = inspect_runtime(settings.data_dir)
-    if status.state != "stopped":
-        document = {
-            "schema_version": 1,
-            "state": "blocked",
-            "code": "sdk_cutover_runtime_running",
-            "runtime_state": status.state,
-        }
-        _write_restore(stream, as_json, document, "Runtime 仍在运行；不能切换 authority。")
-        return 4
-    if not confirmed:
-        document = {
-            "schema_version": 1,
-            "state": "preview",
-            "migration_id": migration_id,
-            "bundle_id": bundle_id,
-            "requires_confirmation": True,
-        }
-        _write_restore(stream, as_json, document, "预览通过；加 --yes 后提交 SDK authority。")
-        return 4
-
-    from one_memory.hy_runtime_config import HY_MEMORY_VERSION
-    from one_memory.sdk_data_plane_migration import DataPlaneMigrationError
-    from one_memory.sdk_migration_bundle import MigrationBundleRejected
-    from one_memory.sdk_migration_runner import commit_sdk_cutover, resume_legacy_cleanup
-
-    try:
-        database_path = settings.data_dir / "one-memory.sqlite3"
-        marker = commit_sdk_cutover(
-            data_dir=settings.data_dir,
-            database_path=database_path,
-            migration_id=migration_id,
-            bundle_id=bundle_id,
-            sdk_version=HY_MEMORY_VERSION,
-        )
-        resume_legacy_cleanup(
-            data_dir=settings.data_dir,
-            database_path=database_path,
-        )
-    except (DataPlaneMigrationError, MigrationBundleRejected, OSError) as error:
-        code = cutover_failure_code(error)
-        document = {
-            "schema_version": 1,
-            "state": "blocked",
-            "code": code,
-            "migration_id": migration_id,
-            "bundle_id": bundle_id,
-        }
-        _write_restore(stream, as_json, document, f"SDK authority 未切换：{code}")
-        return 4
-    document = {
-        "schema_version": 1,
-        "state": "cutover",
-        "migration_id": marker.migration_id,
-        "bundle_id": marker.backup_bundle_id,
-        "sdk_version": marker.sdk_version,
-        "completed_at": marker.completed_at,
+    step_names = {
+        "bundle": "正在备份记忆数据……",
+        "prepare": "正在整理待处理的写入任务……",
+        "cutover": "正在切换数据源……",
+        "cleanup": "正在删除旧表……",
     }
-    _write_restore(stream, as_json, document, "SDK authority 已切换。")
+
+    def progress(step: str) -> None:
+        if as_json:
+            stream.write(
+                json.dumps({"schema_version": 1, "state": "running", "step": step}) + "\n"
+            )
+        else:
+            stream.write(f"{step_names.get(step, step)}\n")
+        stream.flush()
+
+    try:
+        result = run_startup_migration(
+            data_dir=settings.data_dir,
+            runtime_build=runtime_build,
+            sdk_version=HY_MEMORY_VERSION,
+            namespace=HY_MEMORY_NAMESPACE,
+            progress=progress,
+        )
+    except Exception as error:
+        code = migration_failure_code(error)
+        document = {"schema_version": 1, "state": "failed", "code": code}
+        _write_restore(stream, as_json, document, f"迁移未完成：{code}")
+        return 1
+    messages = {
+        "not_required": "不需要迁移。",
+        "complete": "迁移已完成，旧表已清理。",
+        "cutover": "迁移完成：记忆数据已以 SDK 为准。",
+    }
+    _write_restore(stream, as_json, result.as_document(), messages[result.state])
     return 0
 
 
 def sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
-    """Read-only startup probe used before taking the Runtime maintenance fence."""
+    """Read-only probe: does this home need `sdk-migrate`?"""
     if list(options) not in ([], ["--json"]):
         stream.write("one-memory: sdk-migration-status 只接受 --json\n")
         return 2
@@ -638,16 +378,12 @@ def sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
     settings = load_settings()
     database_path = settings.data_dir / "one-memory.sqlite3"
     if not database_path.is_file():
-        document = {
+        document: dict[str, object] = {
             "schema_version": 1,
-            "authority": "legacy",
-            "state": "empty",
-            "migration_id": None,
+            "authority": "sdk",
+            "state": "not_required",
         }
     else:
-        import sqlite3
-
-        from one_memory.database_access import main_database
         from one_memory.hy_runtime_config import HY_MEMORY_NAMESPACE
         from one_memory.sdk_data_plane_migration import (
             MemoryAuthority,
@@ -656,133 +392,23 @@ def sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
         from one_memory.sdk_migration_runner import abandoned_staging_present
         from one_memory.target_schema import legacy_tables_present
 
-        migration_store = SdkDataPlaneMigrationStore(database_path)
-        marker = migration_store.cutover()
-        authority = migration_store.authority()
-        stat = database_path.stat()
-        generation = hashlib.sha256(f"{stat.st_size}:{stat.st_mtime_ns}".encode()).hexdigest()[:16]
+        authority = SdkDataPlaneMigrationStore(database_path).authority()
         if authority is MemoryAuthority.SDK:
-            legacy_tables = legacy_tables_present(database_path)
-            staging_cleanup = abandoned_staging_present(
-                data_dir=settings.data_dir,
-                namespace=HY_MEMORY_NAMESPACE,
-            )
-            document = {
-                "schema_version": 1,
-                "authority": "sdk",
-                "state": ("cleanup_required" if legacy_tables or staging_cleanup else "complete"),
-                "migration_id": marker.migration_id if marker else None,
-                "generation": generation,
-                "legacy_tables": list(legacy_tables),
-            }
-        else:
-            with main_database(database_path).read(row_factory=sqlite3.Row) as database:
-                tables = {
-                    str(row["name"])
-                    for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")
-                }
-                counts = {
-                    "memory": (
-                        int(
-                            database.execute("SELECT COUNT(*) FROM governed_memories").fetchone()[0]
-                        )
-                        if "governed_memories" in tables
-                        else 0
-                    ),
-                    "raw": (
-                        int(database.execute("SELECT COUNT(*) FROM evidence").fetchone()[0])
-                        if "evidence" in tables
-                        else 0
-                    ),
-                }
-                active_migration = (
-                    database.execute(
-                        "SELECT migration_id,backup_bundle_id "
-                        "FROM sdk_data_plane_migrations "
-                        "WHERE state IN ('running','blocked','ready') "
-                        "ORDER BY created_at DESC LIMIT 1"
-                    ).fetchone()
-                    if "sdk_data_plane_migrations" in tables
-                    else None
+            leftovers = bool(
+                legacy_tables_present(database_path)
+                or abandoned_staging_present(
+                    data_dir=settings.data_dir,
+                    namespace=HY_MEMORY_NAMESPACE,
                 )
-            document = {
-                "schema_version": 1,
-                "authority": "legacy",
-                "state": "required" if any(counts.values()) else "empty",
-                "migration_id": (
-                    str(active_migration["migration_id"]) if active_migration is not None else None
-                ),
-                "bundle_id": (
-                    str(active_migration["backup_bundle_id"])
-                    if active_migration is not None
-                    else None
-                ),
-                "counts": counts,
-                "generation": generation,
-            }
+            )
+            state = "required" if leftovers else "not_required"
+        else:
+            state = "required"
+        document = {"schema_version": 1, "authority": authority.value, "state": state}
     if as_json:
         stream.write(f"{json.dumps(document, ensure_ascii=False)}\n")
     else:
         stream.write(f"SDK migration: {document['state']} (authority={document['authority']})\n")
-    return 0
-
-
-def sdk_cleanup(options: Sequence[str], stream: TextIO) -> int:
-    if set(options) - {"--yes", "--json"} or options.count("--yes") > 1:
-        stream.write("one-memory: sdk-cleanup 只接受 --yes [--json]\n")
-        return 2
-    confirmed = "--yes" in options
-    as_json = "--json" in options
-    settings = load_settings()
-    status = inspect_runtime(settings.data_dir)
-    if status.state != "stopped":
-        document = {
-            "schema_version": 1,
-            "state": "blocked",
-            "code": "sdk_cleanup_runtime_running",
-        }
-        _write_restore(stream, as_json, document, "Runtime 仍在运行；不能清理旧表。")
-        return 4
-    if not confirmed:
-        _write_restore(
-            stream,
-            as_json,
-            {
-                "schema_version": 1,
-                "state": "preview",
-                "requires_confirmation": True,
-            },
-            "加 --yes 后删除已迁移旧表。",
-        )
-        return 4
-    from one_memory.sdk_data_plane_migration import DataPlaneMigrationError
-    from one_memory.sdk_migration_bundle import MigrationBundleRejected
-    from one_memory.sdk_migration_runner import resume_legacy_cleanup
-
-    try:
-        dropped = resume_legacy_cleanup(
-            data_dir=settings.data_dir,
-            database_path=settings.data_dir / "one-memory.sqlite3",
-        )
-    except (DataPlaneMigrationError, MigrationBundleRejected) as error:
-        code = getattr(error, "code", str(error))
-        _write_restore(
-            stream,
-            as_json,
-            {"schema_version": 1, "state": "blocked", "code": code},
-            f"旧表清理未完成：{code}",
-        )
-        return 4
-    _write_restore(
-        stream,
-        as_json,
-        {
-            "schema_version": 1,
-            "state": "clean",
-            "dropped_tables": list(dropped),
-        },
-        "旧表已删除。",
-    )
     return 0
 
 

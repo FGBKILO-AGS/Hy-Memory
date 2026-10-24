@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from one_memory.cli import cutover_failure_code, migration_failure_code
+from one_memory.cli import migration_failure_code
 
 
 class _Coded(RuntimeError):
@@ -99,14 +99,3 @@ def test_the_codes_the_desktop_translates_stay_in_sync(code: str) -> None:
     desktop = Path(__file__).resolve().parents[2] / "desktop" / "src" / "stable-runtime.ts"
     assert desktop.is_file(), desktop
     assert f'"{code}"' in desktop.read_text(encoding="utf-8")
-
-
-def test_cutover_codes_never_carry_free_text() -> None:
-    assert (
-        cutover_failure_code(_Coded("sdk_data_plane_cutover_missing"))
-        == "sdk_data_plane_cutover_missing"
-    )
-    assert (
-        cutover_failure_code(RuntimeError("/Users/someone/private"))
-        == "sdk_migration_cutover_failed"
-    )
