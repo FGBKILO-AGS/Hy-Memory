@@ -3180,7 +3180,8 @@ async function runCommand(
           migration.code ?? "sdk_migration_incomplete",
         );
       }
-      migrated = migration.state === "cutover";
+      migrated =
+        migration.state === "cutover" || migration.state === "complete";
       await applyPreparedServiceInstall(preparedService);
       serviceApplied = true;
       // The receipt exists so a later command can find the data dir without
@@ -3665,7 +3666,8 @@ async function runCommand(
       }
       // An older Runtime refuses a migrated home, so from here a failure
       // keeps the new version instead of rolling back to one that cannot start.
-      migrated = migration.state === "cutover";
+      migrated =
+        migration.state === "cutover" || migration.state === "complete";
       await restartUserService(layout, serviceOptions);
       // A restart that returns without error only means launchd/systemd
       // accepted the command. O-22: the first `upgrade` implementation

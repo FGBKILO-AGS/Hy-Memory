@@ -159,8 +159,12 @@ export function MemorySpace({
     "unknown" | "legacy" | "sdk"
   >("unknown");
   const [managementOpen, setManagementOpen] = useState(false);
+  // On SDK authority the map still reads the legacy library and governed
+  // detail, which the API refuses, so it would wait forever. The SDK library
+  // lists, opens, edits and deletes through v2; show it until the map reads
+  // SDK memories too.
   const displayedMode = simplified
-    ? managementOpen
+    ? managementOpen || memoryAuthority === "sdk"
       ? "library"
       : "map"
     : mode;
@@ -168,13 +172,23 @@ export function MemorySpace({
     if ((!active && !preload) || typeof getMemoryAuthority !== "function")
       return;
     let current = true;
-    void getMemoryAuthority()
-      .then((result) => {
-        if (current) setMemoryAuthority(result.authority);
-      })
-      .catch(() => {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // The app opens before Core is ready, so the first ask usually fails.
+    // Without a retry the authority stayed unknown and nothing ever loaded.
+    const ask = (delay: number) => {
+      void getMemoryAuthority()
+        .then((result) => {
+          if (current) setMemoryAuthority(result.authority);
+        })
+        .catch(() => {
+          if (!current) return;
+          timer = setTimeout(() => ask(Math.min(delay * 2, 10_000)), delay);
+        });
+    };
+    ask(500);
     return () => {
       current = false;
+      if (timer !== undefined) clearTimeout(timer);
     };
   }, [active, preload]);
   useEffect(() => {
@@ -1444,33 +1458,35 @@ export function MemorySpace({
             {simplified ? t("memory:记忆") : t("memory:记忆空间")}
           </h1>
           <span className="memory-loaded-count">
-            {simplified && !management
-              ? mapLibrary.failed
-                ? t("memory:记忆读取失败")
-                : mapLibrary.stale
-                  ? t("memory:正在导入历史会话，记忆将陆续出现")
-                  : mapLibrary.page
-                    ? tn(
-                        "memory:已沉淀 {count} 条{filter} · 当前展示 {shown} 条",
-                        mapLibrary.page.total,
-                        {
-                          filter: settledFilterLabel
-                            ? t("memory:（{filter}）", {
-                                filter: settledFilterLabel,
-                              })
-                            : "",
-                          shown: new Intl.NumberFormat(locale).format(
-                            mapLibrary.page.items.length,
-                          ),
-                        },
-                      )
-                    : t("memory:正在读取…")
-              : loaded
-                ? tn(
-                    "memory:已加载 {count} 条记忆",
-                    memories.filter((m) => m.status !== "deleted").length,
-                  )
-                : t("memory:正在读取…")}
+            {memoryAuthority === "sdk"
+              ? null
+              : simplified && !management
+                ? mapLibrary.failed
+                  ? t("memory:记忆读取失败")
+                  : mapLibrary.stale
+                    ? t("memory:正在导入历史会话，记忆将陆续出现")
+                    : mapLibrary.page
+                      ? tn(
+                          "memory:已沉淀 {count} 条{filter} · 当前展示 {shown} 条",
+                          mapLibrary.page.total,
+                          {
+                            filter: settledFilterLabel
+                              ? t("memory:（{filter}）", {
+                                  filter: settledFilterLabel,
+                                })
+                              : "",
+                            shown: new Intl.NumberFormat(locale).format(
+                              mapLibrary.page.items.length,
+                            ),
+                          },
+                        )
+                      : t("memory:正在读取…")
+                : loaded
+                  ? tn(
+                      "memory:已加载 {count} 条记忆",
+                      memories.filter((m) => m.status !== "deleted").length,
+                    )
+                  : t("memory:正在读取…")}
           </span>
         </div>
         <MemoryNoteComposer

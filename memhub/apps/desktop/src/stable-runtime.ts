@@ -129,6 +129,7 @@ const SAFE_STABLE_RUNTIME_ERROR_CODES = new Set([
   // Migration runs before the app window exists, so these are the only names
   // a first launch can be given. They stay codes here and become sentences in
   // STABLE_RUNTIME_USER_MESSAGES: a person reading the dialog never sees them.
+  "packaged_runtime_not_current",
   "sdk_migration_preflight_failed",
   "sdk_migration_memory_unreadable",
   "sdk_migration_model_profile_required",
@@ -205,6 +206,8 @@ export const STABLE_RUNTIME_USER_MESSAGES: Record<string, string> = {
     "已安装的运行环境比这个安装包更新，无法用旧安装包启动。请安装最新版本的 MemHub；你的记忆数据不会受到影响。",
   install_current_unmanaged:
     "运行环境的安装目录被改动过，无法安全接管。请重新安装 MemHub，你的记忆数据不会受到影响。",
+  packaged_runtime_not_current:
+    "新版本的运行环境没有装上，MemHub 不会用旧版本继续运行。请重新安装 MemHub；如果仍然失败，请把这个提示反馈给我们。你的记忆数据不会受到影响。",
   sdk_migration_memory_unreadable:
     "升级前核对发现，新版本还读不到你的全部记忆，所以没有切换数据源，旧数据保持原样可用。请把这个提示反馈给我们；原有记忆数据不会丢失。",
   sdk_migration_model_profile_required:
@@ -251,4 +254,32 @@ export function stableRuntimeFailureDetail(error: unknown): string {
     return STABLE_RUNTIME_USER_MESSAGES.desktop_start_failed ?? "";
   }
   return STABLE_RUNTIME_USER_MESSAGES[error.message] ?? error.message;
+}
+
+/** The installed Runtime must be at least the build this App carries. */
+export async function requireCurrentRuntimeAtLeast(
+  installRoot: string,
+  buildNumber: number | undefined,
+): Promise<void> {
+  if (buildNumber === undefined) return;
+  const manifest = await readFile(
+    path.join(installRoot, "current", "manifest.json"),
+    "utf8",
+  )
+    .then((text) => JSON.parse(text) as { build_number?: unknown })
+    .catch(() => null);
+  const installed = manifest?.build_number;
+  if (typeof installed !== "number" || installed < buildNumber) {
+    throw new Error("packaged_runtime_not_current");
+  }
+}
+
+export function startupFailureCause(error: unknown, home: string): string {
+  const text =
+    error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return text
+    .split(home)
+    .join("~")
+    .replace(/[\r\n]+/g, " ")
+    .slice(0, 300);
 }

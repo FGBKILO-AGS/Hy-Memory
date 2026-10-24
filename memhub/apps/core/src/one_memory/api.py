@@ -3103,7 +3103,10 @@ def create_app(
         if store is None:
             store = SdkDataPlaneMigrationStore(_evidence_store(app).database_path)
         authority, migration_id = store.authority_state()
-        return MemoryAuthorityResponse(authority=authority.value, migration_id=migration_id)
+        return MemoryAuthorityResponse(
+            authority="sdk" if authority is MemoryAuthority.SDK else "legacy",
+            migration_id=migration_id,
+        )
 
     @app.get(
         "/api/v2/memory-library",
@@ -3127,6 +3130,130 @@ def create_app(
             return HySdkMemoryPage.from_sdk(raw, limit=limit, offset=offset)
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_list_failed") from None
+
+    @app.get(
+        "/api/v2/memories/graph",
+        response_model=MemoryGraphResponse,
+        dependencies=protected,
+    )
+    async def sdk_memory_graph(
+        limit: int = Query(default=160, ge=1, le=300),
+    ) -> MemoryGraphResponse:
+        """The memory map on SDK authority: SDK memories plus the Kuzu overlay.
+
+        Memories come from the public client; only the overlay reads Kuzu
+        (`hy_graph_projection`, the visualization exception). Shape matches
+        the legacy map so the same view draws both.
+        """
+        try:
+            client = await _sdk_client_handle(app).client()
+            raw = await asyncio.to_thread(
+                client.list_memories, user_id="local", limit=limit, offset=0, order="desc"
+            )
+            page = HySdkMemoryPage.from_sdk(raw, limit=limit, offset=0)
+        except Exception as error:
+            raise _sdk_http_error(error, "hy_memory_list_failed") from None
+        vdb = raw.get("vdb") if isinstance(raw, dict) else None
+        total = vdb.get("total") if isinstance(vdb, dict) else None
+        memories = [memory for memory in page.memories if memory.layer != "l1_raw"]
+        catalog = await asyncio.to_thread(_source_catalog, app)
+        nodes: dict[str, MemoryGraphNode] = {}
+        edges: list[MemoryGraphEdge] = []
+        sessions: dict[str, list[str]] = {}
+        for memory in memories:
+            memory_node_id = f"memory:{memory.memory_id}"
+            nodes[memory_node_id] = MemoryGraphNode(
+                node_id=memory_node_id,
+                node_type="memory",
+                label=memory.content,
+                memory_id=memory.memory_id,
+                kind=memory.layer,
+                status=memory.status,
+            )
+            if memory.session_id:
+                sessions.setdefault(memory.session_id, []).append(memory_node_id)
+            if memory.source:
+                source_node_id = f"source:{memory.source}"
+                registration = catalog.get(memory.source)
+                nodes[source_node_id] = MemoryGraphNode(
+                    node_id=source_node_id,
+                    node_type="source",
+                    label=(
+                        registration.descriptor.display_name if registration else memory.source
+                    ),
+                    source_id=memory.source,
+                )
+                edges.append(
+                    MemoryGraphEdge(
+                        edge_id=f"{source_node_id}->{memory_node_id}",
+                        source_node_id=source_node_id,
+                        target_node_id=memory_node_id,
+                        relation="evidence_source",
+                        origin="provenance",
+                    )
+                )
+        for _session_id, node_ids in sorted(sessions.items()):
+            for left, right in zip(node_ids, node_ids[1:], strict=False):
+                edges.append(
+                    MemoryGraphEdge(
+                        edge_id=f"{left}->{right}:same_conversation",
+                        source_node_id=left,
+                        target_node_id=right,
+                        relation="same_conversation",
+                        origin="same_conversation",
+                    )
+                )
+        hy_graph = None
+        # Aggregate nodes carry no per-source provenance yet, so a revoked
+        # source withholds the overlay, as on the legacy map.
+        if not await asyncio.to_thread(_read_access(app).has_revoked_sources):
+            try:
+                hy_graph = await _sdk_memory_runtime(app).graph_snapshot(limit=limit)
+            except HySdkError:
+                hy_graph = None
+        if hy_graph is not None:
+            for node in hy_graph.nodes:
+                node_id = f"memory:{node.node_id}"
+                if node_id in nodes:
+                    continue
+                node_id = f"hy:{node.node_id}"
+                nodes.setdefault(
+                    node_id,
+                    MemoryGraphNode(
+                        node_id=node_id,
+                        node_type="topic" if node.layer == "TOPIC" else "schema",
+                        label=node.content,
+                        confidence=node.confidence,
+                    ),
+                )
+            for edge in hy_graph.edges:
+                source_node_id, target_node_id = (
+                    f"memory:{edge.source_node_id}"
+                    if f"memory:{edge.source_node_id}" in nodes
+                    else f"hy:{edge.source_node_id}",
+                    f"memory:{edge.target_node_id}"
+                    if f"memory:{edge.target_node_id}" in nodes
+                    else f"hy:{edge.target_node_id}",
+                )
+                if source_node_id not in nodes or target_node_id not in nodes:
+                    continue
+                edges.append(
+                    MemoryGraphEdge(
+                        edge_id=f"{source_node_id}->{target_node_id}:{edge.relation}",
+                        source_node_id=source_node_id,
+                        target_node_id=target_node_id,
+                        relation=edge.relation,
+                        weight=edge.weight,
+                        origin="hy_relation",
+                    )
+                )
+        return MemoryGraphResponse(
+            total_memories=total if isinstance(total, int) else len(memories),
+            projected_memories=len(memories),
+            nodes=tuple(nodes.values()),
+            edges=tuple(edges),
+            hy_graph_available=hy_graph is not None and hy_graph.consulted,
+        )
 
     @app.get(
         "/api/v2/user-profile",

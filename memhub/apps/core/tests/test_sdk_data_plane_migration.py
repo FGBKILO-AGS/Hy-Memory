@@ -866,3 +866,124 @@ def test_a_legacy_home_reports_legacy_authority(tmp_path) -> None:
 
     assert document == {"authority": "legacy", "migration_id": None}
     assert gate == "legacy"
+
+
+@pytest.mark.integration
+@pytest.mark.fresh_sdk
+def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -> None:
+    """Build 21: the memory map had no SDK read and waited forever."""
+    from one_memory.hy_graph_projection import HyGraphEdge, HyGraphNode, HyGraphSnapshot
+
+    rows = [
+        {
+            "memory_id": memory_id,
+            "content": f"memory {memory_id}",
+            "layer": "l2_fact",
+            "status": "active",
+            "is_latest": True,
+            "user_id": "local",
+            "agent_id": "all-apps",
+            "session_id": "s1",
+            "source": "cursor",
+        }
+        for memory_id in ("a", "b")
+    ]
+
+    class Client:
+        def list_memories(self, **_kwargs):
+            return {"vdb": {"memories": rows, "total": 7}}
+
+    class Handle:
+        async def client(self):
+            return Client()
+
+        async def close(self):
+            return None
+
+    async def scenario():
+        app = create_app(_app_settings(tmp_path), secret_store=InMemorySecretStore())
+        async with (
+            app.router.lifespan_context(app),
+            AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                headers={"Authorization": "Bearer authority-test"},
+            ) as client,
+        ):
+            original = app.state.sdk_client_handle
+            app.state.sdk_client_handle = Handle()
+
+            async def graph_snapshot(*, limit):
+                del limit
+                return HyGraphSnapshot(
+                    nodes=(HyGraphNode(node_id="t1", content="topic", layer="TOPIC"),),
+                    edges=(
+                        HyGraphEdge(
+                            source_node_id="t1", target_node_id="a", relation="derived_from"
+                        ),
+                    ),
+                )
+
+            app.state.sdk_memory_runtime.graph_snapshot = graph_snapshot
+            assert (await client.get("/api/v1/memories/graph")).status_code == 409
+            response = await client.get("/api/v2/memories/graph")
+            app.state.sdk_client_handle = original
+            assert response.status_code == 200
+            return response.json()
+
+    graph = asyncio.run(scenario())
+    assert (graph["total_memories"], graph["projected_memories"]) == (7, 2)
+    assert {node["node_id"] for node in graph["nodes"]} == {
+        "memory:a",
+        "memory:b",
+        "source:cursor",
+        "hy:t1",
+    }
+    assert {edge["relation"] for edge in graph["edges"]} == {
+        "evidence_source",
+        "same_conversation",
+        "derived_from",
+    }
+    assert graph["hy_graph_available"] is True
+
+
+def test_a_completed_sdk_write_does_not_touch_retired_evidence(store) -> None:
+    """Build 21 logged RetiredAuthorityAccess after every successful write."""
+    from types import SimpleNamespace
+
+    from one_memory.imports.storage import EvidenceStore as Evidence
+    from one_memory.memory_server.durable_queue import DurableWriteDrain, execute_job
+    from one_memory.retired_authority import RetiredEvidenceStore
+
+    path = store.database_path
+    _insert_evidence(store, "e1")
+    record = Evidence(path).get("e1")
+    assert record is not None
+    queue = DurableWriteQueue(path, sdk_authority=True)
+    job = queue.submit(
+        WriteRequest(
+            internal_session_id="s",
+            source_id="cursor",
+            batch_identity=BatchIdentity(internal_session_id="s", first_round=1, last_round=1),
+            evidence_ids=["e1"],
+            input_records=(record,),
+            idempotency_key="k",
+        )
+    )
+    DurableWriteDrain(queue, execute=lambda _job: asyncio.sleep(0)).claim(limit=1)
+
+    class Supervisor:
+        async def process_sdk_job(self, records, *, request_id, before_hy_invocation):
+            del records, request_id
+            await before_hy_invocation()
+            return SimpleNamespace(raw_ids=("raw-1",), memory_ids=("m-1",))
+
+    asyncio.run(
+        execute_job(
+            job.job_id,
+            queue=queue,
+            supervisor=Supervisor(),
+            evidence=RetiredEvidenceStore(path),
+        )
+    )
+    assert queue.get("k").state == "completed"
