@@ -40,10 +40,9 @@ from typing import TextIO  # noqa: E402
 from one_memory.config import load_settings  # noqa: E402
 from one_memory.runtime_client import RuntimeStatus, inspect_runtime  # noqa: E402
 
-# A single `sdk_migration_backfill_failed` told the person nothing: running out
-# of disk, a model that was never configured, and a Coding/Working-Fact gap are
-# three different next steps, and the startup dialog can only act on the name it
-# is given. These are the names that reach it.
+# The startup dialog can only act on the name it is given: running out of disk
+# and a damaged backup are different next steps. These are the names that reach
+# it.
 _SAFE_MIGRATION_CODE = re.compile(r"^[a-z][a-z0-9_]{0,95}$")
 _OUT_OF_SPACE = frozenset({errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)})
 
@@ -58,7 +57,7 @@ def _exception_chain(error: BaseException) -> Iterator[BaseException]:
 
 
 def migration_failure_code(
-    error: BaseException, *, fallback: str = "sdk_migration_backfill_failed"
+    error: BaseException, *, fallback: str = "sdk_migration_preflight_failed"
 ) -> str:
     """Name a migration failure; never guess a code from free text.
 
@@ -75,14 +74,6 @@ def migration_failure_code(
             continue
         if code.startswith(("sdk_data_plane_", "sdk_migration_")):
             return code
-        if code.startswith("hy_sdk_productivity_"):
-            # The Coding inventory could not be read or classified; that is a
-            # data-shape problem the person cannot fix by retrying.
-            return "sdk_migration_coding_inventory_failed"
-        if code == "hy_sdk_memory_import_failed" and any(
-            "working_fact" in str(part) for part in chain
-        ):
-            return "sdk_migration_working_fact_conflict"
     return fallback
 
 
@@ -416,22 +407,17 @@ def migration_bundle(options: Sequence[str], stream: TextIO) -> int:
 
 
 def cutover_failure_code(error: BaseException) -> str:
-    """The cutover's own codes, minus the counts it appends to one of them.
-
-    `sdk_data_plane_cutover_work_pending` carries a JSON body of table names and
-    counts. That belongs in the diagnostic event, not in the single string the
-    startup dialog reads, so it collapses to one name here.
-    """
     code = getattr(error, "code", "")
-    if isinstance(code, str) and code.startswith("sdk_data_plane_cutover_work_pending"):
-        return "sdk_migration_work_pending"
     if isinstance(code, str) and _SAFE_MIGRATION_CODE.match(code):
         return code
     return "sdk_migration_cutover_failed"
 
 
 def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
-    """Backfill legacy memory/raw into SDK while keeping legacy authority."""
+    """Make legacy queue work self-contained while keeping legacy authority.
+
+    The SDK already holds every memory and raw turn, so nothing is copied.
+    """
     migration_id: str | None = None
     bundle_id: str | None = None
     confirmed = False
@@ -485,28 +471,24 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
             stream,
             as_json,
             document,
-            "预览通过；加 --yes 后执行可续跑 backfill，但不会切换 authority。",
+            "预览通过；加 --yes 后准备迁移，但不会切换 authority。",
         )
         return 4
 
     from one_memory.database_access import close_main_databases
     from one_memory.hy_runtime_config import HY_MEMORY_NAMESPACE, HY_MEMORY_VERSION
-    from one_memory.hy_sdk_migration import HySdkMigration
-    from one_memory.hy_sdk_runtime import acquire_client
     from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
     from one_memory.memory_server.migrations import MIGRATIONS
-    from one_memory.model_profiles import ModelProfileStore
+    from one_memory.sdk_data_plane_migration import SdkDataPlaneMigrationStore
     from one_memory.sdk_migration_bundle import (
         MigrationBundleRejected,
         inspect_sdk_migration_bundle,
     )
     from one_memory.sdk_migration_runner import (
-        BackfillResult,
-        prepare_sdk_migration_staging,
-        run_sdk_data_plane_backfill,
-        sdk_migration_staging,
+        PREPARED_PHASE,
+        prepare_legacy_work_for_cutover,
+        recover_abandoned_staging,
     )
-    from one_memory.secrets import KeyringSecretStore, SecretStoreUnavailableError
 
     database = settings.data_dir / "one-memory.sqlite3"
     try:
@@ -516,118 +498,46 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
         )
         asyncio.run(migrate(SqliteMigrationStore(database), MIGRATIONS))
         close_main_databases()
-        profiles = ModelProfileStore(database)
-        identity = profiles.active_identity()
-        if identity is None:
-            raise RuntimeError("model_profile_not_active")
-        profile = profiles.snapshot(*identity)
-        secrets = KeyringSecretStore()
-        secret = profiles.resolve_snapshot_secret(*identity, secrets)
-        if profile.has_api_key and secret is None:
-            raise RuntimeError("model_secret_unavailable")
-    except MigrationBundleRejected as error:
-        code = error.code
-    except SecretStoreUnavailableError:
-        code = "secure_storage_unavailable"
-    except Exception as error:
-        message = str(error)
-        code = (
-            message
-            if message
-            in {
-                "model_profile_not_active",
-                "model_secret_unavailable",
-            }
-            else migration_failure_code(error, fallback="sdk_migration_preflight_failed")
-        )
-    else:
-        namespace_fingerprint = hashlib.sha256(HY_MEMORY_NAMESPACE.encode()).hexdigest()
-        backend_material = json.dumps(
-            {
-                "namespace": HY_MEMORY_NAMESPACE,
-                "embedding_provider": str(profile.embedding_provider_kind or ""),
-                "embedding_model": profile.embedding_model,
-                "embedding_dimensions": profile.embedding_dimensions,
-                "vector": "chroma",
-                "cache": "sqlite",
-                "history": "sqlite",
-                "coding": "sqlite",
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        backend_fingerprint = hashlib.sha256(backend_material.encode()).hexdigest()
-        staging = sdk_migration_staging(
+        recover_abandoned_staging(
             data_dir=settings.data_dir,
-            migration_id=migration_id,
+            database_path=database,
             namespace=HY_MEMORY_NAMESPACE,
         )
-        try:
-            staging_data_dir = prepare_sdk_migration_staging(
-                paths=staging,
-                database_path=database,
-            )
-        except Exception as error:
-            code = migration_failure_code(error, fallback="sdk_migration_staging_failed")
-            staging_data_dir = None
-
-        async def run_backfill() -> BackfillResult:
-            assert staging_data_dir is not None
-            lease = await asyncio.to_thread(
-                acquire_client,
-                profile,
-                api_key=secret,
-                data_dir=staging_data_dir,
-            )
-            try:
-                return await run_sdk_data_plane_backfill(
-                    database_path=database,
-                    client=HySdkMigration(lease.client),
-                    migration_id=migration_id,
-                    bundle_id=bundle_id,
-                    source_runtime_build=str(manifest.get("runtime_build") or ""),
-                    target_sdk_version=HY_MEMORY_VERSION,
-                    source_schema_version=MIGRATIONS[-1].version,
-                    namespace_fingerprint=namespace_fingerprint,
-                    backend_fingerprint=backend_fingerprint,
-                )
-            finally:
-                await asyncio.to_thread(lease.close)
-
-        try:
-            result = asyncio.run(run_backfill()) if staging_data_dir is not None else None
-        except Exception as error:
-            code = migration_failure_code(error)
-        else:
-            if result is None:
-                document = {"schema_version": 1, "state": "failed", "code": code}
-                _write_restore(stream, as_json, document, f"SDK backfill 失败：{code}")
-                return 1
-            document = {
-                "schema_version": 1,
-                "state": result.state,
-                "phase": result.phase,
-                "migration_id": result.migration_id,
-                "counts": result.counts,
-                "memory_items": result.memory_items,
-                "raw_items": result.raw_items,
-                "commits_cutover": False,
-            }
-            _write_restore(
-                stream,
-                as_json,
-                document,
-                "SDK backfill 已完成；authority 尚未切换。",
-            )
-            return 0 if result.state == "ready" else 4
+        store = SdkDataPlaneMigrationStore(database)
+        store.start(
+            migration_id=migration_id,
+            source_runtime_build=str(manifest.get("runtime_build") or ""),
+            target_sdk_version=HY_MEMORY_VERSION,
+            source_schema_version=MIGRATIONS[-1].version,
+            namespace_fingerprint=hashlib.sha256(HY_MEMORY_NAMESPACE.encode()).hexdigest(),
+            backend_fingerprint=hashlib.sha256(b"chroma:kuzu:sqlite").hexdigest(),
+            backup_bundle_id=bundle_id,
+        )
+        preparation = prepare_legacy_work_for_cutover(database)
+        store.set_phase(migration_id, phase=PREPARED_PHASE, state="ready")
+    except MigrationBundleRejected as error:
+        code = error.code
+    except Exception as error:
+        code = migration_failure_code(error, fallback="sdk_migration_preflight_failed")
+    else:
+        document = {
+            "schema_version": 1,
+            "state": "ready",
+            "phase": PREPARED_PHASE,
+            "migration_id": migration_id,
+            **preparation.as_document(),
+            "commits_cutover": False,
+        }
+        _write_restore(stream, as_json, document, "迁移准备已完成；authority 尚未切换。")
+        return 0
 
     document = {"schema_version": 1, "state": "failed", "code": code}
-    _write_restore(stream, as_json, document, f"SDK backfill 失败：{code}")
+    _write_restore(stream, as_json, document, f"迁移准备失败：{code}")
     return 1
 
 
 def sdk_cutover(options: Sequence[str], stream: TextIO) -> int:
-    """Commit SDK authority only after offline reconciliation and work drain."""
+    """Commit SDK authority once the backup is verified and the queue is self-contained."""
     migration_id: str | None = None
     bundle_id: str | None = None
     confirmed = False
@@ -678,33 +588,19 @@ def sdk_cutover(options: Sequence[str], stream: TextIO) -> int:
         _write_restore(stream, as_json, document, "预览通过；加 --yes 后提交 SDK authority。")
         return 4
 
-    from one_memory.hy_runtime_config import HY_MEMORY_NAMESPACE, HY_MEMORY_VERSION
+    from one_memory.hy_runtime_config import HY_MEMORY_VERSION
     from one_memory.sdk_data_plane_migration import DataPlaneMigrationError
     from one_memory.sdk_migration_bundle import MigrationBundleRejected
-    from one_memory.sdk_migration_runner import (
-        activate_sdk_migration_staging,
-        commit_reconciled_cutover,
-        resume_legacy_cleanup,
-        sdk_migration_staging,
-    )
+    from one_memory.sdk_migration_runner import commit_sdk_cutover, resume_legacy_cleanup
 
     try:
         database_path = settings.data_dir / "one-memory.sqlite3"
-        staging = sdk_migration_staging(
+        marker = commit_sdk_cutover(
             data_dir=settings.data_dir,
-            migration_id=migration_id,
-            namespace=HY_MEMORY_NAMESPACE,
-        )
-        marker = activate_sdk_migration_staging(
-            paths=staging,
             database_path=database_path,
-            commit=lambda: commit_reconciled_cutover(
-                data_dir=settings.data_dir,
-                database_path=database_path,
-                migration_id=migration_id,
-                bundle_id=bundle_id,
-                sdk_version=HY_MEMORY_VERSION,
-            ),
+            migration_id=migration_id,
+            bundle_id=bundle_id,
+            sdk_version=HY_MEMORY_VERSION,
         )
         resume_legacy_cleanup(
             data_dir=settings.data_dir,
@@ -757,7 +653,7 @@ def sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
             MemoryAuthority,
             SdkDataPlaneMigrationStore,
         )
-        from one_memory.sdk_migration_runner import sdk_migration_staging
+        from one_memory.sdk_migration_runner import abandoned_staging_present
         from one_memory.target_schema import legacy_tables_present
 
         migration_store = SdkDataPlaneMigrationStore(database_path)
@@ -767,14 +663,10 @@ def sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
         generation = hashlib.sha256(f"{stat.st_size}:{stat.st_mtime_ns}".encode()).hexdigest()[:16]
         if authority is MemoryAuthority.SDK:
             legacy_tables = legacy_tables_present(database_path)
-            staging_cleanup = False
-            if marker is not None:
-                staging = sdk_migration_staging(
-                    data_dir=settings.data_dir,
-                    migration_id=marker.migration_id,
-                    namespace=HY_MEMORY_NAMESPACE,
-                )
-                staging_cleanup = staging.protective_root.exists() or staging.staging_home.exists()
+            staging_cleanup = abandoned_staging_present(
+                data_dir=settings.data_dir,
+                namespace=HY_MEMORY_NAMESPACE,
+            )
             document = {
                 "schema_version": 1,
                 "authority": "sdk",

@@ -266,7 +266,8 @@ def test_sdk_migrate_preview_never_commits_cutover(tmp_path, monkeypatch) -> Non
     assert '"commits_cutover":false' in document
 
 
-def test_sdk_migrate_runs_offline_backfill_without_cutover(tmp_path, monkeypatch) -> None:
+def test_sdk_migrate_prepares_without_a_model_or_cutover(tmp_path, monkeypatch) -> None:
+    """No model profile, no SDK client: the SDK already holds every memory."""
     monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
     monkeypatch.setattr(
         cli,
@@ -276,66 +277,6 @@ def test_sdk_migrate_runs_offline_backfill_without_cutover(tmp_path, monkeypatch
     monkeypatch.setattr(
         "one_memory.sdk_migration_bundle.inspect_sdk_migration_bundle",
         lambda **_kwargs: {"runtime_build": "v1.0.4"},
-    )
-
-    async def fake_migrate(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr("one_memory.memory_server.migration_runner.migrate", fake_migrate)
-
-    profile = SimpleNamespace(
-        has_api_key=False,
-        embedding_provider_kind="openai",
-        embedding_model="embedding",
-        embedding_dimensions=1024,
-    )
-
-    class Profiles:
-        def __init__(self, _database):
-            pass
-
-        def active_identity(self):
-            return ("profile", 1)
-
-        def snapshot(self, *_identity):
-            return profile
-
-        def resolve_snapshot_secret(self, *_args):
-            return None
-
-    class Secrets:
-        pass
-
-    class Lease:
-        client = SimpleNamespace(
-            _loop_thread=None,
-            _vector_store=None,
-            _embed_service=None,
-            _graph_store=None,
-        )
-
-        def close(self):
-            return None
-
-    async def backfill(**_kwargs):
-        return SimpleNamespace(
-            state="ready",
-            phase="reconciled",
-            migration_id="migration-1",
-            counts={"verified": 2},
-            memory_items=1,
-            raw_items=1,
-        )
-
-    monkeypatch.setattr("one_memory.model_profiles.ModelProfileStore", Profiles)
-    monkeypatch.setattr("one_memory.secrets.KeyringSecretStore", Secrets)
-    monkeypatch.setattr(
-        "one_memory.hy_sdk_runtime.acquire_client",
-        lambda *_args, **_kwargs: Lease(),
-    )
-    monkeypatch.setattr(
-        "one_memory.sdk_migration_runner.run_sdk_data_plane_backfill",
-        backfill,
     )
     output = io.StringIO()
     code = cli.run(
@@ -350,10 +291,11 @@ def test_sdk_migrate_runs_offline_backfill_without_cutover(tmp_path, monkeypatch
         ],
         output=output,
     )
-    assert code == 0
-    document = output.getvalue().replace(" ", "")
-    assert '"state":"ready"' in document
-    assert '"commits_cutover":false' in document
+    assert code == 0, output.getvalue()
+    document = json.loads(output.getvalue())
+    assert document["state"] == "ready"
+    assert document["commits_cutover"] is False
+    assert document["abandoned"] == {}
 
 
 def test_sdk_cutover_is_offline_confirmed_and_returns_marker(tmp_path, monkeypatch) -> None:
@@ -364,17 +306,13 @@ def test_sdk_cutover_is_offline_confirmed_and_returns_marker(tmp_path, monkeypat
         lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
     )
     monkeypatch.setattr(
-        "one_memory.sdk_migration_runner.commit_reconciled_cutover",
+        "one_memory.sdk_migration_runner.commit_sdk_cutover",
         lambda **_kwargs: SimpleNamespace(
             migration_id="migration-1",
             backup_bundle_id="bundle-1",
             sdk_version="2.0.5",
             completed_at="2026-10-21T00:00:00Z",
         ),
-    )
-    monkeypatch.setattr(
-        "one_memory.sdk_migration_runner.activate_sdk_migration_staging",
-        lambda *, commit, **_kwargs: commit(),
     )
     monkeypatch.setattr(
         "one_memory.sdk_migration_runner.resume_legacy_cleanup",
