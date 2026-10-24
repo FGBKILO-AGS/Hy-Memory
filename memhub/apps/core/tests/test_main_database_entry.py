@@ -87,10 +87,6 @@ ALLOWED = {
         "SQLite's own defaults, read once from a connection that opens no file",
         opened_with='":memory:"',
     ),
-    ("retrieval/vector_store.py", "RawVectorStore._preflight"): Allowed(
-        "Chroma's own chroma.sqlite3, read-only, checked before Chroma opens it",
-        opened_with='"?mode=ro"',
-    ),
     ("sdk_migration_verify.py", "legacy_memory_ids_from_bundle"): Allowed(
         "the pre-cutover bundle's copy of the legacy database, read-only, to list "
         "the memory ids a migrated home must still read back",

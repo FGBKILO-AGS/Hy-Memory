@@ -4869,10 +4869,10 @@ async function runMaintenanceRestore(options: {
   const instanceId = randomUUID();
   const child = spawn(options.coreCommand, ["serve", "--maintenance"], {
     env: {
-      // Do not pass the caller's Runtime tuning variables (for example
-      // retrieval-index flags) into a maintenance process: a restore must
-      // start the product's minimal maintenance configuration, not inherit
-      // an unrelated experiment from the shell.
+      // Do not pass the caller's Runtime tuning variables into a
+      // maintenance process: a restore must start the product's minimal
+      // maintenance configuration, not inherit an unrelated experiment from
+      // the shell.
       PATH: process.env.PATH,
       HOME: process.env.HOME,
       LANG: process.env.LANG,
