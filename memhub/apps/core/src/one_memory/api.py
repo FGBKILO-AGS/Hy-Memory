@@ -3130,11 +3130,8 @@ def create_app(
         store = getattr(app.state, "sdk_data_plane_migrations", None)
         if store is None:
             store = SdkDataPlaneMigrationStore(_evidence_store(app).database_path)
-        marker = store.cutover()
-        return MemoryAuthorityResponse(
-            authority="sdk" if marker is not None else "legacy",
-            migration_id=marker.migration_id if marker is not None else None,
-        )
+        authority, migration_id = store.authority_state()
+        return MemoryAuthorityResponse(authority=authority.value, migration_id=migration_id)
 
     @app.get(
         "/api/v2/memory-library",

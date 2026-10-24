@@ -91,6 +91,16 @@ ALLOWED = {
         "Chroma's own chroma.sqlite3, read-only, checked before Chroma opens it",
         opened_with='"?mode=ro"',
     ),
+    ("sdk_migration_verify.py", "legacy_memory_ids_from_bundle"): Allowed(
+        "the pre-cutover bundle's copy of the legacy database, read-only, to list "
+        "the memory ids a migrated home must still read back",
+        opened_with="?mode=ro",
+    ),
+    ("sdk_vector_reattach.py", "_stored_names"): Allowed(
+        "Chroma's own chroma.sqlite3, read-only, to list collection names before "
+        "the offline migration opens Chroma",
+        opened_with="?mode=ro",
+    ),
     ("imports/sqlite_access.py", "open_sqlite_readonly"): Allowed(
         "a host app's own SQLite (Cursor state.vscdb / store.db): one direct "
         "read-only open when there is no WAL, and one read-only open of the "
