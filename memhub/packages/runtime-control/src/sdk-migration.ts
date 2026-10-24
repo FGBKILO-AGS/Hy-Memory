@@ -4,7 +4,8 @@ import { withRuntimeMaintenanceFence } from "./runtime-maintenance.js";
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 
 export interface SdkMigrationResult {
-  state: "not_required" | "cutover" | "deferred";
+  /** `complete`: already on SDK authority; leftovers were repaired. */
+  state: "not_required" | "cutover" | "complete" | "deferred";
   code?: string;
 }
 
@@ -84,8 +85,7 @@ export async function runSdkMigration(
     }
     if (migrated.exitCode !== 0) return deferred(migrated);
     const state = migrated.document.state;
-    if (state === "cutover" || state === "complete")
-      return { state: "cutover" };
+    if (state === "cutover" || state === "complete") return { state };
     if (state === "not_required") return { state: "not_required" };
     return deferred(migrated);
   });

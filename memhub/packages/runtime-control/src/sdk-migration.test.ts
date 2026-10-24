@@ -83,7 +83,7 @@ it("does not stop Runtime when nothing needs migrating", async () => {
   expect(fenced).toBe(false);
 });
 
-it("treats a finished cleanup as a completed migration", async () => {
+it("reports a repair of an already migrated home as complete, not a second cutover", async () => {
   const result = await runSdkMigration({
     dataDir: "/data",
     core,
@@ -95,7 +95,7 @@ it("treats a finished cleanup as a completed migration", async () => {
     fence: noFence,
   });
 
-  expect(result).toEqual({ state: "cutover" });
+  expect(result).toEqual({ state: "complete" });
 });
 
 it("reports an unreadable migration status as deferred", async () => {

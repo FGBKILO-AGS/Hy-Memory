@@ -39,6 +39,8 @@ import {
   getMemoryGraph,
   getMemoryProcessing,
   getModelProfiles,
+  getSdkMemoryGraph,
+  getSdkMemoryLibrary,
   manualExtract,
   mutateMemory,
   retryUnknownMemoryProcessing,
@@ -56,6 +58,7 @@ import { subscribePoll } from "./poll-scheduler";
 import { R6Button } from "./R6Controls";
 import { SdkMemoryLibrary } from "./SdkMemoryLibrary";
 import { SdkRawHistory } from "./SdkRawHistory";
+import { sdkMapMemory } from "./sdk-memory-map";
 import { sourceNameOr } from "./source-label";
 import { traceUiAction } from "./ui-trace";
 import { useMemoryLibrary } from "./use-memory-library";
@@ -168,13 +171,23 @@ export function MemorySpace({
     if ((!active && !preload) || typeof getMemoryAuthority !== "function")
       return;
     let current = true;
-    void getMemoryAuthority()
-      .then((result) => {
-        if (current) setMemoryAuthority(result.authority);
-      })
-      .catch(() => {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // The app opens before Core is ready, so the first ask usually fails.
+    // Without a retry the authority stayed unknown and nothing ever loaded.
+    const ask = (delay: number) => {
+      void getMemoryAuthority()
+        .then((result) => {
+          if (current) setMemoryAuthority(result.authority);
+        })
+        .catch(() => {
+          if (!current) return;
+          timer = setTimeout(() => ask(Math.min(delay * 2, 10_000)), delay);
+        });
+    };
+    ask(500);
     return () => {
       current = false;
+      if (timer !== undefined) clearTimeout(timer);
     };
   }, [active, preload]);
   useEffect(() => {
@@ -286,6 +299,49 @@ export function MemorySpace({
   const [sdkFocusedMemoryId, setSdkFocusedMemoryId] = useState<string | null>(
     null,
   );
+  // The map on SDK authority. Legacy reads (library page, governed graph)
+  // are refused there, so it draws SDK memories and the v2 graph instead.
+  const [sdkMap, setSdkMap] = useState<{
+    memories: GovernedMemory[];
+    graph: MemoryGraphResponse;
+  } | null>(null);
+  const [sdkMapFailed, setSdkMapFailed] = useState(false);
+  const sdkMapVisible =
+    memoryAuthority === "sdk" &&
+    simplified &&
+    active &&
+    displayedMode === "map";
+  useEffect(() => {
+    if (!sdkMapVisible) return;
+    let cancelled = false;
+    let controller: AbortController | null = null;
+    const read = async () => {
+      controller?.abort();
+      const request = new AbortController();
+      controller = request;
+      try {
+        const [page, graph] = await Promise.all([
+          getSdkMemoryLibrary(
+            { statuses: ["active"], offset: 0, limit: 300 },
+            request.signal,
+          ),
+          getSdkMemoryGraph(request.signal),
+        ]);
+        if (cancelled) return;
+        setSdkMap({ memories: page.memories.map(sdkMapMemory), graph });
+        setSdkMapFailed(false);
+      } catch {
+        if (!cancelled && !request.signal.aborted) setSdkMapFailed(true);
+      }
+    };
+    void read();
+    const timer = setInterval(() => void read(), 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      controller?.abort();
+    };
+  }, [sdkMapVisible]);
   const [draft, setDraft] = useState("");
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const bulkInFlight = useRef(false);
@@ -1444,33 +1500,50 @@ export function MemorySpace({
             {simplified ? t("memory:记忆") : t("memory:记忆空间")}
           </h1>
           <span className="memory-loaded-count">
-            {simplified && !management
-              ? mapLibrary.failed
+            {memoryAuthority === "sdk" && simplified && !management
+              ? sdkMapFailed && !sdkMap
                 ? t("memory:记忆读取失败")
-                : mapLibrary.stale
-                  ? t("memory:正在导入历史会话，记忆将陆续出现")
-                  : mapLibrary.page
+                : sdkMap
+                  ? tn(
+                      "memory:已沉淀 {count} 条{filter} · 当前展示 {shown} 条",
+                      sdkMap.graph.total_memories,
+                      {
+                        filter: "",
+                        shown: new Intl.NumberFormat(locale).format(
+                          sdkMap.memories.length,
+                        ),
+                      },
+                    )
+                  : t("memory:正在读取…")
+              : memoryAuthority === "sdk"
+                ? null
+                : simplified && !management
+                  ? mapLibrary.failed
+                    ? t("memory:记忆读取失败")
+                    : mapLibrary.stale
+                      ? t("memory:正在导入历史会话，记忆将陆续出现")
+                      : mapLibrary.page
+                        ? tn(
+                            "memory:已沉淀 {count} 条{filter} · 当前展示 {shown} 条",
+                            mapLibrary.page.total,
+                            {
+                              filter: settledFilterLabel
+                                ? t("memory:（{filter}）", {
+                                    filter: settledFilterLabel,
+                                  })
+                                : "",
+                              shown: new Intl.NumberFormat(locale).format(
+                                mapLibrary.page.items.length,
+                              ),
+                            },
+                          )
+                        : t("memory:正在读取…")
+                  : loaded
                     ? tn(
-                        "memory:已沉淀 {count} 条{filter} · 当前展示 {shown} 条",
-                        mapLibrary.page.total,
-                        {
-                          filter: settledFilterLabel
-                            ? t("memory:（{filter}）", {
-                                filter: settledFilterLabel,
-                              })
-                            : "",
-                          shown: new Intl.NumberFormat(locale).format(
-                            mapLibrary.page.items.length,
-                          ),
-                        },
+                        "memory:已加载 {count} 条记忆",
+                        memories.filter((m) => m.status !== "deleted").length,
                       )
-                    : t("memory:正在读取…")
-              : loaded
-                ? tn(
-                    "memory:已加载 {count} 条记忆",
-                    memories.filter((m) => m.status !== "deleted").length,
-                  )
-                : t("memory:正在读取…")}
+                    : t("memory:正在读取…")}
           </span>
         </div>
         <MemoryNoteComposer
@@ -1814,7 +1887,7 @@ export function MemorySpace({
         focusDialogue={focusDialogue}
         onFocusDialogueConsumed={onFocusDialogueConsumed}
         libraryView={
-          simplified
+          simplified && memoryAuthority !== "sdk"
             ? {
                 query: mapQuery,
                 source: mapSource,
@@ -1838,19 +1911,39 @@ export function MemorySpace({
             .catch((reason) => setError(message(reason, t)));
         }}
         hidden={!active || displayedMode !== "map"}
-        memories={simplified ? (mapLibrary.page?.items ?? []) : memories}
-        graph={simplified && sourceSnapshotStale ? null : graph}
+        memories={
+          memoryAuthority === "sdk"
+            ? (sdkMap?.memories ?? [])
+            : simplified
+              ? (mapLibrary.page?.items ?? [])
+              : memories
+        }
+        graph={
+          memoryAuthority === "sdk"
+            ? (sdkMap?.graph ?? null)
+            : simplified && sourceSnapshotStale
+              ? null
+              : graph
+        }
         sources={sources}
         processing={processing}
         arrival={memoryArrival}
         onViewHistory={simplified ? onConnect : () => setMode("history")}
-        loaded={simplified ? mapLibrary.page !== null : loaded}
+        loaded={
+          memoryAuthority === "sdk"
+            ? sdkMap !== null
+            : simplified
+              ? mapLibrary.page !== null
+              : loaded
+        }
         detail={detail}
         detailLoad={detailLoad}
         overlayBlocked={
           !active ||
           deleteCount > 0 ||
-          (simplified && (!mapLibrary.page || sourceSnapshotStale))
+          (memoryAuthority === "sdk"
+            ? sdkMap === null
+            : simplified && (!mapLibrary.page || sourceSnapshotStale))
         }
         draft={draft}
         busy={busy || detailReadBlocked}
@@ -1858,6 +1951,14 @@ export function MemorySpace({
         streaming={streaming}
         onDraft={setDraft}
         onOpenMemory={(memoryId) => {
+          if (memoryAuthority === "sdk") {
+            // Governed detail is refused on SDK authority; the SDK library
+            // opens, edits and deletes the same memory through v2.
+            setSdkFocusedMemoryId(memoryId);
+            if (simplified) setManagementOpen(true);
+            else setMode("library");
+            return;
+          }
           const recalled = answerMemories.current.find(
             (memory) => memory.memory_id === memoryId,
           );
