@@ -33,6 +33,7 @@ from one_memory.sdk_migration_runner import (
     prepare_legacy_write_queue_for_cutover,
     recover_abandoned_staging,
     resume_legacy_cleanup,
+    run_startup_migration,
 )
 from one_memory.target_schema import legacy_tables_present
 
@@ -246,6 +247,42 @@ def test_unstarted_legacy_task_moves_to_surviving_write_queue(store):
         ).fetchone() == ("cancelled", "migrated_to_memory_write_job")
 
 
+def test_finished_jobs_without_input_do_not_stop_the_migration(store):
+    """Seen on a real home: completed jobs whose payload the queue released."""
+    from one_memory.memory_server.durable_queue import REAPED_PAYLOAD_MARKER
+
+    queue = DurableWriteQueue(store.database_path)
+
+    def job(key: str) -> str:
+        return queue.submit(
+            WriteRequest(
+                internal_session_id="session-1",
+                source_id="cursor",
+                batch_identity=BatchIdentity(
+                    internal_session_id="session-1", first_round=1, last_round=1
+                ),
+                evidence_ids=["gone"],
+                idempotency_key=key,
+            )
+        ).job_id
+
+    reaped, finished = job("reaped"), job("finished")
+    with main_database(store.database_path).write() as database, database:
+        database.execute(
+            "UPDATE memory_write_jobs SET state='completed',payload_json=? WHERE job_id=?",
+            (json.dumps({REAPED_PAYLOAD_MARKER: "digest"}), reaped),
+        )
+        database.execute(
+            "UPDATE memory_write_jobs SET state='completed' WHERE job_id=?", (finished,)
+        )
+
+    assert prepare_legacy_write_queue_for_cutover(store.database_path) == (0, 0)
+
+    job("pending-without-input")
+    with pytest.raises(DataPlaneMigrationError, match="write_job_input_missing"):
+        prepare_legacy_write_queue_for_cutover(store.database_path)
+
+
 def test_pending_dispatch_becomes_one_write_job_per_conversation(store):
     _insert_evidence(store, "a1", conversation="a", seq=1)
     _insert_evidence(store, "a2", conversation="a", role="assistant", seq=2)
@@ -356,6 +393,25 @@ def test_stale_protective_root_after_authority_is_discarded(tmp_path, store):
     assert not _protective(home).exists()
 
 
+def test_host_capture_is_fenced_for_the_whole_migration(store):
+    from one_memory.live_capture import sdk_migration_capture_fenced
+
+    home = store.database_path.parent
+    fenced: dict[str, bool] = {}
+
+    result = run_startup_migration(
+        data_dir=home,
+        runtime_build="20",
+        sdk_version="2.0.5",
+        namespace="governed-v2",
+        progress=lambda step: fenced.__setitem__(step, sdk_migration_capture_fenced(home)),
+    )
+
+    assert result.state == "cutover"
+    assert fenced == {"bundle": True, "prepare": True, "cutover": True, "cleanup": True}
+    assert not sdk_migration_capture_fenced(home)
+
+
 def test_a_home_blocked_by_build_19_finishes_on_the_next_startup(tmp_path, monkeypatch, store):
     """The quarantined ledger, its staging copy and pending queue work all resolve."""
     home = store.database_path.parent
@@ -404,21 +460,14 @@ def test_a_home_blocked_by_build_19_finishes_on_the_next_startup(tmp_path, monke
         "inspect_runtime",
         lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
     )
-    migration = "sdk-authority-v2-73b3561be69371e0"
-    bundle = f"{migration}-pre-cutover"
+    output = io.StringIO()
+    code = cli.run(["sdk-migrate", "--runtime-build", "20", "--yes", "--json"], output=output)
+    result = json.loads(output.getvalue().splitlines()[-1])
 
-    def run(*arguments):
-        output = io.StringIO()
-        code = cli.run([*arguments, "--yes", "--json"], output=output)
-        return code, json.loads(output.getvalue())
-
-    assert run("migration-bundle", "--bundle-id", bundle, "--runtime-build", "19")[0] == 0
-    code, prepared = run("sdk-migrate", "--migration-id", migration, "--bundle-id", bundle)
-    assert (code, prepared["state"]) == (0, "ready"), prepared
-    assert prepared["frozen_jobs"] == 1
-    code, cutover = run("sdk-cutover", "--migration-id", migration, "--bundle-id", bundle)
-    assert (code, cutover["state"]) == (0, "cutover"), cutover
-
+    assert (code, result["state"]) == (0, "cutover"), output.getvalue()
+    assert result["migration_id"] == "sdk-authority-v2-73b3561be69371e0"
+    assert result["bundle_id"] == "sdk-authority-v2-73b3561be69371e0-pre-cutover"
+    assert result["frozen_jobs"] == 1
     assert store.authority() is MemoryAuthority.SDK
     assert legacy_tables_present(store.database_path) == ()
     with main_database(store.database_path).read() as database:

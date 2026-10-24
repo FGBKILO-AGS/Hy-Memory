@@ -32,8 +32,9 @@ and no raw turn, and does not compare the mirror with the SDK:
 ## 2. Authority before and after cutover
 
 Before the cutover marker is committed, legacy tables remain the product read
-authority and Core may still run on them (CLI-managed Runtime). The App does
-not start Runtime while migration is incomplete.
+authority; a Runtime that was never upgraded through Desktop or `memhub
+install`/`upgrade` still serves them. Desktop does not start Runtime while
+migration is incomplete.
 
 After the cutover marker is committed:
 
@@ -49,27 +50,44 @@ the authority.
 A fresh home bootstraps the latest management schema with SDK authority
 directly and never creates legacy tables.
 
-## 3. Startup steps
+## 3. Who runs it, and how
 
-The packaged App runs these Core commands while the startup placeholder is
-visible, under the Runtime maintenance fence and the capture fence (host
-capture hooks return silently instead of writing Evidence):
+One Core command does the whole migration:
 
-1. `migration-bundle`: copy `one-memory.sqlite3`, the SDK data plane and the
-   non-secret configuration into a versioned bundle, then verify it by an
-   isolated restore. An existing verified bundle for the same migration is
-   reused.
-2. `sdk-migrate`: apply the management schema migrations, discard SDK staging
-   left by builds through 19 (see §5), and make legacy queue work
-   self-contained (see §4). It needs no model profile and no SDK client. The run
-   is recorded as `phase=prepared, state=ready`.
-3. `sdk-cutover`: re-verify the bundle, repeat §4 (a CLI-managed Runtime may
-   have run since step 2), commit SDK authority, and drop the legacy tables.
+```text
+one-memory sdk-migration-status --json      # read-only: is there work?
+one-memory sdk-migrate --runtime-build <build> --yes --json
+```
 
-Each step is safe to repeat. A retry resumes the same `sdk-authority-v2-*`
-migration ID and bundle, including a run that build 19 left in
-`review_required/blocked`; earlier per-item ledger rows are ignored and dropped
-with the legacy tables.
+`sdk-migrate` requires a stopped Runtime. It takes the host capture fence
+(hooks return silently instead of writing Evidence while its PID is alive),
+then:
+
+1. **bundle**: copies `one-memory.sqlite3`, the SDK data plane and non-secret
+   configuration into a versioned bundle and verifies it by an isolated
+   restore; an existing verified bundle of the same run is reused;
+2. **prepare**: applies the management schema migrations, discards SDK staging
+   left by builds through 19 (§5) and makes legacy queue work self-contained
+   (§4); it needs no model profile and no SDK client;
+3. **cutover**: re-verifies the bundle, repeats §4, commits SDK authority;
+4. **cleanup**: drops the legacy tables (including the `evidence_search` index).
+
+With `--json` each step prints `{"state":"running","step":…}` and the last line
+is the result: `cutover`, `complete` (only cleanup was left), `not_required`, or
+`failed` with a stable `code`. Every step is safe to repeat; a retry resumes the
+newest unfinished `sdk-authority-v2-*` run and its bundle, including a run that
+build 19 left in `review_required/blocked`.
+
+Callers only keep the Runtime stopped, and its service from restarting, around
+that command (`runSdkMigration` in `packages/runtime-control`):
+
+- **Desktop** runs it in the startup loading phase before attaching the UI; a
+  failure keeps the App closed with the code's sentence.
+- **CLI `memhub install` / `memhub upgrade`** (macOS and Linux) run it with the
+  new Runtime's Core after switching `current` and before starting the service.
+  A failure before cutover rolls back to the previous version. After cutover an
+  older Runtime refuses the home, so a later readiness failure keeps the new
+  version and reports `runtime_not_ready_after_sdk_migration`.
 
 After cutover, History catch-up scans forward from each source checkpoint and
 recovers turns skipped while capture was fenced.
@@ -127,6 +145,9 @@ The release gate covers:
 - a legacy home reaching cutover with its SDK stores byte-for-byte unchanged;
 - a home left blocked by build 19 (quarantined ledger and staging copy)
   completing on the next startup;
+- CLI upgrade migrating before restart, rolling back on a failed migration,
+  and keeping the new version when a migrated home is slow to come up;
+- host capture fenced for the whole command;
 - pending job freezing, legacy task and pending dispatch conversion;
 - invoked/unknown legacy tasks and pending deletions not blocking cutover;
 - interrupted directory swap recovery before and after authority;

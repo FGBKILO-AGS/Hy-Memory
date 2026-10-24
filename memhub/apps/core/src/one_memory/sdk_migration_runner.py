@@ -8,10 +8,14 @@ commits SDK authority and drops those tables.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,15 +27,22 @@ from one_memory.memory_server.contracts import (
     WriteRequest,
     internal_session_id_for,
 )
-from one_memory.memory_server.durable_queue import DurableWriteQueue
+from one_memory.memory_server.durable_queue import (
+    CANCELLED,
+    COMPLETED,
+    FAILED,
+    REAPED_PAYLOAD_MARKER,
+    DurableWriteQueue,
+)
 from one_memory.memory_server.unified_entry import UnifiedWriteIntake
 from one_memory.sdk_data_plane_migration import (
     CutoverMarker,
     DataPlaneMigrationError,
+    MemoryAuthority,
     SdkDataPlaneMigrationStore,
 )
 from one_memory.sdk_migration_bundle import inspect_sdk_migration_bundle
-from one_memory.target_schema import drop_legacy_tables
+from one_memory.target_schema import drop_legacy_tables, legacy_tables_present
 
 PREPARED_PHASE = "prepared"
 
@@ -101,18 +112,26 @@ def prepare_legacy_write_queue_for_cutover(database_path: Path) -> tuple[int, in
         if "evidence" not in tables:
             return (0, 0)
         jobs = (
-            tuple(database.execute("SELECT job_id,payload_json FROM memory_write_jobs"))
+            tuple(
+                database.execute("SELECT job_id,state,payload_json FROM memory_write_jobs")
+            )
             if "memory_write_jobs" in tables
             else ()
         )
     evidence = EvidenceStore(database_path)
     frozen = 0
     for row in jobs:
-        request = WriteRequest.model_validate_json(str(row["payload_json"]))
+        decoded = json.loads(str(row["payload_json"]))
+        if isinstance(decoded, dict) and REAPED_PAYLOAD_MARKER in decoded:
+            # A finished job whose input the queue already released.
+            continue
+        request = WriteRequest.model_validate(decoded)
         if request.input_records:
             continue
         records = tuple(evidence.get(identifier) for identifier in request.evidence_ids)
         if any(record is None for record in records):
+            if str(row["state"]) in {COMPLETED, FAILED, CANCELLED}:
+                continue
             raise DataPlaneMigrationError(f"sdk_data_plane_write_job_input_missing:{row['job_id']}")
         materialized = tuple(record for record in records if record is not None)
         updated = request.model_copy(update={"input_records": materialized})
@@ -307,3 +326,167 @@ def resume_legacy_cleanup(*, data_dir: Path, database_path: Path) -> tuple[str, 
         namespace=HY_MEMORY_NAMESPACE,
     )
     return drop_legacy_tables(database_path)
+
+
+MIGRATION_PREFIX = "sdk-authority-v2"
+CAPTURE_FENCE = ".sdk-migration-capture-fence.json"
+
+
+@dataclass(frozen=True)
+class StartupMigrationResult:
+    """`not_required`, `cutover` (this run switched authority) or `complete`."""
+
+    state: str
+    migration_id: str | None = None
+    bundle_id: str | None = None
+    preparation: CutoverPreparation | None = None
+    dropped_tables: tuple[str, ...] = ()
+
+    def as_document(self) -> dict[str, object]:
+        document: dict[str, object] = {"schema_version": 1, "state": self.state}
+        if self.migration_id is not None:
+            document["migration_id"] = self.migration_id
+            document["bundle_id"] = self.bundle_id
+        if self.preparation is not None:
+            document.update(self.preparation.as_document())
+        if self.dropped_tables:
+            document["dropped_tables"] = list(self.dropped_tables)
+        return document
+
+
+def database_generation(database_path: Path) -> str:
+    stat = database_path.stat()
+    return hashlib.sha256(f"{stat.st_size}:{stat.st_mtime_ns}".encode()).hexdigest()[:16]
+
+
+def _resumable_identity(database_path: Path) -> tuple[str, str]:
+    """Resume the newest unfinished run, including one build 19 left blocked."""
+    with main_database(database_path).read(row_factory=sqlite3.Row) as database:
+        row = (
+            database.execute(
+                "SELECT migration_id,backup_bundle_id FROM sdk_data_plane_migrations "
+                "WHERE state IN ('running','blocked','ready') AND migration_id LIKE ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (f"{MIGRATION_PREFIX}-%",),
+            ).fetchone()
+            if "sdk_data_plane_migrations" in _tables(database)
+            else None
+        )
+    if row is not None and row["backup_bundle_id"] == f"{row['migration_id']}-pre-cutover":
+        return str(row["migration_id"]), str(row["backup_bundle_id"])
+    migration_id = f"{MIGRATION_PREFIX}-{database_generation(database_path)}"
+    return migration_id, f"{migration_id}-pre-cutover"
+
+
+@contextmanager
+def capture_fence(data_dir: Path) -> Iterator[None]:
+    """Host capture hooks return silently while this process is alive."""
+    marker = data_dir / CAPTURE_FENCE
+    temporary = marker.with_name(f"{marker.name}.{os.getpid()}.tmp")
+    temporary.write_text(
+        json.dumps({"schema_version": 1, "pid": os.getpid()}) + "\n",
+        encoding="utf-8",
+    )
+    os.chmod(temporary, 0o600)
+    temporary.replace(marker)
+    try:
+        yield
+    finally:
+        marker.unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
+
+
+def _ensure_bundle(*, data_dir: Path, bundle_id: str, runtime_build: str) -> dict[str, object]:
+    from one_memory.sdk_migration_bundle import (
+        MigrationBundleRejected,
+        create_sdk_migration_bundle,
+    )
+
+    try:
+        create_sdk_migration_bundle(
+            data_dir=data_dir,
+            bundle_id=bundle_id,
+            runtime_build=runtime_build,
+            runtime_stopped=True,
+        )
+    except MigrationBundleRejected as error:
+        if error.code != "sdk_migration_bundle_exists":
+            raise
+    return inspect_sdk_migration_bundle(data_dir=data_dir, bundle_id=bundle_id)
+
+
+def run_startup_migration(
+    *,
+    data_dir: Path,
+    runtime_build: str,
+    sdk_version: str,
+    namespace: str,
+    progress: Callable[[str], None] = lambda _step: None,
+) -> StartupMigrationResult:
+    """Bring one stopped home to SDK authority. Safe to repeat after any failure.
+
+    The caller must stop Runtime and keep its service from restarting.
+    """
+    database_path = data_dir / "one-memory.sqlite3"
+    if not database_path.is_file():
+        return StartupMigrationResult(state="not_required")
+    store = SdkDataPlaneMigrationStore(database_path)
+    if store.authority() is MemoryAuthority.SDK:
+        if not legacy_tables_present(database_path) and not abandoned_staging_present(
+            data_dir=data_dir, namespace=namespace
+        ):
+            return StartupMigrationResult(state="not_required")
+        progress("cleanup")
+        return StartupMigrationResult(
+            state="complete",
+            dropped_tables=resume_legacy_cleanup(data_dir=data_dir, database_path=database_path),
+        )
+
+    from one_memory.database_access import close_main_databases
+    from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
+    from one_memory.memory_server.migrations import MIGRATIONS
+
+    migration_id, bundle_id = _resumable_identity(database_path)
+    with capture_fence(data_dir):
+        progress("bundle")
+        manifest = _ensure_bundle(
+            data_dir=data_dir,
+            bundle_id=bundle_id,
+            runtime_build=runtime_build,
+        )
+        progress("prepare")
+        asyncio.run(migrate(SqliteMigrationStore(database_path), MIGRATIONS))
+        close_main_databases()
+        recover_abandoned_staging(
+            data_dir=data_dir,
+            database_path=database_path,
+            namespace=namespace,
+        )
+        store.start(
+            migration_id=migration_id,
+            source_runtime_build=str(manifest.get("runtime_build") or ""),
+            target_sdk_version=sdk_version,
+            source_schema_version=MIGRATIONS[-1].version,
+            namespace_fingerprint=hashlib.sha256(namespace.encode()).hexdigest(),
+            backend_fingerprint=hashlib.sha256(b"chroma:kuzu:sqlite").hexdigest(),
+            backup_bundle_id=bundle_id,
+        )
+        preparation = prepare_legacy_work_for_cutover(database_path)
+        store.set_phase(migration_id, phase=PREPARED_PHASE, state="ready")
+        progress("cutover")
+        commit_sdk_cutover(
+            data_dir=data_dir,
+            database_path=database_path,
+            migration_id=migration_id,
+            bundle_id=bundle_id,
+            sdk_version=sdk_version,
+        )
+        progress("cleanup")
+        dropped = resume_legacy_cleanup(data_dir=data_dir, database_path=database_path)
+    return StartupMigrationResult(
+        state="cutover",
+        migration_id=migration_id,
+        bundle_id=bundle_id,
+        preparation=preparation,
+        dropped_tables=dropped,
+    )
