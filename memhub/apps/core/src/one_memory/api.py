@@ -3115,19 +3115,41 @@ def create_app(
     )
     async def sdk_memory_library(
         statuses: list[str] = Query(default=["active"]),  # noqa: B008
+        source: str | None = Query(default=None, min_length=1),
+        query: str | None = Query(default=None, max_length=512),
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
     ) -> HySdkMemoryPage:
         try:
             client = await _sdk_client_handle(app).client()
+            needle = (query or "").strip().casefold()
             raw = await asyncio.to_thread(
                 client.list_memories,
                 user_id="local",
                 statuses=list(statuses),
-                offset=offset,
-                limit=limit,
+                include_sources=[source] if source else None,
+                offset=0 if needle else offset,
+                limit=100_000 if needle else limit,
             )
-            return HySdkMemoryPage.from_sdk(raw, limit=limit, offset=offset)
+            page = HySdkMemoryPage.from_sdk(
+                raw,
+                limit=100_000 if needle else limit,
+                offset=0 if needle else offset,
+            )
+            if not needle:
+                return page
+            matches = tuple(
+                memory
+                for memory in page.memories
+                if needle
+                in f"{memory.content} {' '.join(memory.tags)}".casefold()
+            )
+            return HySdkMemoryPage(
+                memories=matches[offset : offset + limit],
+                total=len(matches),
+                limit=limit,
+                offset=offset,
+            )
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_list_failed") from None
 
