@@ -48,7 +48,10 @@ export function sdkMapMemory(record: SdkMemoryRecord): GovernedMemory {
     tags: [...record.tags],
     supersedes: [...record.supersedes],
     superseded_by: [...record.superseded_by],
-    revision: 1,
+    // GovernedMemory still requires a revision for the shared map model. SDK
+    // has no revision contract; the inspector recognises sdk_status and never
+    // renders this placeholder.
+    revision: 0,
     created_at: created,
     updated_at: created,
     deleted_at: null,
@@ -57,10 +60,10 @@ export function sdkMapMemory(record: SdkMemoryRecord): GovernedMemory {
 
 /** One SDK memory as the map's inspector reads it.
  *
- * The inspector was built for a governed detail (memory + cited evidence +
- * versions). The SDK keeps none of the latter two per memory — a rewrite
- * replaces the row — so they are empty rather than faked, and the panel shows
- * the memory itself where the design put it.
+ * The inspector was built for a governed detail. SDK-native memory has no
+ * product revision or "original evidence" section; source_raw_ids remain an
+ * internal SDK provenance relation and are deliberately not projected as UI
+ * evidence.
  */
 export function sdkDetail(record: SdkMemoryRecord): MemoryDetail {
   return {
@@ -68,6 +71,10 @@ export function sdkDetail(record: SdkMemoryRecord): MemoryDetail {
     evidence: [],
     history: [],
     index_sync: null,
+    sdk_status: record.status,
+    source_id: record.source,
+    sdk_memory_at: stamp(record.memory_at) || null,
+    sdk_created_at: stamp(record.gmt_created) || null,
   };
 }
 

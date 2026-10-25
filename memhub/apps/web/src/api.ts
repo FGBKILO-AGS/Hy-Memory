@@ -891,10 +891,14 @@ export async function getMemoryLibrary(
 export async function getSdkMemoryLibrary(
   {
     statuses = ["active"],
+    source,
+    query,
     offset = 0,
     limit = 100,
   }: {
     statuses?: SdkMemoryStatus[];
+    source?: string;
+    query?: string;
     offset?: number;
     limit?: number;
   } = {},
@@ -905,6 +909,8 @@ export async function getSdkMemoryLibrary(
     limit: String(limit),
   });
   for (const status of statuses) params.append("statuses", status);
+  if (source) params.set("source", source);
+  if (query?.trim()) params.set("query", query.trim());
   const response = await client.get<SdkMemoryPage>("/api/v2/memory-library", {
     params,
     signal,

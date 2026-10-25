@@ -323,6 +323,7 @@ export function MemorySpace({
     failed: boolean;
   }>({ page: null, loading: false, failed: false });
   const [sdkLibraryQuery, setSdkLibraryQuery] = useState("");
+  const [sdkLibrarySource, setSdkLibrarySource] = useState("");
   const [sdkLibraryOffset, setSdkLibraryOffset] = useState(0);
   const sdkMapVisible =
     memoryAuthority === "sdk" &&
@@ -371,7 +372,13 @@ export function MemorySpace({
     const controller = new AbortController();
     setSdkLibrary((current) => ({ ...current, loading: true }));
     void getSdkMemoryLibrary(
-      { statuses: ["active"], offset: sdkLibraryOffset, limit: 50 },
+      {
+        statuses: ["active"],
+        source: sdkLibrarySource || undefined,
+        query: sdkLibraryQuery || undefined,
+        offset: sdkLibraryOffset,
+        limit: 100,
+      },
       controller.signal,
     )
       .then((page) => {
@@ -400,6 +407,8 @@ export function MemorySpace({
     active,
     displayedMode,
     sdkLibraryOffset,
+    sdkLibraryQuery,
+    sdkLibrarySource,
     sdkMapRevision,
   ]);
   const [draft, setDraft] = useState("");
@@ -2002,15 +2011,13 @@ export function MemorySpace({
           simplified && memoryAuthority === "sdk"
             ? {
                 query: sdkLibraryQuery,
-                source: "",
+                source: sdkLibrarySource,
                 page: sdkLibrary.page,
                 loading: sdkLibrary.loading,
                 failed: sdkLibrary.failed,
                 stale: false,
                 onQuery: setSdkLibraryQuery,
-                // SDK memories carry one source each and the list is paged by
-                // the endpoint; a source filter would have to page separately.
-                onSource: () => {},
+                onSource: setSdkLibrarySource,
                 resetPage: () => setSdkLibraryOffset(0),
                 onPage: (offset) => setSdkLibraryOffset(offset),
                 onRetry: bumpSdkMap,
