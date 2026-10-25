@@ -302,6 +302,17 @@ def test_sdk_memory_library_uses_sdk_search_and_skips_empty_rows_without_mutatio
                 "source": "cursor",
                 "tags": ["shipping"],
             },
+            "retired": {
+                "memory_id": "retired",
+                "content": "Release plan, first draft",
+                "layer": "l2_fact",
+                "status": "superseded",
+                "user_id": "local",
+                "agent_id": "all-apps",
+                "session_id": "s1",
+                "source": "cursor",
+                "tags": [],
+            },
             "default": {
                 "memory_id": "default",
                 "content": "Unknown source",
@@ -335,9 +346,7 @@ def test_sdk_memory_library_uses_sdk_search_and_skips_empty_rows_without_mutatio
                 ]
                 include_sources = kwargs.get("include_sources") or []
                 if include_sources:
-                    rows = [
-                        row for row in rows if row["source"] in include_sources
-                    ]
+                    rows = [row for row in rows if row["source"] in include_sources]
                 return {
                     "vdb": {
                         "memories": rows,
@@ -358,7 +367,12 @@ def test_sdk_memory_library_uses_sdk_search_and_skips_empty_rows_without_mutatio
                                 "memory_id": "release",
                                 "content": "Release plan",
                                 "score": 0.9,
-                            }
+                            },
+                            {
+                                "memory_id": "retired",
+                                "content": "Release plan, first draft",
+                                "score": 0.8,
+                            },
                         ],
                     }
                 }
@@ -388,13 +402,14 @@ def test_sdk_memory_library_uses_sdk_search_and_skips_empty_rows_without_mutatio
                 )
                 assert response.status_code == 200
                 body = response.json()
-                assert body["total"] == 1
-                assert [item["memory_id"] for item in body["memories"]] == [
-                    "release"
-                ]
+                # `total` counts the bounded relevance window; the superseded
+                # hit is in it but is not listed as an active memory.
+                assert body["total"] == 2
+                assert [item["memory_id"] for item in body["memories"]] == ["release"]
                 assert search_calls[0][0] == "release"
                 assert search_calls[0][1]["include_sources"] == ["cursor"]
                 assert search_calls[0][1]["limit"] == 500
+                assert search_calls[0][1]["intention_limit"] == 0
                 assert list_calls == []
 
                 listed = await client.get(

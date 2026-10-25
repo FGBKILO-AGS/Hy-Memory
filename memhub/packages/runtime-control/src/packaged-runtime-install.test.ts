@@ -508,6 +508,31 @@ describe("installPackagedRuntime", () => {
     },
   );
 
+  it("refuses to repair a selected tree whose manifest is unreadable", async () => {
+    const { root, resources, executable, installRoot } = await fixture();
+    const { selected } = await installFormalCurrent({
+      root,
+      resources,
+      executable,
+      installRoot,
+      buildNumber: 3758,
+    });
+    await writeFile(path.join(selected, "manifest.json"), "{");
+
+    await expect(
+      installPackagedRuntime({
+        resourcesPath: resources,
+        executablePath: executable,
+        installRoot,
+        platform: "darwin",
+        arch: "arm64",
+        buildNumber: 3757,
+        gitCommit: "a".repeat(40),
+        replaceSameBuild: true,
+      }),
+    ).rejects.toThrow("distribution_manifest_invalid");
+  });
+
   it("preserves downgrade refusal when selected current is newer", async () => {
     const { root, resources, executable, installRoot } = await fixture();
     await installFormalCurrent({

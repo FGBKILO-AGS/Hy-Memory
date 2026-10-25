@@ -369,7 +369,11 @@ async function inspectBuildNumberTransition(options: {
   }
   let selectedVerified = true;
   let selected = await readManifest(target).catch(() => null);
-  if (options.allowSameBuildReplace && selected !== null) {
+  if (options.allowSameBuildReplace) {
+    // The opt-in may replace a dirty tree, but only one whose build it can
+    // still read: without a manifest the downgrade check below has nothing to
+    // compare, and a newer runtime would be overwritten by an older one.
+    if (selected === null) throw new Error("distribution_manifest_invalid");
     try {
       selected = await verifyDistribution(
         target,

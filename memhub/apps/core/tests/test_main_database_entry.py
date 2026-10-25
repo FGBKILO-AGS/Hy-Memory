@@ -92,6 +92,15 @@ ALLOWED = {
         "the memory ids a migrated home must still read back",
         opened_with="?mode=ro",
     ),
+    ("hy_sdk_migration.py", "_legacy_metadata"): Allowed(
+        "the pre-cutover bundle's copy of the legacy database, read-only, to "
+        "recover the source and times historical cutovers dropped",
+        opened_with="?mode=ro",
+    ),
+    ("hy_sdk_migration.py", "_repair_coding"): Allowed(
+        "the SDK's own Coding/Working stores, not the main database: the one-time "
+        "metadata repair writes them at startup, before the SDK client opens"
+    ),
     ("sdk_vector_reattach.py", "_stored_names"): Allowed(
         "Chroma's own chroma.sqlite3, read-only, to list collection names before "
         "the offline migration opens Chroma",

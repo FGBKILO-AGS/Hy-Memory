@@ -16,6 +16,8 @@ import "./selected-memory.css";
 
 type Page = "read" | "edit" | "delete";
 
+const HEADING_LIMIT = 72;
+
 export function SelectedMemoryDetail({
   detail,
   sources,
@@ -234,12 +236,18 @@ export function SelectedMemoryDetail({
       if (alive.current) setBusy(false);
     }
   }
+  // The heading is the first sentence when it fits in HEADING_LIMIT
+  // characters; otherwise the text breaks at the last space within the limit
+  // (CJK text has none, so it breaks at the limit itself).
   const punctuation = memory.content.search(/[。！？!?\n]/);
+  const space = memory.content.lastIndexOf(" ", HEADING_LIMIT);
   const split =
-    punctuation > 0 && punctuation < 85
+    punctuation > 0 && punctuation < HEADING_LIMIT
       ? punctuation + 1
-      : memory.content.length > 72
-        ? 72
+      : memory.content.length > HEADING_LIMIT
+        ? space > HEADING_LIMIT / 2
+          ? space
+          : HEADING_LIMIT
         : -1;
   const heading =
     split > 0 ? memory.content.slice(0, split).trim() : memory.content;

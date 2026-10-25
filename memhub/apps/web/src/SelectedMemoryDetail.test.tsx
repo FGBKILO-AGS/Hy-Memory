@@ -188,6 +188,29 @@ it("splits long memory text into a bounded heading and readable body", () => {
     "selected-memory-body",
   );
 });
+it.each([
+  [
+    "a late sentence end",
+    `${"长".repeat(80)}。${"尾".repeat(10)}`,
+    "长".repeat(72),
+  ],
+  ["words", `${"word ".repeat(20)}end`, "word ".repeat(14).trim()],
+])("keeps the heading within the limit for %s", (_case, content, heading) => {
+  render(
+    <SelectedMemoryDetail
+      detail={{
+        ...detail,
+        memory: { ...detail.memory, content },
+        evidence: [],
+        sdk_status: "active",
+      }}
+      sources={[]}
+      onChanged={vi.fn()}
+      hideActions
+    />,
+  );
+  expect(screen.getByRole("heading", { name: heading })).toBeTruthy();
+});
 it("opens full editor and saves content without rewriting scope", async () => {
   const changed = vi.fn();
   render(

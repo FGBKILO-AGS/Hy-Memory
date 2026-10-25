@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterator
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -83,10 +84,7 @@ def repair_sdk_metadata_from_bundle(
     migration_id = _sdk_migration_id(database_path)
     if migration_id is None:
         return MetadataRepairResult(None, 0, 0, 0)
-    receipt = (
-        data_dir
-        / f".sdk-metadata-repair-v{_METADATA_REPAIR_VERSION}-{migration_id}.json"
-    )
+    receipt = data_dir / f".sdk-metadata-repair-v{_METADATA_REPAIR_VERSION}-{migration_id}.json"
     if receipt.is_file():
         document = json.loads(receipt.read_text(encoding="utf-8"))
         return MetadataRepairResult(
@@ -144,13 +142,11 @@ def _sdk_migration_id(database_path: Path) -> str | None:
 
 
 def _legacy_metadata(path: Path, *, now: datetime) -> dict[str, RepairMetadata]:
-    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as database:
+    with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as database:
         database.row_factory = sqlite3.Row
         tables = {
             str(row[0])
-            for row in database.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
+            for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         if not {"memory_task_outputs", "governed_memories", "evidence"} <= tables:
             return {}
@@ -170,8 +166,7 @@ def _legacy_metadata(path: Path, *, now: datetime) -> dict[str, RepairMetadata]:
                 tuple(
                     str(ref["evidence_id"])
                     for ref in refs
-                    if isinstance(ref, dict)
-                    and isinstance(ref.get("evidence_id"), str)
+                    if isinstance(ref, dict) and isinstance(ref.get("evidence_id"), str)
                 )
                 if isinstance(refs, list)
                 else ()
@@ -204,21 +199,31 @@ def _legacy_metadata(path: Path, *, now: datetime) -> dict[str, RepairMetadata]:
                 "SELECT memory_id,created_at,updated_at FROM governed_memories"
             )
         }
-    result: dict[str, RepairMetadata] = {}
+    # Several legacy memories can fold into one SDK memory. Pool their evidence
+    # before deciding, so a disagreeing source cannot be overwritten by whichever
+    # output happened to come last.
+    pooled: dict[str, tuple[set[str], list[datetime], list[datetime]]] = {}
     for legacy_id, canonical_id, refs in outputs:
-        resolved = [evidence[identifier] for identifier in refs if identifier in evidence]
-        sources = {source for source, _timestamp in resolved if source and source != "default"}
-        times = [timestamp for _source, timestamp in resolved if timestamp is not None]
-        result[canonical_id] = RepairMetadata(
+        sources, times, created = pooled.setdefault(canonical_id, (set(), [], []))
+        for identifier in refs:
+            if identifier not in evidence:
+                continue
+            source, timestamp = evidence[identifier]
+            if source and source != "default":
+                sources.add(source)
+            if timestamp is not None:
+                times.append(timestamp)
+        legacy_created = governed.get(legacy_id)
+        if legacy_created is not None:
+            created.append(legacy_created)
+    return {
+        canonical_id: RepairMetadata(
             source=next(iter(sources)) if len(sources) == 1 else None,
             memory_at=int(max(times).timestamp()) if times else None,
-            created_at=(
-                int(governed[legacy_id].timestamp())
-                if governed.get(legacy_id) is not None
-                else None
-            ),
+            created_at=int(min(created).timestamp()) if created else None,
         )
-    return result
+        for canonical_id, (sources, times, created) in pooled.items()
+    }
 
 
 def _plausible_time(
@@ -256,50 +261,55 @@ def _repair_vector(
         path=str(directory),
         settings=Settings(anonymized_telemetry=False),
     )
-    repaired = 0
-    ids = tuple(mapping)
-    for collection in client.list_collections():
-        for batch in _batches(ids):
-            page = collection.get(ids=list(batch), include=["metadatas"])
-            updated_ids: list[str] = []
-            updated_metadata: list[dict[str, object]] = []
-            for memory_id, metadata in zip(
-                page.get("ids") or (),
-                page.get("metadatas") or (),
-                strict=True,
-            ):
-                if not isinstance(metadata, dict):
-                    continue
-                desired = mapping.get(str(memory_id))
-                if desired is None:
-                    continue
-                next_metadata = dict(metadata)
-                changed = False
-                if desired.source and next_metadata.get("source") in {
-                    None,
-                    "",
-                    "default",
-                }:
-                    next_metadata["source"] = desired.source
-                    changed = True
-                if (
-                    desired.memory_at is not None
-                    and next_metadata.get("memory_at") != desired.memory_at
+    # The SDK client is not open yet (startup has not created its handle), so
+    # this is the only writer; release the store before the SDK takes it.
+    try:
+        repaired = 0
+        ids = tuple(mapping)
+        for collection in client.list_collections():
+            for batch in _batches(ids):
+                page = collection.get(ids=list(batch), include=["metadatas"])
+                updated_ids: list[str] = []
+                updated_metadata: list[dict[str, object]] = []
+                for memory_id, metadata in zip(
+                    page.get("ids") or (),
+                    page.get("metadatas") or (),
+                    strict=True,
                 ):
-                    next_metadata["memory_at"] = desired.memory_at
-                    changed = True
-                if (
-                    desired.created_at is not None
-                    and next_metadata.get("gmt_created") != desired.created_at
-                ):
-                    next_metadata["gmt_created"] = desired.created_at
-                    changed = True
-                if changed:
-                    updated_ids.append(str(memory_id))
-                    updated_metadata.append(next_metadata)
-            if updated_ids:
-                collection.update(ids=updated_ids, metadatas=updated_metadata)
-                repaired += len(updated_ids)
+                    if not isinstance(metadata, dict):
+                        continue
+                    desired = mapping.get(str(memory_id))
+                    if desired is None:
+                        continue
+                    next_metadata = dict(metadata)
+                    changed = False
+                    if desired.source and next_metadata.get("source") in {
+                        None,
+                        "",
+                        "default",
+                    }:
+                        next_metadata["source"] = desired.source
+                        changed = True
+                    if (
+                        desired.memory_at is not None
+                        and next_metadata.get("memory_at") != desired.memory_at
+                    ):
+                        next_metadata["memory_at"] = desired.memory_at
+                        changed = True
+                    if (
+                        desired.created_at is not None
+                        and next_metadata.get("gmt_created") != desired.created_at
+                    ):
+                        next_metadata["gmt_created"] = desired.created_at
+                        changed = True
+                    if changed:
+                        updated_ids.append(str(memory_id))
+                        updated_metadata.append(next_metadata)
+                if updated_ids:
+                    collection.update(ids=updated_ids, metadatas=updated_metadata)
+                    repaired += len(updated_ids)
+    finally:
+        client.close()
     return repaired
 
 
@@ -313,12 +323,10 @@ def _repair_coding(
         path = root / name
         if not path.is_file():
             continue
-        with sqlite3.connect(path) as database:
+        with closing(sqlite3.connect(path)) as database:
             tables = {
                 str(row[0])
-                for row in database.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
+                for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")
             }
             for table, identifier in (
                 ("coding_memory_meta", "experience_id"),
@@ -351,8 +359,7 @@ def _repair_coding(
                         continue
                     values.append(memory_id)
                     database.execute(
-                        f"UPDATE {table} SET {','.join(updates)} "
-                        f"WHERE {identifier}=?",
+                        f"UPDATE {table} SET {','.join(updates)} WHERE {identifier}=?",
                         values,
                     )
                     repaired += 1

@@ -804,6 +804,32 @@ describe("local Runtime installation", () => {
     ).rejects.toThrow("distribution_downgrade_refused");
   });
 
+  it("does not let the same-build opt-in replace a tree whose build it cannot read", async () => {
+    if (process.platform !== "darwin") return;
+    const first = await distribution("1.0.0", { buildNumber: 5 });
+    const firstPlan = await planLocalInstall({
+      source: first.source,
+      installRoot: first.installRoot,
+      platform: process.platform,
+      arch: process.arch,
+    });
+    await applyLocalInstall(firstPlan);
+    await writeFile(
+      path.join(firstPlan.version_directory, "manifest.json"),
+      "{",
+    );
+    const older = await distribution("0.9.0", { buildNumber: 4 });
+    await expect(
+      planLocalInstall({
+        source: older.source,
+        installRoot: first.installRoot,
+        platform: process.platform,
+        arch: process.arch,
+        allowSameBuildReplace: true,
+      }),
+    ).rejects.toThrow("distribution_manifest_invalid");
+  });
+
   it("accepts an equal build_number when the bytes are identical (idempotent reinstall)", async () => {
     if (process.platform !== "darwin") return;
     const first = await distribution("1.0.0", { buildNumber: 5 });

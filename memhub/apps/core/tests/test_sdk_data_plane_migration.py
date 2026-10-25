@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -74,8 +75,7 @@ def test_post_cutover_metadata_repair_restores_source_and_original_times(store):
     migration_id = "sdk-authority-v2-source-repair"
     with main_database(store.database_path).write() as database, database:
         database.execute(
-            "UPDATE memory_authority_state SET authority='sdk',migration_id=? "
-            "WHERE singleton=1",
+            "UPDATE memory_authority_state SET authority='sdk',migration_id=? WHERE singleton=1",
             (migration_id,),
         )
     legacy = (
@@ -184,6 +184,60 @@ def test_post_cutover_metadata_repair_restores_source_and_original_times(store):
         now=datetime(2026, 10, 25, tzinfo=UTC),
     )
     assert repeated == result
+
+
+def test_metadata_repair_keeps_source_unknown_when_outputs_disagree(tmp_path):
+    """Two legacy memories folded into one SDK memory pool their evidence."""
+    from one_memory.hy_sdk_migration import _legacy_metadata
+
+    legacy = tmp_path / "one-memory.sqlite3"
+    with closing(sqlite3.connect(legacy)) as database, database:
+        database.executescript(
+            """
+            CREATE TABLE memory_task_outputs (body TEXT);
+            CREATE TABLE governed_memories (
+                memory_id TEXT, created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE evidence (
+                evidence_id TEXT, source_id TEXT, created_at TEXT, imported_at TEXT
+            );
+            """
+        )
+        database.executemany(
+            "INSERT INTO governed_memories VALUES (?,?,?)",
+            [
+                ("legacy-1", "2026-10-18T00:00:00+00:00", None),
+                ("legacy-2", "2026-10-12T00:00:00+00:00", None),
+            ],
+        )
+        database.executemany(
+            "INSERT INTO evidence VALUES (?,?,?,NULL)",
+            [
+                ("e1", "workbuddy", "2026-10-17T00:00:00+00:00"),
+                ("e2", "cursor", "2026-10-11T00:00:00+00:00"),
+            ],
+        )
+        database.executemany(
+            "INSERT INTO memory_task_outputs VALUES (?)",
+            [
+                (
+                    json.dumps(
+                        {
+                            "memory_id": legacy_id,
+                            "hy_memory_id": "sdk-1",
+                            "support_refs": [{"evidence_id": evidence_id}],
+                        }
+                    ),
+                )
+                for legacy_id, evidence_id in (("legacy-1", "e1"), ("legacy-2", "e2"))
+            ],
+        )
+
+    repaired = _legacy_metadata(legacy, now=datetime(2026, 10, 25, tzinfo=UTC))["sdk-1"]
+
+    assert repaired.source is None
+    assert repaired.memory_at == int(datetime(2026, 10, 17, tzinfo=UTC).timestamp())
+    assert repaired.created_at == int(datetime(2026, 10, 12, tzinfo=UTC).timestamp())
 
 
 def _insert_evidence(store, evidence_id, *, conversation="session-1", role="user", seq=1):

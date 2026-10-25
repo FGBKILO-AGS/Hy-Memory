@@ -325,8 +325,11 @@ async function reuseSelectedSameBuild(options: {
     )
       .then((value) => JSON.parse(value) as DistributionManifest)
       .catch(() => null);
+    // Without a readable build the downgrade check cannot run; fail closed
+    // rather than let an older bundle replace a newer runtime.
+    if (declared === null) throw new Error("distribution_manifest_invalid");
     if (
-      declared?.build_number !== undefined &&
+      declared.build_number !== undefined &&
       options.buildNumber !== undefined &&
       declared.build_number > options.buildNumber
     ) {
