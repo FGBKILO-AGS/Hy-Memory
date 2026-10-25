@@ -9,7 +9,7 @@ import { apiErrorCode, correctMemory, getMemory, mutateMemory } from "./api";
 import { clockStamp } from "./clock-stamp";
 import { useGuiLanguage } from "./gui-language";
 import { R6Button } from "./R6Controls";
-import { sourceNameOr } from "./source-label";
+import { sourceNameOr, UNATTRIBUTED_SOURCE_ID } from "./source-label";
 import { traceUiAction } from "./ui-trace";
 import { isDefiniteRefusal, writeTraceStatus } from "./write-outcome";
 import "./selected-memory.css";
@@ -73,11 +73,11 @@ export function SelectedMemoryDetail({
         : memory.status === "superseded"
           ? t("selectedMemory.status.superseded")
           : t("selectedMemory.status.unknown");
-  const source = sourceNameOr(
-    sources,
-    detail.source_id ?? evidence?.source_id,
-    t("selectedMemory.sourceUnknown"),
-  );
+  const sourceId = detail.source_id ?? evidence?.source_id;
+  const source =
+    detail.sdk_status && sourceId === UNATTRIBUTED_SOURCE_ID
+      ? t("selectedMemory.sourceUnattributed")
+      : sourceNameOr(sources, sourceId, t("selectedMemory.sourceUnknown"));
   const dirty = page === "edit" && draft !== memory.content;
   useEffect(() => {
     if (page === "edit" && memory.revision > base) setConflictFound(true);

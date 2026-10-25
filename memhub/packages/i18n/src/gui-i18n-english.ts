@@ -1571,6 +1571,10 @@ const baseEnglishMessages = {
   "memory:全部记忆": "All memories",
   "memory:来源待核对": "Source needs review",
   "memory:所选来源待核对": "Selected source needs review",
+  "memory:未识别来源": "Unidentified source",
+  "memory:这个来源下还没有记忆": "No memories from this source yet",
+  "memory:只在最相关的 {count} 条记忆里查找关键词":
+    "Keywords are matched only among the {count} most relevant memories",
   "memory:未知来源": "Unknown source",
   "memory:记忆读取失败": "Could not load memories",
   "memory:正在读取…": "Loading…",

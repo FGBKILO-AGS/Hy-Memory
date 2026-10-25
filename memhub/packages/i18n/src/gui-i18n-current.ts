@@ -83,6 +83,7 @@ export const currentChineseMessages = {
   "selectedMemory.status.archived": "已归档",
   "selectedMemory.status.unknown": "状态待核对",
   "selectedMemory.sourceUnknown": "来源待核对",
+  "selectedMemory.sourceUnattributed": "未识别来源",
   "selectedMemory.discardDraft": "放弃尚未保存的修改？",
   "selectedMemory.newVersionReadFailed": "暂时无法读取新版本，草稿已保留。",
   "selectedMemory.updateRejected":
@@ -222,6 +223,7 @@ export const currentEnglishMessages: Record<
   "selectedMemory.status.archived": "Archived",
   "selectedMemory.status.unknown": "Status needs review",
   "selectedMemory.sourceUnknown": "Source needs review",
+  "selectedMemory.sourceUnattributed": "Unidentified source",
   "selectedMemory.discardDraft": "Discard unsaved changes?",
   "selectedMemory.newVersionReadFailed":
     "Could not load the new version. Your draft is retained.",
@@ -375,6 +377,7 @@ export const currentSpanishMessages: Record<
   "selectedMemory.status.archived": "Archivada",
   "selectedMemory.status.unknown": "Estado pendiente de comprobar",
   "selectedMemory.sourceUnknown": "Origen sin verificar",
+  "selectedMemory.sourceUnattributed": "Origen no identificado",
   "selectedMemory.discardDraft": "¿Descartar los cambios sin guardar?",
   "selectedMemory.newVersionReadFailed":
     "No se pudo leer la nueva versión. Tu borrador se conserva.",

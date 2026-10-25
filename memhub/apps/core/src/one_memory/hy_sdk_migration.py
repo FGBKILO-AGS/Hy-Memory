@@ -11,9 +11,10 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from hy_memory import (  # type: ignore[import-untyped]
     DataPlaneRestore,
@@ -25,7 +26,8 @@ from hy_memory import (  # type: ignore[import-untyped]
 from one_memory.database_access import main_database
 from one_memory.hy_runtime_config import HY_MEMORY_NAMESPACE
 
-_METADATA_REPAIR_VERSION = 1
+# v2 reads the backfill's governed_memory_evidence links; v1 missed them.
+_METADATA_REPAIR_VERSION = 2
 _BATCH = 500
 
 
@@ -80,7 +82,7 @@ def repair_sdk_metadata_from_bundle(
     database_path: Path,
     now: datetime | None = None,
 ) -> MetadataRepairResult:
-    """Restore metadata lost by historical cutovers from their verified bundle."""
+    """Restore metadata lost by historical cutovers from their verified bundles."""
     migration_id = _sdk_migration_id(database_path)
     if migration_id is None:
         return MetadataRepairResult(None, 0, 0, 0)
@@ -93,17 +95,21 @@ def repair_sdk_metadata_from_bundle(
             int(document.get("vector_rows", 0)),
             int(document.get("coding_rows", 0)),
         )
-    legacy = (
-        data_dir
-        / "backups"
-        / f"{migration_id}-pre-cutover.sdk-bundle"
-        / "management"
-        / "one-memory.sqlite3"
+    # A home can carry several cutovers (v1 and then v2). A later bundle may
+    # have been taken after an earlier cutover had already retired the legacy
+    # tables, so every bundle is read and their links are pooled.
+    legacy = sorted(
+        (data_dir / "backups").glob("*-pre-cutover.sdk-bundle/management/one-memory.sqlite3")
     )
-    if not legacy.is_file():
+    if not legacy:
+        # No bundle yet is not a finished repair: try again on the next start.
         return MetadataRepairResult(migration_id, 0, 0, 0)
-    mapping = _legacy_metadata(legacy, now=now or datetime.now(UTC))
-    vector_rows = _repair_vector(data_dir, mapping)
+    current = now or datetime.now(UTC)
+    pools: dict[str, _Pool] = {}
+    for path in legacy:
+        _merge_pools(pools, _legacy_pools(path, now=current))
+    mapping = _decide(pools)
+    vector_rows = _repair_vector(data_dir, mapping, now=current)
     coding_rows = _repair_coding(data_dir, mapping)
     result = MetadataRepairResult(
         migration_id,
@@ -141,40 +147,104 @@ def _sdk_migration_id(database_path: Path) -> str | None:
     return str(value) if isinstance(value, str) and value else None
 
 
+@dataclass
+class _Pool:
+    """Everything the legacy library knew about one SDK memory."""
+
+    sources: set[str] = field(default_factory=set)
+    times: list[datetime] = field(default_factory=list)
+    created: list[datetime] = field(default_factory=list)
+
+
 def _legacy_metadata(path: Path, *, now: datetime) -> dict[str, RepairMetadata]:
+    return _decide(_legacy_pools(path, now=now))
+
+
+def _legacy_pools(path: Path, *, now: datetime) -> dict[str, _Pool]:
+    """Link each SDK memory id to the legacy evidence it was made from.
+
+    Three legacy paths wrote memories the SDK now holds:
+
+    - the cutover backfill (`import_exact`) copied every governed memory into the
+      SDK under its legacy id, or under the id `memory_task_outputs` recorded,
+      without a source or a conversation time; `governed_memory_evidence` is the
+      link from that memory to its evidence;
+    - extraction tasks recorded their evidence as `support_refs`;
+    - the write queue recorded the SDK ids each job produced.
+    """
     with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as database:
         database.row_factory = sqlite3.Row
         tables = {
             str(row[0])
             for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
-        if not {"memory_task_outputs", "governed_memories", "evidence"} <= tables:
+        if "evidence" not in tables:
             return {}
-        outputs: list[tuple[str, str, tuple[str, ...]]] = []
-        evidence_ids: set[str] = set()
-        for row in database.execute("SELECT body FROM memory_task_outputs"):
-            try:
-                body = json.loads(str(row["body"]))
-            except (TypeError, ValueError):
-                continue
-            legacy_id = body.get("memory_id")
-            canonical_id = body.get("hy_memory_id")
-            refs = body.get("support_refs")
-            if not isinstance(legacy_id, str) or not isinstance(canonical_id, str):
-                continue
-            identifiers = (
-                tuple(
+        links: dict[str, set[str]] = {}
+        created: dict[str, list[datetime]] = {}
+        canonical: dict[str, str] = {}
+        if "memory_task_outputs" in tables:
+            for row in database.execute("SELECT body FROM memory_task_outputs"):
+                try:
+                    body = json.loads(str(row["body"]))
+                except (TypeError, ValueError):
+                    continue
+                legacy_id = body.get("memory_id")
+                canonical_id = body.get("hy_memory_id")
+                refs = body.get("support_refs")
+                if not isinstance(legacy_id, str) or not isinstance(canonical_id, str):
+                    continue
+                canonical[legacy_id] = canonical_id
+                links.setdefault(canonical_id, set()).update(
                     str(ref["evidence_id"])
-                    for ref in refs
+                    for ref in (refs if isinstance(refs, list) else ())
                     if isinstance(ref, dict) and isinstance(ref.get("evidence_id"), str)
                 )
-                if isinstance(refs, list)
-                else ()
-            )
-            outputs.append((legacy_id, canonical_id, identifiers))
-            evidence_ids.update(identifiers)
+        if "governed_memories" in tables:
+            for row in database.execute(
+                "SELECT memory_id,created_at,updated_at FROM governed_memories"
+            ):
+                legacy_id = str(row["memory_id"])
+                canonical_id = canonical.get(legacy_id, legacy_id)
+                links.setdefault(canonical_id, set())
+                legacy_created = _plausible_time(
+                    row["created_at"], fallback=row["updated_at"], now=now
+                )
+                if legacy_created is not None:
+                    created.setdefault(canonical_id, []).append(legacy_created)
+            if "governed_memory_evidence" in tables:
+                for row in database.execute(
+                    "SELECT memory_id,evidence_id FROM governed_memory_evidence"
+                ):
+                    legacy_id = str(row["memory_id"])
+                    links.setdefault(canonical.get(legacy_id, legacy_id), set()).add(
+                        str(row["evidence_id"])
+                    )
+        if "memory_write_jobs" in tables and "sdk_memory_ids_json" in _columns(
+            database, "memory_write_jobs"
+        ):
+            job_evidence: dict[str, set[str]] = {}
+            if "memory_write_job_evidence" in tables:
+                for row in database.execute(
+                    "SELECT job_id,evidence_id FROM memory_write_job_evidence"
+                ):
+                    job_evidence.setdefault(str(row["job_id"]), set()).add(str(row["evidence_id"]))
+            for row in database.execute(
+                "SELECT job_id,sdk_memory_ids_json FROM memory_write_jobs "
+                "WHERE sdk_memory_ids_json IS NOT NULL"
+            ):
+                try:
+                    memory_ids = json.loads(str(row["sdk_memory_ids_json"]))
+                except (TypeError, ValueError):
+                    continue
+                for memory_id in memory_ids if isinstance(memory_ids, list) else ():
+                    if isinstance(memory_id, str) and memory_id:
+                        links.setdefault(memory_id, set()).update(
+                            job_evidence.get(str(row["job_id"]), ())
+                        )
         evidence: dict[str, tuple[str, datetime | None]] = {}
-        for batch in _batches(sorted(evidence_ids)):
+        wanted = sorted({identifier for refs in links.values() for identifier in refs})
+        for batch in _batches(wanted):
             placeholders = ",".join("?" for _ in batch)
             for row in database.execute(
                 "SELECT evidence_id,source_id,created_at,imported_at "
@@ -183,47 +253,47 @@ def _legacy_metadata(path: Path, *, now: datetime) -> dict[str, RepairMetadata]:
             ):
                 evidence[str(row["evidence_id"])] = (
                     str(row["source_id"]),
-                    _plausible_time(
-                        row["created_at"],
-                        fallback=row["imported_at"],
-                        now=now,
-                    ),
+                    _plausible_time(row["created_at"], fallback=row["imported_at"], now=now),
                 )
-        governed = {
-            str(row["memory_id"]): _plausible_time(
-                row["created_at"],
-                fallback=row["updated_at"],
-                now=now,
-            )
-            for row in database.execute(
-                "SELECT memory_id,created_at,updated_at FROM governed_memories"
-            )
-        }
-    # Several legacy memories can fold into one SDK memory. Pool their evidence
-    # before deciding, so a disagreeing source cannot be overwritten by whichever
-    # output happened to come last.
-    pooled: dict[str, tuple[set[str], list[datetime], list[datetime]]] = {}
-    for legacy_id, canonical_id, refs in outputs:
-        sources, times, created = pooled.setdefault(canonical_id, (set(), [], []))
+    pools: dict[str, _Pool] = {}
+    for canonical_id, refs in links.items():
+        pool = pools.setdefault(canonical_id, _Pool())
         for identifier in refs:
             if identifier not in evidence:
                 continue
             source, timestamp = evidence[identifier]
             if source and source != "default":
-                sources.add(source)
+                pool.sources.add(source)
             if timestamp is not None:
-                times.append(timestamp)
-        legacy_created = governed.get(legacy_id)
-        if legacy_created is not None:
-            created.append(legacy_created)
+                pool.times.append(timestamp)
+        pool.created.extend(created.get(canonical_id, ()))
+    return pools
+
+
+def _merge_pools(into: dict[str, _Pool], other: dict[str, _Pool]) -> None:
+    for canonical_id, pool in other.items():
+        merged = into.setdefault(canonical_id, _Pool())
+        merged.sources |= pool.sources
+        merged.times.extend(pool.times)
+        merged.created.extend(pool.created)
+
+
+def _decide(pools: dict[str, _Pool]) -> dict[str, RepairMetadata]:
+    # Several legacy memories can fold into one SDK memory. Their evidence is
+    # pooled before deciding, so a disagreeing source stays unknown instead of
+    # whichever link happened to come last.
     return {
         canonical_id: RepairMetadata(
-            source=next(iter(sources)) if len(sources) == 1 else None,
-            memory_at=int(max(times).timestamp()) if times else None,
-            created_at=int(min(created).timestamp()) if created else None,
+            source=next(iter(pool.sources)) if len(pool.sources) == 1 else None,
+            memory_at=int(max(pool.times).timestamp()) if pool.times else None,
+            created_at=int(min(pool.created).timestamp()) if pool.created else None,
         )
-        for canonical_id, (sources, times, created) in pooled.items()
+        for canonical_id, pool in pools.items()
     }
+
+
+def _columns(database: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in database.execute(f"PRAGMA table_info({table})")}
 
 
 def _plausible_time(
@@ -250,9 +320,11 @@ def _plausible_time(
 def _repair_vector(
     data_dir: Path,
     mapping: dict[str, RepairMetadata],
+    *,
+    now: datetime,
 ) -> int:
     directory = data_dir / "hy-memory" / HY_MEMORY_NAMESPACE / "vector"
-    if not mapping or not (directory / "chroma.sqlite3").is_file():
+    if not (directory / "chroma.sqlite3").is_file():
         return 0
     import chromadb
     from chromadb.config import Settings
@@ -308,9 +380,38 @@ def _repair_vector(
                 if updated_ids:
                     collection.update(ids=updated_ids, metadatas=updated_metadata)
                     repaired += len(updated_ids)
+            repaired += _settle_future_times(collection, now=now)
     finally:
         client.close()
     return repaired
+
+
+def _settle_future_times(collection: Any, *, now: datetime) -> int:
+    """Move conversation times that are still in the future back to the write time.
+
+    A historical Cursor bug stored a file hash as the message time (years like
+    2254). The SDK lists newest first by `memory_at`, so those rows hold the
+    first page. Rows the bundles could date were fixed above; for the rest the
+    write time is the closest true moment that is known.
+    """
+    cutoff = int((now + timedelta(days=1)).timestamp())
+    page = collection.get(where={"memory_at": {"$gt": cutoff}}, include=["metadatas"])
+    updated_ids: list[str] = []
+    updated_metadata: list[dict[str, object]] = []
+    for memory_id, metadata in zip(page.get("ids") or (), page.get("metadatas") or (), strict=True):
+        if not isinstance(metadata, dict):
+            continue
+        created = metadata.get("gmt_created")
+        settled = (
+            created
+            if isinstance(created, int) and not isinstance(created, bool) and created <= cutoff
+            else int(now.timestamp())
+        )
+        updated_ids.append(str(memory_id))
+        updated_metadata.append({**metadata, "memory_at": settled})
+    if updated_ids:
+        collection.update(ids=updated_ids, metadatas=updated_metadata)
+    return len(updated_ids)
 
 
 def _repair_coding(

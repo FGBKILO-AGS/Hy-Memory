@@ -470,6 +470,9 @@ export interface MemoryLibraryPage {
    * import): a partial snapshot, not an authoritative view. Show "importing"
    * and retry; never render this state as a failure. */
   stale?: boolean;
+  /** Set on a search whose relevance window was full: matches were looked for
+   * only among this many most relevant memories, so `total` may undercount. */
+  search_window?: number | null;
 }
 
 export interface MemoryLibraryQuery {
@@ -560,6 +563,7 @@ export interface SdkMemoryPage {
   total: number;
   limit: number;
   offset: number;
+  search_window?: number | null;
 }
 
 export interface SdkUserProfileResponse {

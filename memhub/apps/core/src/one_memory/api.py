@@ -105,6 +105,7 @@ from one_memory.hy_sdk_types import (
     HySdkRawRecord,
     HySdkReadError,
     HySdkUserProfile,
+    library_keyword_hits,
     parse_sdk_search,
 )
 from one_memory.imports.access import (
@@ -3153,9 +3154,11 @@ def create_app(
                         status_code=422,
                         detail="sdk_search_supports_active_status_only",
                     )
-                # SDK search has no count-only contract. Fetch one bounded
-                # relevance window so pagination can expose more than the
-                # first page without listing the whole library in Core.
+                # SDK search has no count-only contract and, on the local store,
+                # no keyword channel. Ask for one bounded relevance window with
+                # no score floor, then keep the rows that contain the words, so
+                # a word in the library is found and a word in none of it finds
+                # nothing. The whole library is never listed in Core.
                 fetch = 500
                 search_raw = await asyncio.to_thread(
                     client.search,
@@ -3164,8 +3167,8 @@ def create_app(
                     agent_ids=[],
                     include_sources=[source] if source else None,
                     limit=fetch,
-                    min_score=sdk_relevance_floor(),
-                    schema_min_score=sdk_relevance_floor(),
+                    min_score=0.0,
+                    schema_min_score=0.0,
                     schema_limit=fetch,
                     # The library lists stored memories; proactive intentions
                     # are a recall-time lane the list never shows.
@@ -3173,13 +3176,8 @@ def create_app(
                     scene="normal",
                     reader=HY_MEMORY_READER,
                 )
-                hits = parse_sdk_search(
-                    search_raw,
-                    error_code="hy_memory_search_shape_unknown",
-                )
-                rows = await _get_sdk_rows(
-                    client, [hit.memory_id for hit in hits[offset : offset + limit]]
-                )
+                hit_ids, window = library_keyword_hits(search_raw, search_query)
+                rows = await _get_sdk_rows(client, list(hit_ids[offset : offset + limit]))
                 memories: list[HySdkMemoryRecord] = []
                 skipped = 0
                 for row in rows:
@@ -3195,9 +3193,10 @@ def create_app(
                 _log_skipped_sdk_memories(skipped)
                 return HySdkMemoryPage(
                     memories=tuple(memories),
-                    total=len(hits),
+                    total=len(hit_ids),
                     limit=limit,
                     offset=offset,
+                    search_window=fetch if window >= fetch else None,
                 )
             raw = await asyncio.to_thread(
                 client.list_memories,
@@ -3224,6 +3223,8 @@ def create_app(
     )
     async def sdk_memory_graph(
         limit: int = Query(default=160, ge=1, le=300),
+        offset: int = Query(default=0, ge=0),
+        source: str | None = Query(default=None, min_length=1),
     ) -> MemoryGraphResponse:
         """The memory map on SDK authority: SDK memories plus the Kuzu overlay.
 
@@ -3233,10 +3234,19 @@ def create_app(
         """
         try:
             client = await _sdk_client_handle(app).client()
+            # The map draws the page the list shows, so it reads the same
+            # source filter and window rather than the newest memories overall.
             raw = await asyncio.to_thread(
-                client.list_memories, user_id="local", limit=limit, offset=0, order="desc"
+                client.list_memories,
+                user_id="local",
+                include_sources=[source] if source else None,
+                limit=limit,
+                offset=offset,
+                order="desc",
             )
-            page, skipped = HySdkMemoryPage.from_sdk_skipping_invalid(raw, limit=limit, offset=0)
+            page, skipped = HySdkMemoryPage.from_sdk_skipping_invalid(
+                raw, limit=limit, offset=offset
+            )
             _log_skipped_sdk_memories(skipped)
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_list_failed") from None
@@ -3257,7 +3267,10 @@ def create_app(
                 kind=memory.layer,
                 status=memory.status,
             )
-            if memory.session_id:
+            # The SDK fills in "default_session" when a writer gave none (the
+            # cutover backfill did so for every legacy memory); it names no
+            # conversation, so it must not chain those memories together.
+            if memory.session_id and memory.session_id != "default_session":
                 sessions.setdefault(memory.session_id, []).append(memory_node_id)
             if memory.source and memory.source != "default":
                 source_node_id = f"source:{memory.source}"

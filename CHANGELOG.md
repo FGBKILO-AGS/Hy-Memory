@@ -4,6 +4,15 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- The SDK memory page now reads its list, count, source and time labels and
+  graph from one page response for one source filter, so rows, totals and the
+  map no longer disagree. Memories with no recorded source are shown and
+  filterable as "unidentified source"; library search keeps only memories
+  that contain the words within the SDK's relevance window.
+- Metadata repair v2 follows `governed_memory_evidence` across every
+  pre-cutover bundle, which restores the source of memories the cutover
+  backfilled without one, and moves impossible future conversation times back
+  to the write time.
 - Reused the existing three-column memory map for SDK-authority list/detail
   views and removed the retired "original evidence" surface. SDK-native status,
   source, conversation time and creation time now render without fabricated

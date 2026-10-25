@@ -186,6 +186,90 @@ def test_post_cutover_metadata_repair_restores_source_and_original_times(store):
     assert repeated == result
 
 
+def test_metadata_repair_reaches_memories_the_cutover_backfilled_under_legacy_ids(store):
+    """The backfill wrote governed memories with no source; their evidence links them."""
+    data_dir = store.database_path.parent
+    migration_id = "sdk-authority-v2-backfill"
+    with main_database(store.database_path).write() as database, database:
+        database.execute(
+            "UPDATE memory_authority_state SET authority='sdk',migration_id=? WHERE singleton=1",
+            (migration_id,),
+        )
+    # A v1 receipt from the earlier, narrower repair must not block this one.
+    (data_dir / f".sdk-metadata-repair-v1-{migration_id}.json").write_text("{}\n")
+    # The later bundle was taken after legacy tables were retired; the earlier
+    # cutover's bundle still carries them.
+    for bundle, populated in (("sdk-authority-v1-old", True), (migration_id, False)):
+        legacy = data_dir / "backups" / f"{bundle}-pre-cutover.sdk-bundle" / "management"
+        legacy.mkdir(parents=True)
+        with closing(sqlite3.connect(legacy / "one-memory.sqlite3")) as database, database:
+            database.executescript(
+                """
+                CREATE TABLE evidence (
+                    evidence_id TEXT, source_id TEXT, created_at TEXT, imported_at TEXT
+                );
+                """
+            )
+            if not populated:
+                continue
+            database.executescript(
+                """
+                CREATE TABLE governed_memories (
+                    memory_id TEXT, created_at TEXT, updated_at TEXT
+                );
+                CREATE TABLE governed_memory_evidence (
+                    memory_id TEXT, evidence_id TEXT, active INTEGER
+                );
+                """
+            )
+            database.execute(
+                "INSERT INTO governed_memories VALUES ('legacy-7','2026-09-02T00:00:00+00:00',NULL)"
+            )
+            database.execute("INSERT INTO governed_memory_evidence VALUES ('legacy-7','e7',1)")
+            database.execute(
+                "INSERT INTO evidence VALUES ('e7','workbuddy','2026-09-01T00:00:00+00:00',NULL)"
+            )
+
+    import chromadb
+    from chromadb.config import Settings as ChromaSettings
+
+    vector = data_dir / "hy-memory" / "governed-v2" / "vector"
+    client = chromadb.PersistentClient(
+        path=str(vector), settings=ChromaSettings(anonymized_telemetry=False)
+    )
+    collection = client.get_or_create_collection("memory")
+    imported = int(datetime(2026, 10, 20, tzinfo=UTC).timestamp())
+    collection.add(
+        ids=["legacy-7", "unlinked"],
+        documents=["backfilled", "hash-dated"],
+        embeddings=[[0.1, 0.2], [0.2, 0.1]],
+        metadatas=[
+            {"source": "default", "gmt_created": imported, "memory_at": imported},
+            {"source": "cursor", "gmt_created": imported, "memory_at": 8_962_051_200},
+        ],
+    )
+    client.close()
+
+    result = repair_sdk_metadata_from_bundle(
+        data_dir=data_dir,
+        database_path=store.database_path,
+        now=datetime(2026, 10, 25, tzinfo=UTC),
+    )
+
+    client = chromadb.PersistentClient(
+        path=str(vector), settings=ChromaSettings(anonymized_telemetry=False)
+    )
+    rows = client.get_collection("memory").get(ids=["legacy-7", "unlinked"], include=["metadatas"])
+    client.close()
+    metadata = dict(zip(rows["ids"], rows["metadatas"], strict=True))
+    assert result.vector_rows == 2
+    assert metadata["legacy-7"]["source"] == "workbuddy"
+    assert metadata["legacy-7"]["memory_at"] == int(datetime(2026, 9, 1, tzinfo=UTC).timestamp())
+    assert metadata["legacy-7"]["gmt_created"] == int(datetime(2026, 9, 2, tzinfo=UTC).timestamp())
+    assert metadata["unlinked"]["source"] == "cursor"
+    assert metadata["unlinked"]["memory_at"] == imported
+
+
 def test_metadata_repair_keeps_source_unknown_when_outputs_disagree(tmp_path):
     """Two legacy memories folded into one SDK memory pool their evidence."""
     from one_memory.hy_sdk_migration import _legacy_metadata
@@ -1060,10 +1144,24 @@ def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -
             "source": "cursor",
         }
         for memory_id in ("a", "b")
+    ] + [
+        {
+            "memory_id": memory_id,
+            "content": f"backfilled {memory_id}",
+            "layer": "l2_fact",
+            "status": "active",
+            "user_id": "local",
+            "agent_id": "one-memory",
+            "session_id": "default_session",
+            "source": "default",
+        }
+        for memory_id in ("c", "d")
     ]
+    listed = []
 
     class Client:
-        def list_memories(self, **_kwargs):
+        def list_memories(self, **kwargs):
+            listed.append(kwargs)
             return {"vdb": {"memories": rows, "total": 7}}
 
     class Handle:
@@ -1099,19 +1197,32 @@ def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -
 
             app.state.sdk_memory_runtime.graph_snapshot = graph_snapshot
             assert (await client.get("/api/v1/memories/graph")).status_code == 409
-            response = await client.get("/api/v2/memories/graph")
+            response = await client.get(
+                "/api/v2/memories/graph",
+                params={"source": "cursor", "offset": 100, "limit": 100},
+            )
             app.state.sdk_client_handle = original
             assert response.status_code == 200
             return response.json()
 
     graph = asyncio.run(scenario())
-    assert (graph["total_memories"], graph["projected_memories"]) == (7, 2)
+    assert listed[0]["include_sources"] == ["cursor"]
+    assert (listed[0]["offset"], listed[0]["limit"]) == (100, 100)
+    assert (graph["total_memories"], graph["projected_memories"]) == (7, 4)
     assert {node["node_id"] for node in graph["nodes"]} == {
         "memory:a",
         "memory:b",
+        "memory:c",
+        "memory:d",
         "source:cursor",
         "hy:t1",
     }
+    # "default_session" is the SDK's filler, not a conversation.
+    assert [
+        (edge["source_node_id"], edge["target_node_id"])
+        for edge in graph["edges"]
+        if edge["relation"] == "same_conversation"
+    ] == [("memory:a", "memory:b")]
     assert {edge["relation"] for edge in graph["edges"]} == {
         "evidence_source",
         "same_conversation",
