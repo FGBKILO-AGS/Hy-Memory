@@ -8,6 +8,15 @@ Hy Memory and MemHub are versioned and released independently.
   views and removed the retired "original evidence" surface. SDK-native status,
   source, conversation time and creation time now render without fabricated
   revisions; source and text filters are applied by the paged Core endpoint.
+- SDK memory search now calls the SDK search contract instead of listing the
+  entire library in Core. Corrupt empty records are skipped and diagnosed
+  without mutating data or failing a page, and post-cutover metadata repair
+  restores source and original times from the verified migration bundle.
+- Kept Cursor's WAL change token separate from the file mtime so a hash can no
+  longer appear as a conversation date centuries in the future.
+- A trusted packaged Runtime now repairs a dirty same-build installation by
+  staging a clean replacement, and `runtime_service_not_ready` is rendered as
+  user-facing startup guidance instead of an internal code.
 - Fixed legacy-to-SDK startup migration to adopt native Coding Experience and
   Working Fact IDs instead of importing them as Chat layers. Raw migration now
   rebuilds bounded user/assistant turns from the latest three days, excludes

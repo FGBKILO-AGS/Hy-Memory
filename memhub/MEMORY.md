@@ -15,6 +15,8 @@
 3. MemHub **不存 memory 实体**；**可以存 `memory_id`** 做组织/回执。原文进入 **SDK raw**。
 4. SDK raw 只保留滚动三天；一条 raw 对应一个完整 turn，只含真人 user 与
    assistant，tool 不持久化。提取后的高层 memory 不受该窗口影响。
+5. `source_raw_ids` 是 SDK 内部溯源关系，不是产品 Evidence 合同；记忆详情不提供
+   “原始依据”或按 raw ID 展开原文的入口。
 
 生产入口通过共享 Runtime 租约取得公开 `HyMemoryClient`；MemHub 只在调用前执行
 模型配置、密钥和 harness/model 门禁，不维护第二套 memory 正文权威。

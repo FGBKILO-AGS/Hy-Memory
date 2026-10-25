@@ -168,6 +168,49 @@ it("shows the native SDK state without inventing a revision", () => {
   expect(screen.queryByText(/第 0 版/)).toBeNull();
   expect(screen.getByText(/^来源 Cursor · /)).toBeTruthy();
 });
+it("splits long memory text into a bounded heading and readable body", () => {
+  const content = "长".repeat(100);
+  render(
+    <SelectedMemoryDetail
+      detail={{
+        ...detail,
+        memory: { ...detail.memory, content },
+        evidence: [],
+        sdk_status: "active",
+      }}
+      sources={[]}
+      onChanged={vi.fn()}
+      hideActions
+    />,
+  );
+  expect(screen.getByRole("heading", { name: "长".repeat(72) })).toBeTruthy();
+  expect(screen.getByText("长".repeat(28)).className).toContain(
+    "selected-memory-body",
+  );
+});
+it.each([
+  [
+    "a late sentence end",
+    `${"长".repeat(80)}。${"尾".repeat(10)}`,
+    "长".repeat(72),
+  ],
+  ["words", `${"word ".repeat(20)}end`, "word ".repeat(14).trim()],
+])("keeps the heading within the limit for %s", (_case, content, heading) => {
+  render(
+    <SelectedMemoryDetail
+      detail={{
+        ...detail,
+        memory: { ...detail.memory, content },
+        evidence: [],
+        sdk_status: "active",
+      }}
+      sources={[]}
+      onChanged={vi.fn()}
+      hideActions
+    />,
+  );
+  expect(screen.getByRole("heading", { name: heading })).toBeTruthy();
+});
 it("opens full editor and saves content without rewriting scope", async () => {
   const changed = vi.fn();
   render(

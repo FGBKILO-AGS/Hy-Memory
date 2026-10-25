@@ -95,6 +95,29 @@ class HySdkMemoryPage(BaseModel):
 
     @classmethod
     def from_sdk(cls, raw: object, *, limit: int, offset: int) -> HySdkMemoryPage:
+        page, _skipped = cls._parse(raw, limit=limit, offset=offset, skip_invalid=False)
+        return page
+
+    @classmethod
+    def from_sdk_skipping_invalid(
+        cls, raw: object, *, limit: int, offset: int
+    ) -> tuple[HySdkMemoryPage, int]:
+        """Parse a page, leaving out rows outside the public record contract.
+
+        Returns the page and how many rows were left out, so the caller can
+        report them. The rows themselves are never touched.
+        """
+        return cls._parse(raw, limit=limit, offset=offset, skip_invalid=True)
+
+    @classmethod
+    def _parse(
+        cls,
+        raw: object,
+        *,
+        limit: int,
+        offset: int,
+        skip_invalid: bool,
+    ) -> tuple[HySdkMemoryPage, int]:
         if not isinstance(raw, Mapping):
             raise HySdkReadError("hy_memory_list_shape_unknown")
         rows: list[object] = []
@@ -115,15 +138,27 @@ class HySdkMemoryPage(BaseModel):
             total += bucket_total
             rows.extend(bucket[rows_name])
         deduplicated: dict[str, HySdkMemoryRecord] = {}
+        skipped = 0
         for row in rows:
-            record = HySdkMemoryRecord.from_sdk(row)
+            try:
+                record = HySdkMemoryRecord.from_sdk(row)
+            except HySdkReadError:
+                if not skip_invalid:
+                    raise
+                skipped += 1
+                continue
             deduplicated.setdefault(record.memory_id, record)
-        return cls(
+        page = cls(
             memories=tuple(deduplicated.values()),
+            # `total` is the SDK's stable result-set count. Subtracting only
+            # invalid rows observed on this page would make it change as the
+            # caller paged. Until the SDK exposes a quarantined count, keep the
+            # authoritative total and skip malformed rows only in this page.
             total=total,
             limit=limit,
             offset=offset,
         )
+        return page, skipped
 
 
 class HySdkRawRecord(BaseModel):

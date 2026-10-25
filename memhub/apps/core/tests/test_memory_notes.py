@@ -281,38 +281,72 @@ def test_sdk_user_profile_http_returns_native_assembled_profile(tmp_path):
 
 
 @pytest.mark.fresh_sdk
-def test_sdk_memory_library_forwards_source_and_filters_query(tmp_path):
+def test_sdk_memory_library_uses_sdk_search_and_skips_empty_rows_without_mutation(
+    tmp_path,
+    caplog,
+):
     async def scenario():
         app = application(tmp_path)
-        calls = []
+        list_calls = []
+        search_calls = []
+        deleted = []
+        records = {
+            "release": {
+                "memory_id": "release",
+                "content": "Release plan",
+                "layer": "l2_fact",
+                "status": "active",
+                "user_id": "local",
+                "agent_id": "all-apps",
+                "session_id": "s1",
+                "source": "cursor",
+                "tags": ["shipping"],
+            },
+            "retired": {
+                "memory_id": "retired",
+                "content": "Release plan, first draft",
+                "layer": "l2_fact",
+                "status": "superseded",
+                "user_id": "local",
+                "agent_id": "all-apps",
+                "session_id": "s1",
+                "source": "cursor",
+                "tags": [],
+            },
+            "default": {
+                "memory_id": "default",
+                "content": "Unknown source",
+                "layer": "l2_fact",
+                "status": "active",
+                "user_id": "local",
+                "agent_id": "all-apps",
+                "session_id": "s3",
+                "source": "default",
+                "tags": [],
+            },
+        }
 
         class Client:
             def list_memories(self, **kwargs):
-                calls.append(kwargs)
+                list_calls.append(kwargs)
                 rows = [
+                    records["release"],
+                    records["default"],
                     {
-                        "memory_id": "release",
-                        "content": "Release plan",
-                        "layer": "l2_fact",
-                        "status": "active",
-                        "user_id": "local",
-                        "agent_id": "all-apps",
-                        "session_id": "s1",
-                        "source": "cursor",
-                        "tags": ["shipping"],
-                    },
-                    {
-                        "memory_id": "other",
-                        "content": "Unrelated",
+                        "memory_id": "empty",
+                        "content": "",
                         "layer": "l2_fact",
                         "status": "active",
                         "user_id": "local",
                         "agent_id": "all-apps",
                         "session_id": "s2",
-                        "source": "cursor",
+                        "source": "workbuddy",
                         "tags": [],
                     },
                 ]
+                include_sources = kwargs.get("include_sources") or []
+                if include_sources:
+                    rows = [row for row in rows if row["source"] in include_sources]
                 return {
                     "vdb": {
                         "memories": rows,
@@ -322,9 +356,39 @@ def test_sdk_memory_library_forwards_source_and_filters_query(tmp_path):
                     }
                 }
 
+            def search(self, query, **kwargs):
+                search_calls.append((query, kwargs))
+                return {
+                    "memories": {
+                        "schema": [],
+                        "proactive": [],
+                        "normal": [
+                            {
+                                "memory_id": "release",
+                                "content": "Release plan",
+                                "score": 0.9,
+                            },
+                            {
+                                "memory_id": "retired",
+                                "content": "Release plan, first draft",
+                                "score": 0.8,
+                            },
+                        ],
+                    }
+                }
+
+            def get(self, memory_id):
+                return records.get(memory_id)
+
+            def delete(self, memory_id):
+                deleted.append(memory_id)
+                return {"success": True, "deleted_count": 1}
+
+        sdk = Client()
+
         class Handle:
             async def client(self):
-                return Client()
+                return sdk
 
             async def close(self):
                 return None
@@ -338,11 +402,31 @@ def test_sdk_memory_library_forwards_source_and_filters_query(tmp_path):
                 )
                 assert response.status_code == 200
                 body = response.json()
-                assert body["total"] == 1
-                assert [item["memory_id"] for item in body["memories"]] == [
-                    "release"
-                ]
-                assert calls[0]["include_sources"] == ["cursor"]
-                assert calls[0]["limit"] == 100_000
+                # `total` counts the bounded relevance window; the superseded
+                # hit is in it but is not listed as an active memory.
+                assert body["total"] == 2
+                assert [item["memory_id"] for item in body["memories"]] == ["release"]
+                assert search_calls[0][0] == "release"
+                assert search_calls[0][1]["include_sources"] == ["cursor"]
+                assert search_calls[0][1]["limit"] == 500
+                assert search_calls[0][1]["intention_limit"] == 0
+                assert list_calls == []
+
+                listed = await client.get(
+                    "/api/v2/memory-library",
+                    params={"source": "workbuddy", "limit": 100},
+                )
+                assert listed.status_code == 200
+                assert listed.json()["memories"] == []
+                assert listed.json()["total"] == 1
+                assert deleted == []
+                assert list_calls[0]["limit"] == 100
+                assert "sdk_memory_invalid_rows_skipped count=1" in caplog.messages
+
+                graph = await client.get("/api/v2/memories/graph")
+                assert graph.status_code == 200
+                node_ids = {node["node_id"] for node in graph.json()["nodes"]}
+                assert "source:cursor" in node_ids
+                assert "source:default" not in node_ids
 
     asyncio.run(scenario())

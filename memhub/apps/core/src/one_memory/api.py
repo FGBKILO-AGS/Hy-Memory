@@ -103,6 +103,7 @@ from one_memory.hy_sdk_types import (
     HySdkMemoryRecord,
     HySdkRawPage,
     HySdkRawRecord,
+    HySdkReadError,
     HySdkUserProfile,
     parse_sdk_search,
 )
@@ -879,6 +880,28 @@ def create_app(
             app.state.sdk_data_plane_migrations = SdkDataPlaneMigrationStore(database_path)
             app.state.memory_authority = app.state.sdk_data_plane_migrations.authority()
             if app.state.memory_authority is MemoryAuthority.SDK:
+                from one_memory.hy_sdk_migration import (
+                    repair_sdk_metadata_from_bundle,
+                )
+
+                try:
+                    repair = await asyncio.to_thread(
+                        repair_sdk_metadata_from_bundle,
+                        data_dir=runtime_settings.data_dir,
+                        database_path=database_path,
+                    )
+                    if repair.vector_rows or repair.coding_rows:
+                        logger.info(
+                            "sdk_metadata_repair_completed mapped=%d vector=%d coding=%d",
+                            repair.mapped,
+                            repair.vector_rows,
+                            repair.coding_rows,
+                        )
+                except Exception as error:
+                    logger.warning(
+                        "sdk_metadata_repair_failed error_type=%s",
+                        type(error).__name__,
+                    )
                 app.state.memory_governance_store = RetiredGovernanceStore(database_path)
                 app.state.evidence_store = RetiredEvidenceStore(database_path)
             else:
@@ -3058,7 +3081,8 @@ def create_app(
                 offset=0,
                 order="desc",
             )
-            page = HySdkMemoryPage.from_sdk(raw, limit=1, offset=0)
+            page, skipped = HySdkMemoryPage.from_sdk_skipping_invalid(raw, limit=1, offset=0)
+            _log_skipped_sdk_memories(skipped)
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_list_failed") from None
         return SdkHomeSummary(
@@ -3122,34 +3146,74 @@ def create_app(
     ) -> HySdkMemoryPage:
         try:
             client = await _sdk_client_handle(app).client()
-            needle = (query or "").strip().casefold()
+            search_query = (query or "").strip()
+            if search_query:
+                if set(statuses) != {"active"}:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="sdk_search_supports_active_status_only",
+                    )
+                # SDK search has no count-only contract. Fetch one bounded
+                # relevance window so pagination can expose more than the
+                # first page without listing the whole library in Core.
+                fetch = 500
+                search_raw = await asyncio.to_thread(
+                    client.search,
+                    search_query,
+                    user_ids=["local"],
+                    agent_ids=[],
+                    include_sources=[source] if source else None,
+                    limit=fetch,
+                    min_score=sdk_relevance_floor(),
+                    schema_min_score=sdk_relevance_floor(),
+                    schema_limit=fetch,
+                    # The library lists stored memories; proactive intentions
+                    # are a recall-time lane the list never shows.
+                    intention_limit=0,
+                    scene="normal",
+                    reader=HY_MEMORY_READER,
+                )
+                hits = parse_sdk_search(
+                    search_raw,
+                    error_code="hy_memory_search_shape_unknown",
+                )
+                rows = await _get_sdk_rows(
+                    client, [hit.memory_id for hit in hits[offset : offset + limit]]
+                )
+                memories: list[HySdkMemoryRecord] = []
+                skipped = 0
+                for row in rows:
+                    if row is None:
+                        continue
+                    try:
+                        record = HySdkMemoryRecord.from_sdk(row)
+                    except HySdkReadError:
+                        skipped += 1
+                        continue
+                    if record.status == "active":
+                        memories.append(record)
+                _log_skipped_sdk_memories(skipped)
+                return HySdkMemoryPage(
+                    memories=tuple(memories),
+                    total=len(hits),
+                    limit=limit,
+                    offset=offset,
+                )
             raw = await asyncio.to_thread(
                 client.list_memories,
                 user_id="local",
                 statuses=list(statuses),
                 include_sources=[source] if source else None,
-                offset=0 if needle else offset,
-                limit=100_000 if needle else limit,
-            )
-            page = HySdkMemoryPage.from_sdk(
-                raw,
-                limit=100_000 if needle else limit,
-                offset=0 if needle else offset,
-            )
-            if not needle:
-                return page
-            matches = tuple(
-                memory
-                for memory in page.memories
-                if needle
-                in f"{memory.content} {' '.join(memory.tags)}".casefold()
-            )
-            return HySdkMemoryPage(
-                memories=matches[offset : offset + limit],
-                total=len(matches),
-                limit=limit,
                 offset=offset,
+                limit=limit,
             )
+            page, skipped = HySdkMemoryPage.from_sdk_skipping_invalid(
+                raw, limit=limit, offset=offset
+            )
+            _log_skipped_sdk_memories(skipped)
+            return page
+        except HTTPException:
+            raise
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_list_failed") from None
 
@@ -3172,7 +3236,8 @@ def create_app(
             raw = await asyncio.to_thread(
                 client.list_memories, user_id="local", limit=limit, offset=0, order="desc"
             )
-            page = HySdkMemoryPage.from_sdk(raw, limit=limit, offset=0)
+            page, skipped = HySdkMemoryPage.from_sdk_skipping_invalid(raw, limit=limit, offset=0)
+            _log_skipped_sdk_memories(skipped)
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_list_failed") from None
         vdb = raw.get("vdb") if isinstance(raw, dict) else None
@@ -3194,15 +3259,13 @@ def create_app(
             )
             if memory.session_id:
                 sessions.setdefault(memory.session_id, []).append(memory_node_id)
-            if memory.source:
+            if memory.source and memory.source != "default":
                 source_node_id = f"source:{memory.source}"
                 registration = catalog.get(memory.source)
                 nodes[source_node_id] = MemoryGraphNode(
                     node_id=source_node_id,
                     node_type="source",
-                    label=(
-                        registration.descriptor.display_name if registration else memory.source
-                    ),
+                    label=(registration.descriptor.display_name if registration else memory.source),
                     source_id=memory.source,
                 )
                 edges.append(
@@ -5578,6 +5641,26 @@ def _sdk_client_handle(app: FastAPI) -> SdkClientHandle:
         )
         app.state.sdk_client_handle = handle
     return handle
+
+
+def _log_skipped_sdk_memories(count: int) -> None:
+    if count:
+        logger.warning("sdk_memory_invalid_rows_skipped count=%d", count)
+
+
+# `client.get` funnels into the SDK's single loop thread, so more workers only
+# queue there while holding the default executor every other request needs.
+_SDK_GET_CONCURRENCY = 8
+
+
+async def _get_sdk_rows(client: Any, memory_ids: list[str]) -> list[object]:
+    gate = asyncio.Semaphore(_SDK_GET_CONCURRENCY)
+
+    async def one(memory_id: str) -> object:
+        async with gate:
+            return await asyncio.to_thread(client.get, memory_id)
+
+    return list(await asyncio.gather(*(one(memory_id) for memory_id in memory_ids)))
 
 
 async def _get_sdk_memory(
