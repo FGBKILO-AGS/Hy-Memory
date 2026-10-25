@@ -988,7 +988,16 @@ export function MemoryMap(props: Props) {
                 onClick={() => pick(m.memory_id)}
               >
                 <span className={`map-state ${m.status}`} aria-hidden="true" />
-                <span>{m.content}</span>
+                <span className="map-memory-content">{m.content}</span>
+                {m.tags.length ? (
+                  <span className="map-memory-tags wb-tags">
+                    {m.tags.map((tag) => (
+                      <span key={tag} className="wb-tag">
+                        {tag}
+                      </span>
+                    ))}
+                  </span>
+                ) : null}
                 <small>
                   {props.simplified ? (
                     <>

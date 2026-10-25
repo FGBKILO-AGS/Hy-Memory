@@ -247,6 +247,16 @@ it("labels the right-hand empty state as memory details", () => {
   expect(screen.queryByText("原始证据")).toBeNull();
 });
 
+it("renders SDK-projected memory tags with the existing Workbench chips", () => {
+  const { container } = render(<Host simplified />);
+  expect(
+    Array.from(
+      container.querySelectorAll(".map-memory-tags .wb-tag"),
+      (node) => node.textContent,
+    ),
+  ).toEqual(["产品", "产品"]);
+});
+
 it("opens the newest listed memory in the detail pane and keeps it closed after dismiss", async () => {
   const user = userEvent.setup();
   render(<Host simplified />);

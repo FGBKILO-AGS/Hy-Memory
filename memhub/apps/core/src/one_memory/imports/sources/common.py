@@ -644,7 +644,7 @@ def is_unchanged(source_file: AuthorizedSourceFile, cursors: dict[str, SourceCur
     return (
         previous is not None
         and previous.read_to_end
-        and previous.file_identity == source_file.file_identity
+        and previous.file_identity == _cursor_file_identity(source_file)
         and previous.observed_size == source_file.size
         and previous.observed_modified_ns == source_file.modified_ns
         # Chmod alone leaves size, mtime and inode untouched, so a file that
@@ -1046,11 +1046,19 @@ def source_cursor(
 ) -> SourceCursor:
     return SourceCursor(
         file_key=source_file.safe_id,
-        file_identity=source_file.file_identity,
+        file_identity=_cursor_file_identity(source_file),
         checkpoint=checkpoint,
         checkpoint_anchor=checkpoint_anchor,
         observed_size=source_file.size,
         observed_modified_ns=source_file.modified_ns,
+    )
+
+
+def _cursor_file_identity(source_file: AuthorizedSourceFile) -> str:
+    return (
+        f"{source_file.file_identity}:v:{source_file.cursor_version}"
+        if source_file.cursor_version
+        else source_file.file_identity
     )
 
 

@@ -94,7 +94,14 @@ class HySdkMemoryPage(BaseModel):
     offset: int = Field(ge=0)
 
     @classmethod
-    def from_sdk(cls, raw: object, *, limit: int, offset: int) -> HySdkMemoryPage:
+    def from_sdk(
+        cls,
+        raw: object,
+        *,
+        limit: int,
+        offset: int,
+        skip_invalid: bool = False,
+    ) -> HySdkMemoryPage:
         if not isinstance(raw, Mapping):
             raise HySdkReadError("hy_memory_list_shape_unknown")
         rows: list[object] = []
@@ -116,10 +123,19 @@ class HySdkMemoryPage(BaseModel):
             rows.extend(bucket[rows_name])
         deduplicated: dict[str, HySdkMemoryRecord] = {}
         for row in rows:
-            record = HySdkMemoryRecord.from_sdk(row)
+            try:
+                record = HySdkMemoryRecord.from_sdk(row)
+            except HySdkReadError:
+                if not skip_invalid:
+                    raise
+                continue
             deduplicated.setdefault(record.memory_id, record)
         return cls(
             memories=tuple(deduplicated.values()),
+            # `total` is the SDK's stable result-set count. Subtracting only
+            # invalid rows observed on this page would make it change as the
+            # caller paged. Until the SDK exposes a quarantined count, keep the
+            # authoritative total and skip malformed rows only in this page.
             total=total,
             limit=limit,
             offset=offset,

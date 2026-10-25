@@ -72,7 +72,8 @@ export function sdkDetail(record: SdkMemoryRecord): MemoryDetail {
     history: [],
     index_sync: null,
     sdk_status: record.status,
-    source_id: record.source,
+    source_id:
+      record.source && record.source !== "default" ? record.source : null,
     sdk_memory_at: stamp(record.memory_at) || null,
     sdk_created_at: stamp(record.gmt_created) || null,
   };
@@ -93,7 +94,8 @@ export function sdkLibraryPage(page: SdkMemoryPage): MemoryLibraryPage {
   > = {};
   const sourceIds: Record<string, string[]> = {};
   for (const record of page.memories) {
-    if (record.source) sourceIds[record.memory_id] = [record.source];
+    if (record.source && record.source !== "default")
+      sourceIds[record.memory_id] = [record.source];
     const at = record.memory_at ?? record.gmt_created;
     if (typeof at !== "number" || !Number.isFinite(at)) continue;
     sourceTime[record.memory_id] = {

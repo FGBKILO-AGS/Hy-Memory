@@ -234,13 +234,16 @@ export function SelectedMemoryDetail({
       if (alive.current) setBusy(false);
     }
   }
-  const split = memory.content.search(/[。\n]/);
+  const punctuation = memory.content.search(/[。！？!?\n]/);
+  const split =
+    punctuation > 0 && punctuation < 85
+      ? punctuation + 1
+      : memory.content.length > 72
+        ? 72
+        : -1;
   const heading =
-    split > 0 && split < 85
-      ? memory.content.slice(0, split + 1)
-      : memory.content;
-  const body =
-    split > 0 && split < 85 ? memory.content.slice(split + 1).trim() : "";
+    split > 0 ? memory.content.slice(0, split).trim() : memory.content;
+  const body = split > 0 ? memory.content.slice(split).trim() : "";
   return (
     <>
       <article

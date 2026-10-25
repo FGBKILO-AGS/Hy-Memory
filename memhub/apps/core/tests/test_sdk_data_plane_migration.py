@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import io
 import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from one_memory import cli
 from one_memory.api import create_app
 from one_memory.config import Settings
 from one_memory.database_access import close_main_databases, main_database
+from one_memory.hy_sdk_migration import repair_sdk_metadata_from_bundle
 from one_memory.hy_sdk_types import HySdkRawPage
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
@@ -65,6 +67,123 @@ def _start(store, migration_id="m1"):
         backend_fingerprint="backend",
         backup_bundle_id="bundle-1",
     )
+
+
+def test_post_cutover_metadata_repair_restores_source_and_original_times(store):
+    data_dir = store.database_path.parent
+    migration_id = "sdk-authority-v2-source-repair"
+    with main_database(store.database_path).write() as database, database:
+        database.execute(
+            "UPDATE memory_authority_state SET authority='sdk',migration_id=? "
+            "WHERE singleton=1",
+            (migration_id,),
+        )
+    legacy = (
+        data_dir
+        / "backups"
+        / f"{migration_id}-pre-cutover.sdk-bundle"
+        / "management"
+        / "one-memory.sqlite3"
+    )
+    legacy.parent.mkdir(parents=True)
+    with sqlite3.connect(legacy) as database:
+        database.executescript(
+            """
+            CREATE TABLE memory_task_outputs (body TEXT);
+            CREATE TABLE governed_memories (
+                memory_id TEXT, created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE evidence (
+                evidence_id TEXT, source_id TEXT, created_at TEXT, imported_at TEXT
+            );
+            """
+        )
+        database.execute(
+            "INSERT INTO governed_memories VALUES (?,?,?)",
+            ("legacy-1", "2026-10-18T00:00:00+00:00", "2026-10-18T01:00:00+00:00"),
+        )
+        database.execute(
+            "INSERT INTO evidence VALUES (?,?,?,?)",
+            ("e1", "workbuddy", "2254-01-01T00:00:00+00:00", "2026-10-17T00:00:00+00:00"),
+        )
+        database.execute(
+            "INSERT INTO memory_task_outputs VALUES (?)",
+            (
+                json.dumps(
+                    {
+                        "memory_id": "legacy-1",
+                        "hy_memory_id": "sdk-1",
+                        "support_refs": [{"evidence_id": "e1"}],
+                    }
+                ),
+            ),
+        )
+
+    import chromadb
+    from chromadb.config import Settings as ChromaSettings
+
+    vector = data_dir / "hy-memory" / "governed-v2" / "vector"
+    collection = chromadb.PersistentClient(
+        path=str(vector),
+        settings=ChromaSettings(anonymized_telemetry=False),
+    ).get_or_create_collection("memory")
+    collection.add(
+        ids=["sdk-1"],
+        documents=["remember"],
+        embeddings=[[0.1, 0.2]],
+        metadatas=[
+            {
+                "source": "default",
+                "gmt_created": 1,
+                "memory_at": 8_962_051_200,
+            }
+        ],
+    )
+    coding = data_dir / "hy-memory" / "governed-v2" / "coding_cv.sqlite3"
+    with sqlite3.connect(coding) as database:
+        database.execute(
+            "CREATE TABLE coding_memory_meta ("
+            "experience_id TEXT,user_id TEXT,agent_id TEXT,solution TEXT,"
+            "source TEXT,created_at TEXT,updated_at TEXT)"
+        )
+        database.execute(
+            "CREATE TABLE working_fact ("
+            "fact_id TEXT,user_id TEXT,agent_id TEXT,statement TEXT,"
+            "source TEXT,created_at TEXT)"
+        )
+        database.execute(
+            "INSERT INTO coding_memory_meta VALUES "
+            "('sdk-1','local','scope','remember','default','now','now')"
+        )
+
+    result = repair_sdk_metadata_from_bundle(
+        data_dir=data_dir,
+        database_path=store.database_path,
+        now=datetime(2026, 10, 25, tzinfo=UTC),
+    )
+    metadata = collection.get(ids=["sdk-1"], include=["metadatas"])["metadatas"][0]
+    assert result.vector_rows == 1
+    assert result.coding_rows == 1
+    assert metadata["source"] == "workbuddy"
+    assert datetime.fromtimestamp(metadata["memory_at"], tz=UTC) == datetime(
+        2026, 10, 17, tzinfo=UTC
+    )
+    assert datetime.fromtimestamp(metadata["gmt_created"], tz=UTC) == datetime(
+        2026, 10, 18, tzinfo=UTC
+    )
+    with sqlite3.connect(coding) as database:
+        source, created_at = database.execute(
+            "SELECT source,created_at FROM coding_memory_meta WHERE experience_id='sdk-1'"
+        ).fetchone()
+    assert source == "workbuddy"
+    assert created_at.startswith("2026-10-18T00:00:00")
+
+    repeated = repair_sdk_metadata_from_bundle(
+        data_dir=data_dir,
+        database_path=store.database_path,
+        now=datetime(2026, 10, 25, tzinfo=UTC),
+    )
+    assert repeated == result
 
 
 def _insert_evidence(store, evidence_id, *, conversation="session-1", role="user", seq=1):
