@@ -197,6 +197,13 @@ export function MemoryMap(props: Props) {
   const [axis, setAxis] = useState<MapAxis>("source");
   const [groupKey, setGroupKey] = useState("");
   const [search, setSearch] = useState("");
+  // On a server-paged list, typing only edits the words; the search runs when
+  // the reader submits it (the 搜索 button or Enter), not on every keystroke.
+  const [searchDraft, setSearchDraft] = useState(library?.query ?? "");
+  const submittedQuery = library?.query;
+  useEffect(() => {
+    if (submittedQuery !== undefined) setSearchDraft(submittedQuery);
+  }, [submittedQuery]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [groupNode, setGroupNode] = useState<MemoryGraphNode | null>(null);
   const [question, setQuestion] = useState("");
@@ -827,7 +834,23 @@ export function MemoryMap(props: Props) {
             ))}
           </fieldset>
         )}
-        <div className="map-search">
+        <form
+          className="map-search"
+          role="search"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!library || libraryPane === "dialogues") return;
+            const words = searchDraft.trim();
+            setFilterNotice("");
+            clear();
+            if (words === library.query.trim()) {
+              library.onRetry();
+              return;
+            }
+            library.onQuery(words);
+            library.resetPage();
+          }}
+        >
           <Search size={16} aria-hidden="true" />
           <input
             aria-label={text("筛选地图记忆")}
@@ -843,31 +866,39 @@ export function MemoryMap(props: Props) {
             value={
               libraryPane === "dialogues"
                 ? dialogueFilter
-                : (library?.query ?? search)
+                : library
+                  ? searchDraft
+                  : search
             }
             maxLength={library ? 512 : undefined}
             onKeyDown={(e) => {
-              // The refresh button next to this list re-reads the page;
-              // Enter has to do the same thing, not sit there doing nothing.
-              if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
-              e.preventDefault();
-              library?.onRetry();
+              // Enter that confirms an IME candidate is not a search.
+              if (e.key === "Enter" && e.nativeEvent.isComposing)
+                e.preventDefault();
             }}
             onChange={(e) => {
               if (libraryPane === "dialogues") {
                 setDialogueFilter(e.target.value);
                 return;
               }
+              if (library) {
+                setSearchDraft(e.target.value);
+                return;
+              }
               setFilterNotice("");
               setSearch(e.target.value);
-              if (library) {
-                clear();
-                library.onQuery(e.target.value);
-                library.resetPage();
-              }
             }}
           />
-        </div>
+          {library && libraryPane === "memories" ? (
+            <button
+              type="submit"
+              className="map-search-submit"
+              disabled={library.loading || hidden}
+            >
+              {text("搜索")}
+            </button>
+          ) : null}
+        </form>
         {library && libraryPane === "memories" && (
           <div className="map-list-heading" aria-live="polite">
             <span>

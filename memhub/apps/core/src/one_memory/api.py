@@ -3159,7 +3159,9 @@ def create_app(
                 # no score floor, then keep the rows that contain the words, so
                 # a word in the library is found and a word in none of it finds
                 # nothing. The whole library is never listed in Core.
-                fetch = 500
+                # A larger window made one search take long enough to freeze
+                # the page; 20 is the bounded window the library searches.
+                fetch = 20
                 search_raw = await asyncio.to_thread(
                     client.search,
                     search_query,

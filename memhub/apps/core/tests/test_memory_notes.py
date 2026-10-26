@@ -409,7 +409,7 @@ def test_sdk_memory_library_uses_sdk_search_and_skips_empty_rows_without_mutatio
                 assert [item["memory_id"] for item in body["memories"]] == ["release"]
                 assert search_calls[0][0] == "release"
                 assert search_calls[0][1]["include_sources"] == ["cursor"]
-                assert search_calls[0][1]["limit"] == 500
+                assert search_calls[0][1]["limit"] == 20
                 assert search_calls[0][1]["intention_limit"] == 0
                 assert search_calls[0][1]["min_score"] == 0.0
                 assert list_calls == []

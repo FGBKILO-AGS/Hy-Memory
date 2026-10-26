@@ -181,8 +181,9 @@ it("OBS-22: the graph inspector has no editing entry and never says changes cann
   expect(screen.queryByText(/暂不能保存更改/)).toBeNull();
 });
 
-it("OBS-19: Enter in the memory filter re-reads, exactly like the refresh button", async () => {
+it("OBS-19: Enter in the memory filter submits it; submitting it again re-reads", async () => {
   const onRetry = vi.fn();
+  const onQuery = vi.fn();
   const page = {
     items: memories,
     total: memories.length,
@@ -200,7 +201,7 @@ it("OBS-19: Enter in the memory filter re-reads, exactly like the refresh button
         loading: false,
         failed: false,
         stale: false,
-        onQuery: vi.fn(),
+        onQuery,
         onSource: vi.fn(),
         resetPage: vi.fn(),
         onPage: vi.fn(),
@@ -211,11 +212,39 @@ it("OBS-19: Enter in the memory filter re-reads, exactly like the refresh button
   await act(async () => {});
   await userEvent.click(screen.getByRole("button", { name: "刷新地图记忆" }));
   expect(onRetry).toHaveBeenCalledTimes(1);
+  // Typing alone does not search; Enter submits the words.
+  const input = screen.getByRole("textbox", { name: "筛选地图记忆" });
+  await userEvent.type(input, "第一");
+  expect(onQuery).not.toHaveBeenCalled();
+  await userEvent.type(input, "{Enter}");
+  expect(onQuery).toHaveBeenCalledWith("第一");
+  // Submitting the words already applied re-reads, like the refresh button.
+  await userEvent.clear(input);
+  await userEvent.type(input, "{Enter}");
+  expect(onRetry).toHaveBeenCalledTimes(2);
+});
+
+it("searches only when 搜索 is pressed, not on every keystroke", async () => {
+  const onQuery = vi.fn();
+  const resetPage = vi.fn();
+  render(
+    <Host
+      simplified
+      libraryView={{
+        ...pagedView({ items: memories, total: 2, offset: 0, limit: 100 }),
+        onQuery,
+        resetPage,
+      }}
+    />,
+  );
   await userEvent.type(
     screen.getByRole("textbox", { name: "筛选地图记忆" }),
-    "第一{Enter}",
+    "版本号",
   );
-  expect(onRetry).toHaveBeenCalledTimes(2);
+  expect(onQuery).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "搜索" }));
+  expect(onQuery).toHaveBeenCalledWith("版本号");
+  expect(resetPage).toHaveBeenCalled();
 });
 
 it("OBS-15: switching memory shows a read in progress instead of the previous memory", async () => {
