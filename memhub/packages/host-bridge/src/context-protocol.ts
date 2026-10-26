@@ -74,7 +74,7 @@ export const CONTEXT_INPUT_SCHEMA = {
       description:
         "Filters raw only, within already granted sources; does not change memory scope.",
     },
-    limit: { type: "integer", minimum: 1, maximum: 20, default: 8 },
+    limit: { type: "integer", minimum: 1, maximum: 20, default: 10 },
     character_budget: {
       type: "integer",
       minimum: 200,
@@ -285,8 +285,10 @@ export function isContextResponseForRequest(
 ): value is HostContextSearchResponse {
   if (!isHostContextSearchResponse(value)) return false;
   const kinds = request.kinds ?? ["raw", "memory"];
+  // Core's default item cap: 8 on v1, 10 on SDK-native v2.
+  const limit = request.limit ?? (isSdkContextSearchResponse(value) ? 10 : 8);
   return (
-    value.items.length <= (request.limit ?? 8) &&
+    value.items.length <= limit &&
     value.used_characters <= (request.character_budget ?? 4000) &&
     value.items.every(
       (item) =>

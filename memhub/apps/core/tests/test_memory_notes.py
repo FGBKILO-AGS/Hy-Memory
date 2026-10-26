@@ -409,7 +409,7 @@ def test_sdk_memory_library_uses_sdk_search_and_skips_empty_rows_without_mutatio
                 assert [item["memory_id"] for item in body["memories"]] == ["release"]
                 assert search_calls[0][0] == "release"
                 assert search_calls[0][1]["include_sources"] == ["cursor"]
-                assert search_calls[0][1]["limit"] == 500
+                assert search_calls[0][1]["limit"] == 20
                 assert search_calls[0][1]["intention_limit"] == 0
                 assert search_calls[0][1]["min_score"] == 0.0
                 assert list_calls == []
@@ -438,5 +438,56 @@ def test_sdk_memory_library_uses_sdk_search_and_skips_empty_rows_without_mutatio
                 node_ids = {node["node_id"] for node in graph.json()["nodes"]}
                 assert "source:cursor" in node_ids
                 assert "source:default" not in node_ids
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.fresh_sdk
+def test_sdk_context_search_sets_each_recall_lane_apart(tmp_path):
+    """Normal, schema and intention lanes default to 10 / 3 / 1 and pass through."""
+
+    async def scenario():
+        app = application(tmp_path)
+        calls = []
+
+        class Client:
+            def search(self, query, **kwargs):
+                calls.append(kwargs)
+                return {"memories": {"schema": [], "proactive": [], "normal": []}}
+
+            def get(self, memory_id):
+                return None
+
+        sdk = Client()
+
+        class Handle:
+            async def client(self):
+                return sdk
+
+            async def close(self):
+                return None
+
+        async with app.router.lifespan_context(app):
+            app.state.sdk_client_handle = Handle()
+            async with client_for(app) as client:
+                defaulted = await client.post(
+                    "/api/v2/context/search",
+                    json={"query": "release", "kinds": ["memory"]},
+                )
+                chosen = await client.post(
+                    "/api/v2/context/search",
+                    json={
+                        "query": "release",
+                        "kinds": ["memory"],
+                        "limit": 5,
+                        "schema_limit": 0,
+                        "intention_limit": 2,
+                    },
+                )
+        assert defaulted.status_code == 200
+        assert chosen.status_code == 200
+        assert [
+            (call["limit"], call["schema_limit"], call["intention_limit"]) for call in calls
+        ] == [(10, 3, 1), (5, 0, 2)]
 
     asyncio.run(scenario())

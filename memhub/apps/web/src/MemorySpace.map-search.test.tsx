@@ -218,7 +218,7 @@ it("default map search finds an existing 501st memory rather than declaring no m
   fireEvent.change(screen.getByLabelText("筛选地图记忆"), {
     target: { value: "第501条独有目标" },
   });
-  fireEvent.keyDown(screen.getByLabelText("筛选地图记忆"), { key: "Enter" });
+  fireEvent.submit(screen.getByRole("search"));
   await waitFor(() =>
     expect(
       within(screen.getByRole("list", { name: "地图记忆列表" })).queryByText(
@@ -310,6 +310,7 @@ it("OBS-13: the settled-count headline names the filter it is counting", async (
   fireEvent.change(screen.getByLabelText("筛选地图记忆"), {
     target: { value: "第501条独有目标" },
   });
+  fireEvent.submit(screen.getByRole("search"));
   await waitFor(() =>
     expect(
       screen.getByText(
@@ -320,6 +321,7 @@ it("OBS-13: the settled-count headline names the filter it is counting", async (
   fireEvent.change(screen.getByLabelText("筛选地图记忆"), {
     target: { value: "" },
   });
+  fireEvent.submit(screen.getByRole("search"));
   await chooseSource("codex");
   await waitFor(() =>
     expect(
@@ -473,6 +475,7 @@ it("distinguishes failed search from empty, then retries the same query", async 
   fireEvent.change(screen.getByLabelText("筛选地图记忆"), {
     target: { value: "目标" },
   });
+  fireEvent.submit(screen.getByRole("search"));
   await screen.findByText("记忆读取失败，请重试。");
   expect(screen.queryByText("没有匹配的记忆")).toBeNull();
   expect(screen.queryByText("还没有已生成的记忆")).toBeNull();
@@ -490,6 +493,7 @@ it("distinguishes failed search from empty, then retries the same query", async 
   fireEvent.change(screen.getByLabelText("筛选地图记忆"), {
     target: { value: "确实没有这项" },
   });
+  fireEvent.submit(screen.getByRole("search"));
   await screen.findByText("没有匹配的记忆");
   expect(screen.queryByText("还没有已生成的记忆")).toBeNull();
   expect(
@@ -510,6 +514,7 @@ it("aborts an older query after a source change and never replaces the newer res
   fireEvent.change(screen.getByLabelText("筛选地图记忆"), {
     target: { value: "旧搜索" },
   });
+  fireEvent.submit(screen.getByRole("search"));
   await waitFor(() => expect(resolve).toHaveLength(1));
   const signals = vi
     .mocked(api.getMemoryLibrary)
@@ -521,6 +526,7 @@ it("aborts an older query after a source change and never replaces the newer res
   fireEvent.change(screen.getByLabelText("筛选地图记忆"), {
     target: { value: "目标" },
   });
+  fireEvent.submit(screen.getByRole("search"));
   await within(screen.getByRole("list", { name: "地图记忆列表" })).findByText(
     "第501条独有目标",
   );
@@ -553,6 +559,7 @@ it("hidden map aborts page reads and does not accept late body or poll until rea
   fireEvent.change(screen.getByLabelText("筛选地图记忆"), {
     target: { value: "迟到" },
   });
+  fireEvent.submit(screen.getByRole("search"));
   await act(async () => {});
   const signals = vi
     .mocked(api.getMemoryLibrary)
@@ -611,6 +618,7 @@ it("keeps the populated map while a search is in flight and does not treat it as
   fireEvent.change(screen.getByLabelText("筛选地图记忆"), {
     target: { value: "onememory" },
   });
+  fireEvent.submit(screen.getByRole("search"));
   await act(async () => {});
   expect(screen.queryByText("正在读取…")).toBeNull();
   expect(screen.getByText("已沉淀 501 条 · 当前展示 100 条")).toBeTruthy();
@@ -700,6 +708,7 @@ it("explicit refresh keeps the search scope and replaces the page with the lates
   fireEvent.change(screen.getByLabelText("筛选地图记忆"), {
     target: { value: "目标" },
   });
+  fireEvent.submit(screen.getByRole("search"));
   const list = screen.getByRole("list", { name: "地图记忆列表" });
   await within(list).findByText("第501条独有目标");
   vi.mocked(api.getMemoryLibrary).mockResolvedValueOnce({

@@ -317,6 +317,39 @@ it("selects SDK Context v2 after cutover and passes native fields unchanged", as
   );
 });
 
+it.each([
+  [10, 200],
+  [11, 502],
+])(
+  "accepts up to Core's v2 default of 10 items when no limit is sent (%i items)",
+  async (count, status) => {
+    const f = await fixture();
+    const items = Array.from({ length: count }, (_, index) => ({
+      kind: "memory",
+      memory_id: `memory-${index}`,
+      content: "m",
+      layer: "l2_fact",
+      status: "active",
+      source: "codex",
+      updated_at: "2026-10-21T00:00:00Z",
+      score: 0.5,
+      truncated: false,
+    }));
+    f.setAuthority("sdk");
+    f.respond({
+      schema_version: 2,
+      request_id: "sdk-request",
+      state: "grounded",
+      items,
+      used_characters: count,
+      truncated: false,
+      total_ms: 1,
+    });
+
+    expect((await f.post({ query: "original" })).status).toBe(status);
+  },
+);
+
 it("does not fall back to legacy context when the selected SDK response is invalid", async () => {
   const f = await fixture();
   f.setAuthority("sdk");

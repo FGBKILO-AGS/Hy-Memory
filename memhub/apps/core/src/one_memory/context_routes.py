@@ -34,6 +34,7 @@ from one_memory.context_models import (
     MemoryContextItem,
     RawContextItem,
     SdkContextItem,
+    SdkContextSearchRequest,
     SdkContextSearchResponse,
     SdkMemoryContextItem,
     SdkRawContextItem,
@@ -439,7 +440,7 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
 
     @router.post("/search", response_model=SdkContextSearchResponse)
     async def search(
-        value: ContextSearchRequest,
+        value: SdkContextSearchRequest,
         request: Request,
         response: Response,
     ) -> SdkContextSearchResponse:
@@ -514,8 +515,8 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
                 limit=value.limit,
                 min_score=sdk_relevance_floor(),
                 schema_min_score=sdk_relevance_floor(),
-                schema_limit=value.limit,
-                intention_limit=value.limit,
+                schema_limit=value.schema_limit,
+                intention_limit=value.intention_limit,
                 scene="normal",
                 reader=HY_MEMORY_READER,
             )
