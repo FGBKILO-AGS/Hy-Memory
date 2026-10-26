@@ -79,9 +79,9 @@ SDK_MIGRATION_CAPTURE_FENCE = ".sdk-migration-capture-fence.json"
 
 
 def database_path() -> Path:
-    from one_memory.workbuddy_boundary import database_path as boundary_database
+    from one_memory.config import load_settings
 
-    return boundary_database()
+    return load_settings().data_dir / "one-memory.sqlite3"
 
 
 def capture_stdio(source_id: str, stdin: TextIO, output: TextIO) -> int:

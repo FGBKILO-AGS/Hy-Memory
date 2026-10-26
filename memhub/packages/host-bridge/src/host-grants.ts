@@ -44,6 +44,9 @@ export type HostReadTool =
   | "om_recall"
   | "om_ask"
   | "om_conversations"
+  /** Legacy: MemHub_matters is gone, but stores and approval callers may still
+   * carry this id. It stays parseable so an old grant does not break the
+   * store; nothing authorizes against it any more. */
   | "om_matters"
   | "om_diagnostic_trace";
 
@@ -304,7 +307,7 @@ export class HostGrantStore {
         hostId,
         revision: 1,
         status: "approved",
-        allowedTools: ["om_recall", "om_ask", "om_conversations", "om_matters"],
+        allowedTools: ["om_recall", "om_ask", "om_conversations"],
         allowedScopes: ["all-apps"],
         secretHash: hashSecret(secret),
       };

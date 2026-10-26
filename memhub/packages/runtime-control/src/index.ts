@@ -182,6 +182,17 @@ export {
   type SdkMigrationResult,
 } from "./sdk-migration.js";
 export {
+  clearSdkMigrationBlock,
+  readSdkMigrationBlock,
+  recordSdkMigrationBlock,
+  SDK_MIGRATION_LOG_NAME,
+  type SdkMigrationBlock,
+  type SdkMigrationCaller,
+  type SdkMigrationLogEntry,
+  sdkMigrationLogPath,
+  writeSdkMigrationLog,
+} from "./sdk-migration-log.js";
+export {
   installUserService,
   parseDisabledOverride,
   restartUserService,

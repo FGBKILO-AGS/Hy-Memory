@@ -30,7 +30,6 @@ function sessionWith(
     unwired as never,
     unwired as never,
     unwired as never,
-    unwired as never,
     write as never,
     status as never,
   );
@@ -68,9 +67,18 @@ describe("om_memory_write MCP tool", () => {
     );
   });
 
+  const call = (id: number, args: unknown) =>
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id,
+      method: "tools/call",
+      params: { name: "MemHub_memory_write", arguments: args },
+    });
+  const messages = [{ role: "user", content: "remember tabs over spaces" }];
+
   it("returns the durable request id instead of writing synchronously", async () => {
-    const write = vi.fn(async () => ({
-      request_id: "req-42",
+    const write = vi.fn(async (_path: string, request: MemoryWriteRequest) => ({
+      request_id: request.request_id,
       state: "accepted",
       created_at: "2026",
       updated_at: "2026",
@@ -81,20 +89,7 @@ describe("om_memory_write MCP tool", () => {
 
     const response = await processMcpLine(
       session,
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 3,
-        method: "tools/call",
-        params: {
-          name: "MemHub_memory_write",
-          arguments: {
-            internal_session_id: "sess-1",
-            first_round: 1,
-            last_round: 5,
-            evidence_ids: ["e1"],
-          },
-        },
-      }),
+      call(3, { messages, request_id: "req-42" }),
     );
     const payload = JSON.parse(response ?? "{}").result.structuredContent as {
       request_id: string;
@@ -104,56 +99,54 @@ describe("om_memory_write MCP tool", () => {
     expect(payload.state).toBe("accepted");
   });
 
-  it("rejects a write with no evidence before any round trip", async () => {
-    const write = vi.fn(async () => ({ request_id: "never" }));
+  it("generates the request id and owns the session id", async () => {
+    const write = vi.fn(async () => ({ request_id: "r", state: "accepted" }));
     const session = sessionWith(write, async () => null);
     await initialize(session);
 
-    const response = await processMcpLine(
-      session,
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 4,
-        method: "tools/call",
-        params: {
-          name: "MemHub_memory_write",
-          arguments: {
-            internal_session_id: "sess-1",
-            first_round: 1,
-            last_round: 5,
-            evidence_ids: [],
-          },
-        },
-      }),
+    await processMcpLine(session, call(3, { messages }));
+    await processMcpLine(session, call(4, { messages, priority: "live" }));
+    const [first, second] = write.mock.calls.map(
+      (args) => (args as unknown as [string, MemoryWriteRequest])[1],
     );
-    expect(write).not.toHaveBeenCalled();
-    expect(JSON.parse(response ?? "{}").error.code).toBe(-32602);
+    expect(first?.request_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(second?.request_id).not.toBe(first?.request_id);
+    expect(first?.session_id).toMatch(/^mcp-[0-9a-f-]{36}$/);
+    expect(second?.session_id).toBe(first?.session_id);
+    expect(first?.messages).toEqual(messages);
+    expect(second?.priority).toBe("live");
   });
 
-  it("rejects a descending round range", async () => {
+  it("does not let the model name the session or the source", async () => {
     const write = vi.fn(async () => ({ request_id: "never" }));
     const session = sessionWith(write, async () => null);
     await initialize(session);
 
-    const response = await processMcpLine(
-      session,
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 5,
-        method: "tools/call",
-        params: {
-          name: "MemHub_memory_write",
-          arguments: {
-            internal_session_id: "sess-1",
-            first_round: 5,
-            last_round: 1,
-            evidence_ids: ["e1"],
-          },
-        },
-      }),
-    );
+    for (const extra of [{ session_id: "s" }, { source_id: "claude-code" }]) {
+      const response = await processMcpLine(
+        session,
+        call(5, { messages, ...extra }),
+      );
+      expect(JSON.parse(response ?? "{}").error.code).toBe(-32602);
+    }
     expect(write).not.toHaveBeenCalled();
-    expect(JSON.parse(response ?? "{}").error).toBeDefined();
+  });
+
+  it("rejects a write without a user turn before any round trip", async () => {
+    const write = vi.fn(async () => ({ request_id: "never" }));
+    const session = sessionWith(write, async () => null);
+    await initialize(session);
+
+    for (const args of [
+      { messages: [] },
+      { messages: [{ role: "assistant", content: "hi" }] },
+      { messages: [{ role: "system", content: "hi" }] },
+      { messages, memory_at: "yesterday" },
+    ]) {
+      const response = await processMcpLine(session, call(6, args));
+      expect(JSON.parse(response ?? "{}").error.code).toBe(-32602);
+    }
+    expect(write).not.toHaveBeenCalled();
   });
 
   it("passes a never-accepted status through as null rather than an error", async () => {

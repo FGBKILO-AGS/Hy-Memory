@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import sqlite3
+import time
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
@@ -63,6 +64,71 @@ from one_memory.target_schema import drop_legacy_tables, legacy_tables_present
 PREPARED_PHASE = "prepared"
 
 
+class _StepLog:
+    """Each runner step, its duration, its counts and how it ended.
+
+    The CLI only sees the exception that escapes `run_startup_migration` and
+    names it with a generic code when it is not one of ours; these lines say
+    which step raised it. Content-free: only names, counts and codes.
+    """
+
+    def __init__(self, data_dir: Path) -> None:
+        self.data_dir = data_dir
+        self.migration_id: str | None = None
+
+    def check(self, step: str, code: str | None) -> None:
+        """One preflight check that is a decision, not a call: its result code."""
+        from one_memory.sdk_migration_log import write_migration_log
+
+        write_migration_log(
+            self.data_dir,
+            writer="core-sdk-migrate",
+            event="step.failed" if code else "step.finished",
+            outcome="failed" if code else "succeeded",
+            migration_id=self.migration_id,
+            code=code,
+            details={"step": step, "result": code or "passed"},
+        )
+
+    @contextmanager
+    def step(self, name: str) -> Iterator[dict[str, object]]:
+        from one_memory.sdk_migration_log import write_migration_log
+
+        started = time.monotonic()
+        details: dict[str, object] = {}
+        try:
+            yield details
+        except BaseException as error:
+            code = getattr(error, "code", None)
+            write_migration_log(
+                self.data_dir,
+                writer="core-sdk-migrate",
+                event="step.failed",
+                outcome="failed",
+                migration_id=self.migration_id,
+                code=code if isinstance(code, str) else None,
+                error=error,
+                details={
+                    "step": name,
+                    "duration_ms": (time.monotonic() - started) * 1000,
+                    **details,
+                },
+            )
+            raise
+        write_migration_log(
+            self.data_dir,
+            writer="core-sdk-migrate",
+            event="step.finished",
+            outcome="succeeded",
+            migration_id=self.migration_id,
+            details={
+                "step": name,
+                "duration_ms": (time.monotonic() - started) * 1000,
+                **details,
+            },
+        )
+
+
 @dataclass(frozen=True)
 class CutoverPreparation:
     """What the cutover did to legacy work, for the receipt and the dialog."""
@@ -83,8 +149,7 @@ class CutoverPreparation:
 
 def _tables(database: sqlite3.Connection) -> set[str]:
     return {
-        str(row[0])
-        for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        str(row[0]) for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
 
 
@@ -128,9 +193,7 @@ def prepare_legacy_write_queue_for_cutover(database_path: Path) -> tuple[int, in
         if "evidence" not in tables:
             return (0, 0)
         jobs = (
-            tuple(
-                database.execute("SELECT job_id,state,payload_json FROM memory_write_jobs")
-            )
+            tuple(database.execute("SELECT job_id,state,payload_json FROM memory_write_jobs"))
             if "memory_write_jobs" in tables
             else ()
         )
@@ -281,15 +344,27 @@ def abandoned_legacy_work(database_path: Path) -> dict[str, int]:
     return abandoned
 
 
-def prepare_legacy_work_for_cutover(database_path: Path) -> CutoverPreparation:
-    """Make the surviving queue self-contained. Safe to repeat."""
+def prepare_legacy_work_for_cutover(
+    database_path: Path, trace: dict[str, object] | None = None
+) -> CutoverPreparation:
+    """Make the surviving queue self-contained. Safe to repeat.
+
+    `trace` (the migration log's step details) learns which sub-step is
+    running, so a failure names it.
+    """
+    trace = {} if trace is None else trace
+    trace["sub_step"] = "write_queue"
     frozen, moved = prepare_legacy_write_queue_for_cutover(database_path)
+    trace["sub_step"] = "pending_dispatches"
     dispatches = move_pending_dispatches(database_path)
+    trace["sub_step"] = "abandoned_work"
+    abandoned = abandoned_legacy_work(database_path)
+    trace.pop("sub_step", None)
     return CutoverPreparation(
         frozen_jobs=frozen,
         moved_tasks=moved,
         moved_dispatches=dispatches,
-        abandoned=abandoned_legacy_work(database_path),
+        abandoned=abandoned,
     )
 
 
@@ -478,14 +553,25 @@ def run_startup_migration(
             return open_client(profile)
         return runtime_sdk_client(database_path, data_dir, profile)
 
+    log = _StepLog(data_dir)
     store = SdkDataPlaneMigrationStore(database_path)
-    authority, authority_migration = store.authority_state()
-    profile = read_active_profile(database_path)
+    with log.step("preflight.authority_read") as step:
+        authority, authority_migration = store.authority_state()
+        step["authority"] = authority.value
+    log.migration_id = authority_migration
+    with log.step("preflight.profile_read") as step:
+        profile = read_active_profile(database_path)
+        step["profile_present"] = profile is not None
     if authority is MemoryAuthority.SDK:
-        vectors_waiting = profile is not None and bool(legacy_vector_collections(data_dir, profile))
-        leftovers = bool(legacy_tables_present(database_path)) or abandoned_staging_present(
-            data_dir=data_dir, namespace=namespace
-        )
+        with log.step("preflight.leftovers_scan") as step:
+            vectors_waiting = profile is not None and bool(
+                legacy_vector_collections(data_dir, profile)
+            )
+            leftovers = bool(legacy_tables_present(database_path)) or abandoned_staging_present(
+                data_dir=data_dir, namespace=namespace
+            )
+            step["vectors_waiting"] = vectors_waiting
+            step["leftovers"] = leftovers
         if not vectors_waiting and not leftovers:
             return StartupMigrationResult(state="not_required")
         reattached: tuple[ReattachedCollection, ...] = ()
@@ -493,20 +579,28 @@ def run_startup_migration(
         if vectors_waiting:
             assert profile is not None
             progress("vectors")
-            reattached = reattach_legacy_vectors(data_dir, profile)
-            legacy = legacy_memory_ids_from_bundle(data_dir, authority_migration)
+            with log.step("vectors.reattach") as step:
+                reattached = reattach_legacy_vectors(data_dir, profile)
+                step["collections"] = len(reattached)
+            with log.step("verify.legacy_ids_from_bundle") as step:
+                legacy = legacy_memory_ids_from_bundle(data_dir, authority_migration)
+                step["bundle_ids_present"] = legacy is not None
             if legacy is not None and not legacy.empty:
                 # Authority already moved, so nothing is left to protect by
                 # refusing; record what the repaired home reads back.
                 progress("verify")
-                with client_for(profile) as client:
+                with log.step("verify.readback") as step, client_for(profile) as client:
                     readback = verify_readback(client, legacy)
+                    step.update(readback.as_document())
         dropped: tuple[str, ...] = ()
         if leftovers:
             progress("cleanup")
-            dropped = resume_legacy_cleanup(data_dir=data_dir, database_path=database_path)
+            with log.step("cleanup.drop_legacy_tables") as step:
+                dropped = resume_legacy_cleanup(data_dir=data_dir, database_path=database_path)
+                step["dropped_tables"] = len(dropped)
             if dropped:
-                _vacuum(database_path)
+                with log.step("cleanup.vacuum"):
+                    _vacuum(database_path)
         return StartupMigrationResult(
             state="complete",
             migration_id=authority_migration,
@@ -520,63 +614,89 @@ def run_startup_migration(
     from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
     from one_memory.memory_server.migrations import MIGRATIONS
 
-    migration_id, bundle_id = _resumable_identity(database_path)
-    legacy = legacy_memory_ids_from(database_path)
+    with log.step("preflight.resumable_identity") as step:
+        migration_id, bundle_id = _resumable_identity(database_path)
+        step["resumed"] = migration_id != f"{MIGRATION_PREFIX}-{database_generation(database_path)}"
+    log.migration_id = migration_id
+    with log.step("preflight.legacy_ids_scan") as step:
+        legacy = legacy_memory_ids_from(database_path)
+        step["chat"] = len(legacy.chat)
+        step["productivity"] = len(legacy.productivity)
+        step["users"] = len(legacy.users)
     if profile is None and not legacy.empty:
         # Without the embedding profile the Runtime's collections cannot be
         # named, so neither reattached nor read back. Legacy stays intact.
+        log.check("preflight.model_profile_check", "sdk_migration_model_profile_required")
         raise DataPlaneMigrationError("sdk_migration_model_profile_required")
+    log.check("preflight.model_profile_check", None)
     with capture_fence(data_dir):
         progress("bundle")
-        manifest = _ensure_bundle(
-            data_dir=data_dir,
-            bundle_id=bundle_id,
-            runtime_build=runtime_build,
-        )
+        with log.step("bundle.ensure") as step:
+            manifest = _ensure_bundle(
+                data_dir=data_dir,
+                bundle_id=bundle_id,
+                runtime_build=runtime_build,
+            )
+            step["bundle_id"] = bundle_id
         progress("prepare")
-        asyncio.run(migrate(SqliteMigrationStore(database_path), MIGRATIONS))
-        close_main_databases()
-        recover_abandoned_staging(
-            data_dir=data_dir,
-            database_path=database_path,
-            namespace=namespace,
-        )
-        store.start(
-            migration_id=migration_id,
-            source_runtime_build=str(manifest.get("runtime_build") or ""),
-            target_sdk_version=sdk_version,
-            source_schema_version=MIGRATIONS[-1].version,
-            namespace_fingerprint=hashlib.sha256(namespace.encode()).hexdigest(),
-            backend_fingerprint=hashlib.sha256(b"chroma:kuzu:sqlite").hexdigest(),
-            backup_bundle_id=bundle_id,
-        )
-        preparation = prepare_legacy_work_for_cutover(database_path)
+        with log.step("prepare.schema_migrate") as step:
+            asyncio.run(migrate(SqliteMigrationStore(database_path), MIGRATIONS))
+            close_main_databases()
+            step["schema_version"] = MIGRATIONS[-1].version
+        with log.step("prepare.recover_abandoned_staging"):
+            recover_abandoned_staging(
+                data_dir=data_dir,
+                database_path=database_path,
+                namespace=namespace,
+            )
+        with log.step("prepare.ledger_start"):
+            store.start(
+                migration_id=migration_id,
+                source_runtime_build=str(manifest.get("runtime_build") or ""),
+                target_sdk_version=sdk_version,
+                source_schema_version=MIGRATIONS[-1].version,
+                namespace_fingerprint=hashlib.sha256(namespace.encode()).hexdigest(),
+                backend_fingerprint=hashlib.sha256(b"chroma:kuzu:sqlite").hexdigest(),
+                backup_bundle_id=bundle_id,
+            )
+        with log.step("prepare.legacy_work") as step:
+            preparation = prepare_legacy_work_for_cutover(database_path, step)
+            step.update(preparation.as_document())
         reattached = ()
         readback = None
         if profile is not None:
             progress("vectors")
-            reattached = reattach_legacy_vectors(data_dir, profile)
+            with log.step("vectors.reattach") as step:
+                reattached = reattach_legacy_vectors(data_dir, profile)
+                step["collections"] = len(reattached)
         if not legacy.empty:
             assert profile is not None
             progress("verify")
-            with client_for(profile) as client:
-                readback = verify_readback(client, legacy)
-            if not readback.passed:
-                store.set_phase(migration_id, phase="readback_failed", state="blocked")
-                raise MemoryReadbackFailed(readback)
-        store.set_phase(migration_id, phase=PREPARED_PHASE, state="ready")
+            with log.step("verify.readback") as step:
+                with client_for(profile) as client:
+                    readback = verify_readback(client, legacy)
+                step.update(readback.as_document())
+                if not readback.passed:
+                    store.set_phase(migration_id, phase="readback_failed", state="blocked")
+                    raise MemoryReadbackFailed(readback)
+        with log.step("prepare.mark_prepared"):
+            store.set_phase(migration_id, phase=PREPARED_PHASE, state="ready")
         progress("cutover")
-        commit_sdk_cutover(
-            data_dir=data_dir,
-            database_path=database_path,
-            migration_id=migration_id,
-            bundle_id=bundle_id,
-            sdk_version=sdk_version,
-        )
+        with log.step("cutover.commit"):
+            commit_sdk_cutover(
+                data_dir=data_dir,
+                database_path=database_path,
+                migration_id=migration_id,
+                bundle_id=bundle_id,
+                sdk_version=sdk_version,
+            )
         progress("cleanup")
-        dropped = resume_legacy_cleanup(data_dir=data_dir, database_path=database_path)
+        with log.step("cleanup.drop_legacy_tables") as step:
+            dropped = resume_legacy_cleanup(data_dir=data_dir, database_path=database_path)
+            step["dropped_tables"] = len(dropped)
         if dropped:
-            _vacuum(database_path)
+            with log.step("cleanup.vacuum"):
+                _vacuum(database_path)
     return StartupMigrationResult(
         state="cutover",
         migration_id=migration_id,

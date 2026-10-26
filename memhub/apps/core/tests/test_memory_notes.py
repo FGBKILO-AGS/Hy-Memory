@@ -78,9 +78,6 @@ def test_empty_library_can_save_a_note_without_a_matter_or_configured_model(tmp_
             assert (
                 app.state.memory_note_store.require(saved["evidence_id"]).verbatim == note["text"]
             )
-            retired = await client.get(f"/api/v1/memory-notes/{saved['evidence_id']}/evidence")
-            assert retired.status_code == 409
-            assert retired.json()["detail"] == "memory_note_evidence_retired"
             assert legacy_tables_present(app.state.settings.data_dir / "one-memory.sqlite3") == ()
         restarted = application(tmp_path)
         async with restarted.router.lifespan_context(restarted), client_for(restarted) as client:
@@ -114,37 +111,6 @@ def test_note_requires_authentication_explicit_scope_and_nonempty_content(tmp_pa
             client.headers.pop("Authorization")
             assert (await client.post("/api/v1/memory-notes", json=base)).status_code == 401
             assert app.state.memory_note_store.list() == []
-
-    asyncio.run(scenario())
-
-
-def test_saved_note_evidence_returns_raw_and_consent_reference_from_same_record(tmp_path):
-    async def scenario():
-        app = legacy_application(tmp_path)
-        async with app.router.lifespan_context(app), client_for(app) as client:
-            text = "Original  spacing\n预算<5，不能改为>5。"
-            saved = (
-                await client.post(
-                    "/api/v1/memory-notes",
-                    json={
-                        "request_id": str(uuid4()),
-                        "text": text,
-                        "scope": "all-apps",
-                    },
-                )
-            ).json()
-            endpoint = f"/api/v1/memory-notes/{saved['evidence_id']}/evidence"
-            response = await client.get(endpoint)
-            assert response.status_code == 200, response.text
-            value = response.json()
-            assert value["verbatim"] == text
-            assert value["evidence_id"] == saved["evidence_id"] and value["revision"] == 1
-            assert value["role"] == "user" and value["written_by"] == "person"
-            assert value["available"] is True and value["source_id"] == "one-memory-manual"
-            assert app.state.memory_task_store.list() == []
-            assert (await client.get("/api/v1/memory-notes/missing/evidence")).status_code == 404
-            client.headers.pop("Authorization")
-            assert (await client.get(endpoint)).status_code == 401
 
     asyncio.run(scenario())
 

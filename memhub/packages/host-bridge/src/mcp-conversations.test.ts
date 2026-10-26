@@ -105,7 +105,7 @@ describe("om_conversations", () => {
 
     const response = await call(instance, { query: "x", limit: 500 });
 
-    expect(response.error.message).toContain("1 to 50");
+    expect(response.error.message).toContain("1 to 20");
     expect(search).not.toHaveBeenCalled();
   });
 
@@ -113,11 +113,11 @@ describe("om_conversations", () => {
     // 上一条的正面对照：否则「永远不调用」也能让它通过。
     const { search, instance } = session();
 
-    await call(instance, { query: "x", limit: 50 });
+    await call(instance, { query: "x", limit: 20 });
 
     expect(search).toHaveBeenCalledWith("/fixture/discovery.json", {
       query: "x",
-      limit: 50,
+      limit: 20,
     });
   });
 

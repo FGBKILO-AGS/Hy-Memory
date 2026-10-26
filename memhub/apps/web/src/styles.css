@@ -2711,56 +2711,6 @@ button.onboarding-skip {
   font-size: 11px;
 }
 
-.wb-matters {
-  padding: 12px 0;
-  border-right: 0.5px solid var(--bd);
-  background: var(--panel);
-}
-
-.wb-matter {
-  display: block;
-  width: 100%;
-  min-height: 0;
-  padding: 7px 13px;
-  border: 0;
-  border-left: 2px solid transparent;
-  border-radius: 0;
-  color: var(--tx);
-  background: transparent;
-  font-size: 13px;
-  font-weight: 400;
-  text-align: left;
-}
-
-.wb-matter:hover:not(:disabled) {
-  border-left-color: transparent;
-  background: var(--hover);
-}
-
-.wb-matter.on {
-  border-left-color: var(--tx);
-  background: var(--card);
-  font-weight: 500;
-}
-
-.wb-matter small {
-  display: block;
-  margin-top: 1px;
-  color: var(--tx3);
-  font-size: 11px;
-}
-
-.wb-matter-memories {
-  margin: 0 0 6px;
-  padding: 0;
-  list-style: none;
-}
-
-/* The gap the clamped button can no longer carry itself. */
-.wb-matter-memories > li {
-  padding-bottom: 5px;
-}
-
 .wb-memory {
   display: -webkit-box;
   overflow: hidden;
@@ -3199,14 +3149,6 @@ button.onboarding-skip {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .wb-matters {
-    display: flex;
-    gap: 6px;
-    overflow-x: auto;
-    border-right: 0;
-    border-bottom: 0.5px solid var(--bd);
-  }
-
   .wb-column-label {
     display: none;
   }
@@ -3558,9 +3500,7 @@ button.onboarding-skip {
 }
 @supports not (backdrop-filter: blur(1px)) {
   .app-rail,
-  .consent-sheet,
-  .matter-topbar,
-  .matter-context-modal {
+  .consent-sheet {
     background: var(--panel);
   }
 }

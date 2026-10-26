@@ -22,7 +22,6 @@ export interface ManagedRuntime {
    * the outer service receipt so a *separate* process (`status`) can report
    * `degraded` without sharing memory with the Runtime. */
   readonly sidecarState?: "running" | "failed" | "stopped";
-  readonly readerPort?: number | null;
   start(): Promise<unknown>;
   stop(): Promise<void>;
 }
@@ -83,16 +82,10 @@ export class RuntimeService {
         instanceId: connection.instanceId,
         coreBaseUrl: connection.coreBaseUrl,
       };
-      const readerPort =
-        this.options.createSupervisor.length > 0
-          ? (supervisor as { readerPort?: number | null }).readerPort
-          : undefined;
       await this.writeReceipt(
         "running",
         connection.instanceId,
         connection.coreBaseUrl,
-        undefined,
-        readerPort,
       );
       this.started = true;
       await this.options.diagnostics?.log({
@@ -268,7 +261,6 @@ export class RuntimeService {
     instanceId: string,
     coreBaseUrl: string,
     sidecar?: "running" | "failed",
-    readerPort?: number | null,
   ): Promise<void> {
     const url = new URL(coreBaseUrl);
     if (url.hostname !== "127.0.0.1" || !url.port) {
@@ -284,7 +276,6 @@ export class RuntimeService {
           instance_id: instanceId,
           pid: this.pid(),
           core_port: Number(url.port),
-          ...(readerPort != null ? { reader_port: readerPort } : {}),
           ...(sidecar === undefined ? {} : { sidecar }),
           started_at: new Date().toISOString(),
         },

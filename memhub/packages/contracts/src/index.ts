@@ -572,11 +572,6 @@ export interface SdkUserProfileResponse {
   elapsed_ms: number;
 }
 
-export interface MemoryAuthorityResponse {
-  authority: "legacy" | "sdk";
-  migration_id: string | null;
-}
-
 export interface SdkRawRecord {
   raw_id: string;
   content: string;

@@ -113,6 +113,23 @@ it("reports an unreadable migration status as deferred", async () => {
   });
 });
 
+it("cycles the runtime when the status is unreadable so no pre-upgrade Runtime keeps serving", async () => {
+  const fenced: string[] = [];
+  const result = await runSdkMigration({
+    dataDir: "/data",
+    core,
+    runtimeBuild: "20",
+    execute: vi.fn(async () => ({ exitCode: 1, document: {} })),
+    fence: async <T>(dataDir: string, action: () => Promise<T>) => {
+      fenced.push(dataDir);
+      return action();
+    },
+  });
+
+  expect(fenced).toEqual(["/data"]);
+  expect(result.state).toBe("deferred");
+});
+
 it("passes the migration failure code to the startup dialog", async () => {
   const result = await runSdkMigration({
     dataDir: "/data",

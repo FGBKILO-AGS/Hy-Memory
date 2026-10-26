@@ -7,7 +7,8 @@ import {
   contextThroughBroker,
   diagnosticTraceThroughBroker,
   grantedToolsThroughBroker,
-  mattersThroughBroker,
+  memoryWriteStatusThroughBroker,
+  memoryWriteThroughBroker,
   readHostCredentialFile,
   recallThroughBroker,
   searchConversationsThroughBroker,
@@ -39,12 +40,14 @@ const session = new McpSession(
   (discovery, request) => askThroughBroker(discovery, request, clientOptions),
   (discovery, request) =>
     searchConversationsThroughBroker(discovery, request, clientOptions),
-  (discovery, request) =>
-    mattersThroughBroker(discovery, request, clientOptions),
   (discovery, request, signal) =>
     contextThroughBroker(discovery, request, { ...clientOptions, signal }),
-  undefined,
-  undefined,
+  // The broker names the source from this credential; without it a write
+  // could not say which host it came from and is refused.
+  (discovery, request) =>
+    memoryWriteThroughBroker(discovery, request, clientOptions),
+  (discovery, requestId) =>
+    memoryWriteStatusThroughBroker(discovery, requestId, clientOptions),
   (discovery, request) =>
     diagnosticTraceThroughBroker(discovery, request, clientOptions),
   // What the grant allows, so the list a host sees is the list it may use.

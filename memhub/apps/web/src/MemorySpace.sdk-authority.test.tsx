@@ -16,23 +16,20 @@ import { MemorySpace } from "./MemorySpace";
 import { sdkMapMemory } from "./sdk-memory-map";
 
 const api = vi.hoisted(() => ({
-  authority: vi.fn(),
-  legacyLibrary: vi.fn(),
-  legacyGraph: vi.fn(),
   sdkLibrary: vi.fn(),
   sdkGraph: vi.fn(),
   sdkMemory: vi.fn(),
+  updateSdkMemory: vi.fn(),
+  deleteSdkMemory: vi.fn(),
 }));
+// Only the SDK (v2) reads and writes exist: a call to anything else fails the
+// test with "is not a function" instead of passing silently.
 vi.mock("./api", () => ({
-  getMemoryAuthority: api.authority,
-  getMemoryLibrary: api.legacyLibrary,
-  getMemories: async () => [],
-  getMemoryGraph: api.legacyGraph,
   getSdkMemoryLibrary: api.sdkLibrary,
   getSdkMemoryGraph: api.sdkGraph,
   getSdkMemory: api.sdkMemory,
-  updateSdkMemory: vi.fn(),
-  deleteSdkMemory: vi.fn(),
+  updateSdkMemory: api.updateSdkMemory,
+  deleteSdkMemory: api.deleteSdkMemory,
   getMemoryProcessing: async () => null,
   getModelProfiles: async () => [],
   apiErrorCode: () => null,
@@ -45,14 +42,22 @@ vi.mock("./MemoryMap", () => ({
     memories,
     graph,
     loaded,
+    busy,
+    detail,
     onOpenMemory,
+    onSave,
+    onDelete,
     libraryView,
   }: {
     hidden: boolean;
     memories: GovernedMemory[];
     graph: MemoryGraphResponse | null;
     loaded: boolean;
+    busy: boolean;
+    detail: { memory: { memory_id: string } } | null;
     onOpenMemory(id: string): void;
+    onSave(event: { preventDefault(): void }): void;
+    onDelete(): void;
     libraryView?: {
       page: { source_ids_by_memory?: Record<string, string[]> } | null;
       unattributedSource?: string;
@@ -78,8 +83,16 @@ vi.mock("./MemoryMap", () => ({
       <span data-testid="map-unattributed">
         {libraryView?.unattributedSource ?? ""}
       </span>
+      <span data-testid="map-busy">{String(busy)}</span>
+      <span data-testid="map-detail">{detail?.memory.memory_id ?? ""}</span>
       <button type="button" onClick={() => onOpenMemory("a")}>
         open a
+      </button>
+      <button type="button" onClick={() => onSave({ preventDefault() {} })}>
+        save
+      </button>
+      <button type="button" onClick={onDelete}>
+        delete
       </button>
       <button
         type="button"
@@ -99,10 +112,6 @@ vi.mock("./SdkMemoryLibrary", () => ({
   }: {
     focusedMemoryId: string | null;
   }) => <div data-testid="sdk-library">{focusedMemoryId ?? ""}</div>,
-}));
-vi.mock("./MemoryRecallScope", () => ({
-  MemoryRecallScope: () => null,
-  memoryProvenanceLabel: () => "原话",
 }));
 
 const record = (memory_id: string): SdkMemoryRecord => ({
@@ -130,7 +139,6 @@ afterEach(() => {
 });
 
 function sdkAuthority() {
-  api.authority.mockResolvedValue({ authority: "sdk", migration_id: "m" });
   api.sdkLibrary.mockResolvedValue({
     memories: [record("a"), record("b")],
     total: 3018,
@@ -178,8 +186,6 @@ it("draws the map from SDK memories on SDK authority, without legacy reads", asy
     { source: undefined, offset: 0, limit: 100 },
     expect.any(AbortSignal),
   );
-  expect(api.legacyLibrary).not.toHaveBeenCalled();
-  expect(api.legacyGraph).not.toHaveBeenCalled();
 });
 
 it("keeps rows, sources, count and graph on the one filtered page", async () => {
@@ -236,20 +242,68 @@ it("opens an SDK memory in place instead of switching away from the map", async 
   expect(screen.getByTestId("sdk-library").textContent).toBe("");
 });
 
-it("keeps asking for the authority until Core answers", async () => {
+it("re-reads the page on the next tick when Core is not ready yet", async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   try {
     sdkAuthority();
-    api.authority
-      .mockRejectedValueOnce(new Error("core_not_ready"))
-      .mockRejectedValueOnce(new Error("core_not_ready"));
+    api.sdkLibrary.mockRejectedValueOnce(new Error("core_not_ready"));
 
     render(<MemorySpace simplified active />);
-    await vi.advanceTimersByTimeAsync(2_000);
+    await waitFor(() => expect(api.sdkLibrary).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId("map-loaded").textContent).toBe("false");
+    await vi.advanceTimersByTimeAsync(30_000);
 
-    await waitFor(() => expect(api.authority).toHaveBeenCalledTimes(3));
     await waitFor(() =>
       expect(screen.getByTestId("map-loaded").textContent).toBe("true"),
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("saves and deletes an opened memory through v2 without a stale-read block", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    sdkAuthority();
+    api.sdkMemory.mockResolvedValue(record("a"));
+    api.updateSdkMemory.mockResolvedValue({
+      ...record("a"),
+      content: "rewritten",
+    });
+    api.deleteSdkMemory.mockResolvedValue(undefined);
+
+    render(<MemorySpace simplified active />);
+    await waitFor(() =>
+      expect(screen.getByTestId("map-loaded").textContent).toBe("true"),
+    );
+    fireEvent.click(screen.getByText("open a"));
+    await waitFor(() =>
+      expect(screen.getByTestId("map-detail").textContent).toBe("a"),
+    );
+    // The governed detail used to be re-verified every 10s through v1; on SDK
+    // that read was refused and left the detail blocked as busy.
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(screen.getByTestId("map-busy").textContent).toBe("false");
+
+    fireEvent.click(screen.getByText("save"));
+    await waitFor(() =>
+      expect(api.updateSdkMemory).toHaveBeenCalledWith(
+        "a",
+        "memory a",
+        expect.any(String),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("map-busy").textContent).toBe("false"),
+    );
+
+    fireEvent.click(screen.getByText("delete"));
+    fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
+    await waitFor(() =>
+      expect(api.deleteSdkMemory).toHaveBeenCalledWith("a", expect.any(String)),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("map-detail").textContent).toBe(""),
     );
   } finally {
     vi.useRealTimers();

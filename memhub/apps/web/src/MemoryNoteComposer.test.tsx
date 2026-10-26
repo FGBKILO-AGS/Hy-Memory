@@ -40,7 +40,6 @@ it("opens a Spanish composer without saving, processing or enabling anything", a
 const api = vi.hoisted(() => ({
   getMemoryNotes: vi.fn(),
   getMemoryNoteOperation: vi.fn(),
-  getMemoryNoteEvidence: vi.fn(),
   getModelProfiles: vi.fn(),
   processMemoryNote: vi.fn(),
   saveMemoryNote: vi.fn(),
@@ -316,5 +315,4 @@ it("preserves ordinary processing-failure retry without opening model consent", 
     note.evidence_id,
     expect.any(String),
   );
-  expect(api.getMemoryNoteEvidence).not.toHaveBeenCalled();
 });

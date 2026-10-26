@@ -15,8 +15,7 @@ import {
   CONTEXT_INPUT_SCHEMA,
   contextResponseInvalidField,
   HOST_CONTEXT_TIMEOUT_MS,
-  isContextSearchResponse,
-  isGovernedMemoryProvenance,
+  isSdkContextSearchResponse,
 } from "./context-protocol.js";
 import { HostGrantStore, type HostReadTool } from "./host-grants.js";
 import { McpSession } from "./mcp-session.js";
@@ -32,91 +31,66 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
-const lane = {
-  status: "empty",
-  reason: null,
-  elapsed_ms: 0,
-  returned_count: 0,
-  truncated: false,
-  truncated_by: [],
-};
 const empty = {
+  schema_version: 2,
+  request_id: "fixture-request",
+  state: "empty",
+  items: [],
+  used_characters: 0,
+  truncated: false,
+  total_ms: 1,
+};
+const raw = {
+  kind: "raw",
+  raw_id: "e1",
+  content: "original",
+  source: "codex",
+  session_id: "fixture-conversation",
+  memory_at: null,
+  score: 0.9,
+  truncated: false,
+};
+const memory = {
+  kind: "memory",
+  memory_id: "m1",
+  content: "memory",
+  layer: "l2_fact",
+  status: "active",
+  source: "codex",
+  updated_at: "2026-09-19T00:00:00Z",
+  score: 0.8,
+  truncated: false,
+};
+const mixed = {
+  ...empty,
+  state: "grounded",
+  items: [raw, memory],
+  used_characters: 14,
+};
+/** What a pre-SDK Core answered; the broker no longer reads or passes it. */
+const legacyShape = {
   schema_version: 1,
   request_id: "fixture-request",
   state: "empty",
-  paths: { raw: lane, memory: lane },
+  paths: {},
   items: [],
   used_characters: 0,
   truncated: false,
   total_ms: 1,
   adoption: "unknown",
 };
-const raw = {
-  kind: "raw",
-  source_id: "codex",
-  conversation_id: "fixture-conversation",
-  anchor_evidence_id: "e1",
-  messages: [
-    {
-      evidence_id: "e1",
-      revision: 1,
-      role: "user",
-      written_by: "person",
-      created_at: null,
-      text: "original",
-      truncated: false,
-    },
-  ],
-  truncated: false,
-};
-const memory = {
-  kind: "memory",
-  memory_id: "m1",
-  revision: 1,
-  content: "memory",
-  memory_kind: "chat",
-  updated_at: "2026-09-19T00:00:00Z",
-  evidence_ids: ["e1"],
-  matched_by: ["lexical"],
-  truncated: false,
-};
-const mixed = {
-  ...empty,
-  state: "grounded",
-  paths: {
-    raw: { ...lane, status: "ok", returned_count: 1 },
-    memory: { ...lane, status: "ok", returned_count: 1 },
-  },
-  items: [raw, memory],
-  used_characters: 14,
-};
 
-it("requires the governed-memory match provenance field", () => {
-  const withoutProvenance = {
-    ...mixed,
-    items: [{ ...memory, matched_by: undefined }],
-  };
-  expect(isContextSearchResponse(mixed)).toBe(true);
-  expect(isContextSearchResponse(withoutProvenance)).toBe(false);
-  expect(isGovernedMemoryProvenance(["lexical"])).toBe(true);
-  expect(isGovernedMemoryProvenance(["governed_semantic"])).toBe(true);
-  expect(isGovernedMemoryProvenance(["lexical", "governed_semantic"])).toBe(
-    true,
-  );
-  for (const invalid of [
-    undefined,
-    [],
-    ["unknown"],
-    ["lexical", "lexical"],
-    ["lexical", "governed_semantic", "lexical"],
-  ]) {
-    expect(isGovernedMemoryProvenance(invalid)).toBe(false);
-  }
-});
-
-it("identifies an invalid governed-memory provenance field without exposing content", () => {
-  const response = receiptFor([{ ...memory, matched_by: ["semantic"] }]);
-  expect(contextResponseInvalidField(response)).toBe("items[0].matched_by");
+it("accepts only the SDK context shape", () => {
+  expect(isSdkContextSearchResponse(mixed)).toBe(true);
+  expect(isSdkContextSearchResponse(legacyShape)).toBe(false);
+  expect(
+    isSdkContextSearchResponse({
+      ...mixed,
+      items: [{ ...memory, revision: 1 }],
+    }),
+  ).toBe(false);
+  expect(contextResponseInvalidField(mixed)).toBeNull();
+  expect(contextResponseInvalidField(legacyShape)).toBe("response");
 });
 
 async function fixture(
@@ -146,21 +120,9 @@ async function fixture(
   const diagnostics: Array<Record<string, unknown>> = [];
   let status = 200;
   let result: unknown = empty;
-  let authorityResult: unknown = {
-    authority: "legacy",
-    migration_id: null,
-  };
   let beforeReply: () => Promise<void> = async () => {};
   let disconnected = false;
   const core = createServer(async (request, response) => {
-    if (
-      request.method === "GET" &&
-      request.url === "/api/v2/memory-authority"
-    ) {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify(authorityResult));
-      return;
-    }
     response.on("close", () => {
       if (!response.writableEnded) disconnected = true;
     });
@@ -223,24 +185,15 @@ async function fixture(
       result = value;
       status = code;
     },
-    setAuthority(value: "legacy" | "sdk") {
-      authorityResult = {
-        authority: value,
-        migration_id: value === "sdk" ? "migration-1" : null,
-      };
-    },
-    setAuthorityResponse(value: unknown) {
-      authorityResult = value;
-    },
     before(action: () => Promise<void>) {
       beforeReply = action;
     },
   };
 }
 
-it("logs the invalid Core field when legacy semantic provenance causes a 502", async () => {
+it("logs, without content, when Core answers in a shape the broker does not pass", async () => {
   const f = await fixture(["om_recall"], ["all-apps"]);
-  f.respond(receiptFor([{ ...memory, matched_by: ["semantic"] }]));
+  f.respond({ ...legacyShape, items: [{ content: "private" }] });
 
   const result = await f.post();
 
@@ -249,19 +202,17 @@ it("logs the invalid Core field when legacy semantic provenance causes a 502", a
     expect.objectContaining({
       event: "context.response_invalid",
       error_code: "invalid_context_response",
-      details: { reason: "items[0].matched_by" },
+      details: { reason: "response" },
     }),
   );
-  expect(JSON.stringify(f.diagnostics)).not.toContain(memory.content);
+  expect(JSON.stringify(f.diagnostics)).not.toContain("private");
 });
 
 it.each(["codex", "cursor", "workbuddy", "claude-code"])(
-  "passes a governed semantic Core response through to %s",
+  "passes a memory Core response through to %s",
   async (hostId) => {
     const f = await fixture(["om_recall"], ["all-apps"], false, hostId);
-    const response = receiptFor([
-      { ...memory, matched_by: ["governed_semantic"] },
-    ]);
+    const response = receiptFor([memory]);
     f.respond(response);
 
     const result = await f.post();
@@ -271,7 +222,7 @@ it.each(["codex", "cursor", "workbuddy", "claude-code"])(
   },
 );
 
-it("selects SDK Context v2 after cutover and passes native fields unchanged", async () => {
+it("reads Core's SDK context directly and passes native fields unchanged", async () => {
   const f = await fixture();
   const response = {
     schema_version: 2,
@@ -304,7 +255,6 @@ it("selects SDK Context v2 after cutover and passes native fields unchanged", as
     truncated: false,
     total_ms: 1,
   };
-  f.setAuthority("sdk");
   f.respond(response);
 
   const result = await f.post();
@@ -335,7 +285,6 @@ it.each([
       score: 0.5,
       truncated: false,
     }));
-    f.setAuthority("sdk");
     f.respond({
       schema_version: 2,
       request_id: "sdk-request",
@@ -350,25 +299,14 @@ it.each([
   },
 );
 
-it("does not fall back to legacy context when the selected SDK response is invalid", async () => {
+it("does not pass a legacy-shaped context response through", async () => {
   const f = await fixture();
-  f.setAuthority("sdk");
-  f.respond(empty);
+  f.respond(legacyShape);
 
   const result = await f.post();
 
   expect(result.status).toBe(502);
   expect(f.calls.map((call) => call.url)).toEqual(["/api/v2/context/search"]);
-});
-
-it("fails closed before reading context when the authority receipt is invalid", async () => {
-  const f = await fixture();
-  f.setAuthorityResponse({ authority: "sdk", migration_id: null });
-
-  const result = await f.post();
-
-  expect(result.status).toBe(502);
-  expect(f.calls).toEqual([]);
 });
 
 it("binds a one-shot WorkBuddy delivery report to the context installation", async () => {
@@ -514,7 +452,7 @@ it.each([
     const f = await fixture(tools as HostReadTool[], scopes);
     expect((await f.post()).status).toBe(200);
     expect(f.calls).toHaveLength(1);
-    expect(f.calls[0].url).toBe("/api/v1/context/search");
+    expect(f.calls[0].url).toBe("/api/v2/context/search");
     expect(f.calls[0].body).toEqual({ query: "original" });
     expect(
       JSON.parse(f.calls[0].headers["x-one-memory-allowed-tools"] as string),
@@ -621,7 +559,7 @@ it.each([404, 405, 501])(
         { credentialProvider: () => f.issued.secret },
       ),
     ).rejects.toMatchObject({ code: "context_upgrade_required" });
-    expect(f.calls.map((call) => call.url)).toEqual(["/api/v1/context/search"]);
+    expect(f.calls.map((call) => call.url)).toEqual(["/api/v2/context/search"]);
   },
 );
 
@@ -652,7 +590,7 @@ it("reports a Core context failure without claiming MemHub is stopped", async ()
     message:
       "MemHub is running, but context search is temporarily unavailable.",
   });
-  expect(f.calls.map((call) => call.url)).toEqual(["/api/v1/context/search"]);
+  expect(f.calls.map((call) => call.url)).toEqual(["/api/v2/context/search"]);
 });
 
 it("MCP advertises context and passes the exact mixed receipt without workspace injection", async () => {
@@ -663,7 +601,6 @@ it("MCP advertises context and passes the exact mixed receipt without workspace 
     f.discoveryPath,
     legacy,
     "/must-not-inject",
-    legacy,
     legacy,
     legacy,
     (discovery, request) =>
@@ -725,8 +662,8 @@ it("CLI context mode uses its credential and preserves JSON and prose provenance
   expect(prose.stdout).toContain("e1");
   expect(prose.stdout).toContain("m1");
   expect(prose.stdout).toContain("codex");
-  expect(prose.stdout).toContain("unknown");
-  expect(f.calls.every((call) => call.url === "/api/v1/context/search")).toBe(
+  expect(prose.stdout).toContain("MemHub context v2: grounded");
+  expect(f.calls.every((call) => call.url === "/api/v2/context/search")).toBe(
     true,
   );
 });
@@ -785,7 +722,6 @@ it("MCP cancellation reaches the HTTP request and only affects its own id", asyn
   );
   const session = new McpSession(
     f.discoveryPath,
-    undefined,
     undefined,
     undefined,
     undefined,
@@ -924,7 +860,7 @@ it("shipped CLI bundle performs authenticated raw+memory lookup", async () => {
   );
   expect(result.code).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual(mixed);
-  expect(f.calls.map((call) => call.url)).toEqual(["/api/v1/context/search"]);
+  expect(f.calls.map((call) => call.url)).toEqual(["/api/v2/context/search"]);
 });
 
 it("shipped MCP bundle passes its installed credential and preserves both paths", async () => {
@@ -1006,7 +942,7 @@ it.each([403, 404])(
       state: "unavailable",
       reason: status === 404 ? "context_upgrade_required" : "host_scope_denied",
     });
-    expect(f.calls.map((call) => call.url)).toEqual(["/api/v1/context/search"]);
+    expect(f.calls.map((call) => call.url)).toEqual(["/api/v2/context/search"]);
   },
 );
 
@@ -1015,14 +951,7 @@ it("passes partial zero-hit coverage through instead of a successful empty", asy
   const partial = {
     ...empty,
     state: "partial",
-    paths: {
-      raw: lane,
-      memory: {
-        ...lane,
-        status: "not_authorized",
-        reason: "permission_required",
-      },
-    },
+    truncated: true,
   };
   f.respond(partial);
   expect(
@@ -1098,28 +1027,9 @@ function receiptFor(items: Array<typeof raw | typeof memory>) {
     ...mixed,
     items,
     used_characters: items.reduce(
-      (total, item) =>
-        total +
-        ("messages" in item
-          ? item.messages.reduce(
-              (n, message) => n + [...message.text].length,
-              0,
-            )
-          : [...item.content].length),
+      (total, item) => total + [...item.content].length,
       0,
     ),
-    paths: {
-      raw: {
-        ...lane,
-        status: items.some((item) => item.kind === "raw") ? "ok" : "empty",
-        returned_count: items.filter((item) => item.kind === "raw").length,
-      },
-      memory: {
-        ...lane,
-        status: items.some((item) => item.kind === "memory") ? "ok" : "empty",
-        returned_count: items.filter((item) => item.kind === "memory").length,
-      },
-    },
   };
 }
 
@@ -1138,7 +1048,7 @@ it.each([
   {
     tools: ["om_recall", "om_conversations"],
     scopes: ["all-apps", "source:codex"],
-    response: receiptFor([{ ...raw, source_id: "cursor" }]),
+    response: receiptFor([{ ...raw, source: "cursor" }]),
   },
 ])(
   "checks captured identity on Core output: $tools $scopes",
@@ -1183,8 +1093,8 @@ it.each([
   { ...empty, state: "grounded" },
   { ...mixed, state: "empty" },
   { ...mixed, state: "unavailable" },
-  receiptFor([{ ...raw, anchor_evidence_id: "absent" }]),
-  receiptFor([{ ...raw, messages: [raw.messages[0], raw.messages[0]] }]),
+  { ...receiptFor([raw]), used_characters: 99 },
+  receiptFor([{ ...raw, revision: 1 } as typeof raw]),
 ])("rejects contradictory or untraceable Core payload %#", async (response) => {
   const f = await fixture();
   f.respond(response);

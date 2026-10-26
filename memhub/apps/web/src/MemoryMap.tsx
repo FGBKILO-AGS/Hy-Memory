@@ -1,9 +1,13 @@
 import type {
-  ConversationSearchHit,
-  ConversationTranscript,
+  GovernedMemory,
+  HostAskMemoryResponse,
+  MemoryDetail,
   MemoryGraphNode,
+  MemoryGraphResponse,
   MemoryLibraryPage,
-  RecentConversationItem,
+  MemoryProcessingSummary,
+  SdkAskMemory,
+  SourceResponse,
 } from "@one-memory/contracts";
 import type { GuiLocale } from "@one-memory/i18n";
 import {
@@ -16,12 +20,15 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  getConversation,
-  getRecentConversations,
-  searchConversations,
-} from "./api";
+  type FormEvent,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { HandoffBar } from "./HandoffBar";
 import { MemoryEvidencePanel } from "./MemoryEvidencePanel";
 import { MemoryGraph3D } from "./MemoryGraph3D";
@@ -37,25 +44,51 @@ import {
   projectMap,
   projectPagedSourceMap,
 } from "./memory-map-model";
-import { extractionStateLabel } from "./memory-processing-labels";
 import { OptionMenu } from "./OptionMenu";
-import { subscribePoll } from "./poll-scheduler";
 import { R6Button } from "./R6Controls";
 import { SelectedMemoryDetail } from "./SelectedMemoryDetail";
 import { SourceImportReceipt } from "./SourceImportReceipt";
 import { sourceNameOr } from "./source-label";
 import { useMediaPreference } from "./use-media-preference";
-import { Answer, NodeDetail, type Workbench } from "./Workbench";
+import { Answer, NodeDetail, type SavedAnswer } from "./Workbench";
 
-type Props = Parameters<typeof Workbench>[0] & {
+type Props = {
+  memories: GovernedMemory[];
+  graph: MemoryGraphResponse | null;
+  sources: SourceResponse[];
+  processing: MemoryProcessingSummary | null;
+  loaded: boolean;
+  detail: MemoryDetail | null;
+  detailLoad?: {
+    memoryId: string;
+    status: "loading" | "failed";
+    error?: string;
+  } | null;
+  overlayBlocked?: boolean;
+  draft: string;
+  busy: boolean;
+  answer: HostAskMemoryResponse | null;
+  streaming: {
+    text: string;
+    memories: (GovernedMemory | SdkAskMemory)[];
+  } | null;
+  onDraft(next: string): void;
+  onOpenMemory(memoryId: string): void;
+  onCloseDetail(): void;
+  onSave(event: FormEvent<HTMLFormElement>): void;
+  onDelete(): void;
+  onAsk(question: string): void;
+  onSaveAnswer(draft: SavedAnswer): void;
+  onConnect(): void;
+  onConfigureModel(): void;
+  /** Cleared whenever the draft changes, so a retried correction never
+   * reuses the request id prepared for text the user has since replaced. */
+  requestIds: RefObject<Map<string, string>>;
   simplified?: boolean;
   hidden?: boolean;
   id?: string;
   arrival?: MemoryArrival;
   onViewHistory?(): void;
-  onMutationComplete?(id: string): void;
-  focusDialogue?: boolean;
-  onFocusDialogueConsumed?(): void;
   libraryView?: {
     query: string;
     source: string;
@@ -73,33 +106,6 @@ type Props = Parameters<typeof Workbench>[0] & {
   };
 };
 
-/** A search hit republished as a dialogue row.
- *
- * Both panes list the same shape, so a hit has to arrive carrying what a
- * recent conversation carries, including who wrote it: the author used to be
- * filled in here as the user because the endpoint never sent one, which made
- * every hit look like something the person themselves had said.
- */
-export function hitToDialogueItem(
-  item: ConversationSearchHit,
-): RecentConversationItem {
-  return {
-    ...item,
-    role: item.role ?? "",
-    written_by: item.written_by ?? "",
-    imported_at: item.created_at ?? "",
-    time_basis: item.created_at ? "conversation" : "import",
-    truncated: false,
-  };
-}
-
-function authorLabel(writtenBy: string) {
-  if (writtenBy === "person") return "你";
-  if (writtenBy === "agent") return "助手";
-  if (writtenBy === "tool") return "工具";
-  return "未知";
-}
-
 function dayStamp(
   value: string | null | undefined,
   locale: GuiLocale = "zh-CN",
@@ -116,13 +122,6 @@ function dayStamp(
     return memoryText(locale, "今天");
   return date.toLocaleDateString(locale);
 }
-
-/**
- * D96: the memory page no longer offers the raw-dialogue tab. The code stays
- * (the full mode's conversation search and a memory's own "原始对话 N 段"
- * still read dialogues); flipping this brings the tab back.
- */
-export const DIALOGUE_PANE_VISIBLE = false;
 
 /** "10月2日" / "2 oct", with the year only when it is not this year. */
 function monthDay(value: string, locale: GuiLocale): string | null {
@@ -207,111 +206,15 @@ export function MemoryMap(props: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [groupNode, setGroupNode] = useState<MemoryGraphNode | null>(null);
   const [question, setQuestion] = useState("");
-  const [evidenceId, setEvidenceId] = useState<string | null>(null);
-  const [transcript, setTranscript] = useState<ConversationTranscript | null>(
-    null,
-  );
-  const [transcriptError, setTranscriptError] = useState("");
-  const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [filterNotice, setFilterNotice] = useState("");
   const [arrivedIds, setArrivedIds] = useState<string[]>([]);
-  const [libraryPane, setLibraryPane] = useState<"memories" | "dialogues">(
-    "memories",
-  );
-  const [dialoguePage, setDialoguePage] = useState<
-    RecentConversationItem[] | null
-  >(null);
-  const [dialogueFailed, setDialogueFailed] = useState(false);
-  const [selectedDialogueId, setSelectedDialogueId] = useState<string | null>(
-    null,
-  );
-  const [dialogueFilter, setDialogueFilter] = useState("");
-  const [dialogueTranscript, setDialogueTranscript] =
-    useState<ConversationTranscript | null>(null);
-  const [dialogueTranscriptError, setDialogueTranscriptError] = useState("");
-  const consumeDialogueFocus = useRef(props.onFocusDialogueConsumed);
-  consumeDialogueFocus.current = props.onFocusDialogueConsumed;
   const seenMemoryIds = useRef<Set<string> | null>(null);
   const compact = useMediaPreference("(max-width: 1100px)");
   const composing = useRef(false);
-  const generation = useRef(0);
-  const displayedVersion = useRef("");
   const pane = useRef<HTMLElement>(null);
-  const memoryPaneTabs = useRef<Record<string, HTMLButtonElement | null>>({});
   const openedDefault = useRef(false);
   const scrollSelection = useRef(false);
-  useEffect(() => {
-    if (!props.focusDialogue) return;
-    if (DIALOGUE_PANE_VISIBLE) setLibraryPane("dialogues");
-    consumeDialogueFocus.current?.();
-  }, [props.focusDialogue]);
-  useEffect(() => {
-    if (libraryPane !== "dialogues" || hidden) return;
-    let stopped = false;
-    let busy = false;
-    const sourceId = library?.source || undefined;
-    async function load() {
-      if (busy || document.hidden) return;
-      busy = true;
-      try {
-        const query = dialogueFilter.trim();
-        const page = query
-          ? await searchConversations(query, 100)
-          : await getRecentConversations({ limit: 30, sourceId });
-        if (stopped) return;
-        const items = query
-          ? "hits" in page
-            ? page.hits
-                .filter((item) => !sourceId || item.source_id === sourceId)
-                .map(hitToDialogueItem)
-            : []
-          : "items" in page
-            ? page.items
-            : [];
-        setDialoguePage(items);
-        setDialogueFailed(false);
-        setSelectedDialogueId((current) =>
-          current && items.some((item) => item.evidence_id === current)
-            ? current
-            : (items[0]?.evidence_id ?? null),
-        );
-      } catch {
-        if (!stopped) setDialogueFailed(true);
-      } finally {
-        busy = false;
-      }
-    }
-    void load();
-    const stop = subscribePoll({
-      // This surface is the dialogue list (`getRecentConversations`), not the
-      // governed-memory library that `memory-library` keys elsewhere.
-      key: "conversations",
-      intervalMs: 10_000,
-      run: load,
-    });
-    return () => {
-      stopped = true;
-      stop();
-    };
-  }, [libraryPane, hidden, library?.source, dialogueFilter]);
-  useEffect(() => {
-    if (libraryPane !== "dialogues" || !selectedDialogueId || hidden) return;
-    let stopped = false;
-    setDialogueTranscript(null);
-    setDialogueTranscriptError("");
-    void getConversation(selectedDialogueId).then(
-      (value) => {
-        if (!stopped) setDialogueTranscript(value);
-      },
-      () => {
-        if (!stopped) setDialogueTranscriptError("原文暂时无法读取");
-      },
-    );
-    return () => {
-      stopped = true;
-    };
-  }, [libraryPane, selectedDialogueId, hidden]);
   const controlledSource = library
     ? library.source
       ? `source:${library.source}`
@@ -468,9 +371,6 @@ export function MemoryMap(props: Props) {
   const inspectorDetail =
     visibleDetail ??
     (activeId && lastDetail.current ? lastDetail.current : null);
-  const version = visibleDetail
-    ? `${visibleDetail.memory.memory_id}:${visibleDetail.memory.revision}:${visibleDetail.memory.status}:${visibleDetail.evidence.map((item) => `${item.evidence_id}:${item.available}`).join(",")}`
-    : "";
   const pick = useCallback(
     (memoryId: string, scroll = true) => {
       if (!active.some((memory) => memory.memory_id === memoryId)) return;
@@ -480,27 +380,13 @@ export function MemoryMap(props: Props) {
         setSearch("");
         setFilterNotice("已清除筛选，定位到关联记忆。");
       }
-      generation.current++;
       setGroupNode(null);
       setSelectedId(memoryId);
-      setTranscript(null);
-      setEvidenceId(null);
-      setTranscriptError("");
-      setTranscriptLoading(false);
       setInspectorOpen(true);
       onOpenMemory(memoryId);
     },
     [active, filtered, onOpenMemory],
   );
-  useEffect(() => {
-    if (displayedVersion.current === version) return;
-    displayedVersion.current = version;
-    generation.current++;
-    setTranscript(null);
-    setEvidenceId(null);
-    setTranscriptError("");
-    setTranscriptLoading(false);
-  }, [version]);
   useEffect(() => {
     if (!props.simplified || openedDefault.current || overlaysSuspended) return;
     if (library?.loading && filtered.length === 0) return;
@@ -536,13 +422,8 @@ export function MemoryMap(props: Props) {
   }, [activeId]);
 
   const clear = useCallback(() => {
-    generation.current++;
     setSelectedId(null);
     setGroupNode(null);
-    setTranscript(null);
-    setEvidenceId(null);
-    setTranscriptError("");
-    setTranscriptLoading(false);
     setInspectorOpen(false);
     onCloseDetail();
   }, [onCloseDetail]);
@@ -574,10 +455,6 @@ export function MemoryMap(props: Props) {
       clear();
       return;
     }
-    generation.current++;
-    setTranscript(null);
-    setTranscriptError("");
-    setTranscriptLoading(false);
     setInspectorOpen(false);
   }
   function chooseGroup(key: string) {
@@ -614,27 +491,6 @@ export function MemoryMap(props: Props) {
       setGroupKey(`topic:${node.label}`);
     }
   }
-  async function openConversation(id: string) {
-    if (transcriptLoading) return;
-    const turn = ++generation.current;
-    setTranscriptError("");
-    setTranscript(null);
-    setTranscriptLoading(true);
-    try {
-      const value = await getConversation(id);
-      if (turn === generation.current) setTranscript(value);
-    } catch {
-      if (turn === generation.current)
-        setTranscriptError("暂时无法读取这段对话，已保留当前记忆。");
-    } finally {
-      if (turn === generation.current) setTranscriptLoading(false);
-    }
-  }
-  const evidence = [...(visibleDetail?.evidence ?? [])].sort(
-    (a, b) =>
-      (Date.parse(b.created_at ?? "") || 0) -
-      (Date.parse(a.created_at ?? "") || 0),
-  );
   const label =
     group?.label ??
     sources.find(
@@ -718,52 +574,6 @@ export function MemoryMap(props: Props) {
       }}
     >
       <nav className="map-library" aria-label={text("来源与主题")} ref={pane}>
-        {props.simplified && DIALOGUE_PANE_VISIBLE ? (
-          <div
-            className="map-library-pane"
-            role="tablist"
-            aria-label={text("记忆或原始对话")}
-            onKeyDown={(event) => {
-              const order = ["memories", "dialogues"] as const;
-              const current = order.indexOf(libraryPane);
-              const target =
-                event.key === "Home"
-                  ? order[0]
-                  : event.key === "End"
-                    ? order[order.length - 1]
-                    : event.key === "ArrowRight"
-                      ? order[(current + 1) % order.length]
-                      : event.key === "ArrowLeft"
-                        ? order[(current - 1 + order.length) % order.length]
-                        : null;
-              if (!target) return;
-              event.preventDefault();
-              setLibraryPane(target);
-              memoryPaneTabs.current[target]?.focus();
-            }}
-          >
-            {(
-              [
-                ["memories", "记忆"],
-                ["dialogues", "原始对话"],
-              ] as const
-            ).map(([value, title]) => (
-              <button
-                type="button"
-                role="tab"
-                key={value}
-                ref={(node) => {
-                  memoryPaneTabs.current[value] = node;
-                }}
-                aria-selected={libraryPane === value}
-                aria-controls={`memory-pane-${value}`}
-                onClick={() => setLibraryPane(value)}
-              >
-                {text(title)}
-              </button>
-            ))}
-          </div>
-        ) : null}
         {props.simplified ? (
           <div className="selected-source-filter">
             <label htmlFor="selected-source-filter">{text("来源")}</label>
@@ -839,7 +649,7 @@ export function MemoryMap(props: Props) {
           role="search"
           onSubmit={(e) => {
             e.preventDefault();
-            if (!library || libraryPane === "dialogues") return;
+            if (!library) return;
             const words = searchDraft.trim();
             setFilterNotice("");
             clear();
@@ -857,19 +667,9 @@ export function MemoryMap(props: Props) {
             name="map-memory-search"
             autoComplete="off"
             placeholder={
-              libraryPane === "dialogues"
-                ? text("搜索原始对话")
-                : props.simplified
-                  ? text("搜索记忆")
-                  : text("筛选记忆…")
+              props.simplified ? text("搜索记忆") : text("筛选记忆…")
             }
-            value={
-              libraryPane === "dialogues"
-                ? dialogueFilter
-                : library
-                  ? searchDraft
-                  : search
-            }
+            value={library ? searchDraft : search}
             maxLength={library ? 512 : undefined}
             onKeyDown={(e) => {
               // Enter that confirms an IME candidate is not a search.
@@ -877,10 +677,6 @@ export function MemoryMap(props: Props) {
                 e.preventDefault();
             }}
             onChange={(e) => {
-              if (libraryPane === "dialogues") {
-                setDialogueFilter(e.target.value);
-                return;
-              }
               if (library) {
                 setSearchDraft(e.target.value);
                 return;
@@ -889,7 +685,7 @@ export function MemoryMap(props: Props) {
               setSearch(e.target.value);
             }}
           />
-          {library && libraryPane === "memories" ? (
+          {library ? (
             <button
               type="submit"
               className="map-search-submit"
@@ -899,7 +695,7 @@ export function MemoryMap(props: Props) {
             </button>
           ) : null}
         </form>
-        {library && libraryPane === "memories" && (
+        {library && (
           <div className="map-list-heading" aria-live="polite">
             <span>
               {library.stale
@@ -991,62 +787,10 @@ export function MemoryMap(props: Props) {
             {text(filterNotice)}
           </p>
         )}
-        {libraryPane === "dialogues" ? (
-          <>
-            <div className="map-list-heading" aria-live="polite">
-              <span>
-                {dialogueFailed
-                  ? text("读取失败")
-                  : dialoguePage
-                    ? text("最近 {count} 条", { count: dialoguePage.length })
-                    : text("正在读取…")}
-              </span>
-            </div>
-            <ul
-              className="map-memory-list"
-              id="memory-pane-dialogues"
-              aria-label="原始对话"
-            >
-              {(dialoguePage ?? []).map((item) => (
-                <li key={item.evidence_id}>
-                  <button
-                    type="button"
-                    className="map-memory-item"
-                    aria-pressed={selectedDialogueId === item.evidence_id}
-                    onClick={() => setSelectedDialogueId(item.evidence_id)}
-                  >
-                    <span>
-                      {item.excerpt}
-                      {item.truncated ? "…" : ""}
-                    </span>
-                    <small>
-                      {sourceNameOr(sources, item.source_id, "来源待核对")} ·{" "}
-                      {dayStamp(item.imported_at)} ·{" "}
-                      {authorLabel(item.written_by)}
-                    </small>
-                  </button>
-                </li>
-              ))}
-            </ul>
-            {dialogueFailed ? (
-              <p role="alert">{text("原始对话暂时无法读取")}</p>
-            ) : null}
-            {dialoguePage && !dialoguePage.length ? (
-              <p className="map-empty">
-                {text(
-                  dialogueFilter.trim()
-                    ? "没有匹配的原始对话"
-                    : "还没有导入的原始对话",
-                )}
-              </p>
-            ) : null}
-          </>
-        ) : null}
         <ul
           className="map-memory-list"
           aria-label={text("地图记忆列表")}
           id="memory-pane-memories"
-          hidden={libraryPane === "dialogues"}
         >
           {filtered.map((m) => (
             <li key={m.memory_id} data-memory-id={m.memory_id}>
@@ -1092,7 +836,7 @@ export function MemoryMap(props: Props) {
             </li>
           ))}
         </ul>
-        {libraryPane === "memories" && library?.failed && (
+        {library?.failed && (
           <div role="alert">
             <p>{text("记忆读取失败，请重试。")}</p>
             <R6Button onClick={library.onRetry}>
@@ -1100,8 +844,7 @@ export function MemoryMap(props: Props) {
             </R6Button>
           </div>
         )}
-        {libraryPane === "memories" &&
-          library?.page &&
+        {library?.page &&
           !library.loading &&
           !library.failed &&
           !library.stale &&
@@ -1116,8 +859,7 @@ export function MemoryMap(props: Props) {
                     : text("还没有已生成的记忆")}
             </p>
           )}
-        {libraryPane === "memories" &&
-          library?.page?.search_window &&
+        {library?.page?.search_window &&
           !library.loading &&
           !library.failed && (
             <p className="map-empty">
@@ -1126,8 +868,7 @@ export function MemoryMap(props: Props) {
               })}
             </p>
           )}
-        {libraryPane === "memories" &&
-          library?.page &&
+        {library?.page &&
           !library.loading &&
           !library.failed &&
           !library.stale && (
@@ -1203,20 +944,12 @@ export function MemoryMap(props: Props) {
             <span className="map-kicker" hidden={props.simplified}>
               {text(axis === "topic" ? "主题视角（非事项）" : "来源视角")}
             </span>
-            <h2>
-              {libraryPane === "dialogues"
-                ? text("原始对话")
-                : props.simplified
-                  ? text("记忆关联")
-                  : label}
-            </h2>
+            <h2>{props.simplified ? text("记忆关联") : label}</h2>
             {props.simplified && (
               <p className="selected-graph-subtitle">
-                {libraryPane === "dialogues"
-                  ? text("刚导入的原话，还不是沉淀后的记忆")
-                  : projection.nodes.length
-                    ? text("来源归属")
-                    : text("可在沉淀记忆后查看视图")}
+                {projection.nodes.length
+                  ? text("来源归属")
+                  : text("可在沉淀记忆后查看视图")}
               </p>
             )}
           </div>
@@ -1233,40 +966,9 @@ export function MemoryMap(props: Props) {
               <FileText size={17} />
             </button>
           )}
-          {!props.simplified && (
-            <button
-              type="button"
-              className="quiet map-tool"
-              title="整理已有关系"
-              aria-label={text("整理已有关系")}
-              disabled={busy || !graph?.nodes.length}
-              onClick={props.onBuildRelations}
-            >
-              <Network size={17} />
-            </button>
-          )}
         </header>
         <div className="map-canvas" data-tour-id="memory-map-canvas">
-          {libraryPane === "dialogues" ? (
-            <div className="map-dialogue-reading">
-              {dialogueTranscriptError ? (
-                <p role="alert">{dialogueTranscriptError}</p>
-              ) : dialogueTranscript ? (
-                <ol className="map-transcript">
-                  {dialogueTranscript.messages.map((message) => (
-                    <li key={message.evidence_id}>
-                      <small>{authorLabel(message.written_by)}</small>
-                      <p>{message.verbatim}</p>
-                    </li>
-                  ))}
-                </ol>
-              ) : selectedDialogueId ? (
-                <p>{text("正在读取原文…")}</p>
-              ) : (
-                <p>{text("选择一条原始对话")}</p>
-              )}
-            </div>
-          ) : projection.nodes.length && (!props.simplified || !hidden) ? (
+          {projection.nodes.length && (!props.simplified || !hidden) ? (
             <MemoryGraph3D
               graph={projection}
               selectedNodeId={
@@ -1300,7 +1002,7 @@ export function MemoryMap(props: Props) {
         <footer className="map-meta">
           {/* The legend explains the graph. Keeping it while the stage shows
               something else left it dangling under a view it cannot describe. */}
-          {!props.simplified && libraryPane === "memories" && (
+          {!props.simplified && (
             <div className="map-legend">
               <span data-kind="memory">{text("记忆")}</span>
               <span data-kind="topic">{text("主题")}</span>
@@ -1465,9 +1167,6 @@ export function MemoryMap(props: Props) {
                     inspectorDetail.memory.memory_id
                   ] ?? null
                 }
-                suspended={overlaysSuspended}
-                onChanged={(id) => props.onMutationComplete?.(id)}
-                hideActions
               />
             )}
           </div>
@@ -1487,8 +1186,7 @@ export function MemoryMap(props: Props) {
             matterLabel={label}
             onDraft={props.onDraft}
             onSave={props.onSave}
-            onAction={props.onAction}
-            onSyncIndex={props.onSyncIndex}
+            onDelete={props.onDelete}
             requestIds={props.requestIds}
             onClose={closeInspector}
           />
@@ -1550,126 +1248,7 @@ export function MemoryMap(props: Props) {
             )}
           </div>
         )}
-        {!props.simplified && evidence.length > 0 && (
-          <h3 className="map-section-title">
-            原始对话 <span>{evidence.length}</span>
-          </h3>
-        )}
-        {!props.simplified &&
-          evidence.map((item) => (
-            <article
-              key={item.evidence_id}
-              className="map-evidence"
-              data-evidence-id={item.evidence_id}
-            >
-              <div className="map-evidence-meta">
-                <strong>
-                  {sourceNameOr(sources, item.source_id, "未知来源")}
-                </strong>
-                <span>{author(item.written_by)}</span>
-              </div>
-              <time>
-                {item.created_at && Number.isFinite(Date.parse(item.created_at))
-                  ? new Date(item.created_at).toLocaleString("zh-CN", {
-                      year: "numeric",
-                      month: "2-digit",
-                      day: "2-digit",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })
-                  : "时间未知"}
-              </time>
-              <button
-                type="button"
-                className="map-quote"
-                disabled={!item.available}
-                aria-expanded={evidenceId === item.evidence_id}
-                aria-controls={`evidence-body-${item.evidence_id}`}
-                onClick={() => {
-                  generation.current++;
-                  setTranscript(null);
-                  setTranscriptError("");
-                  setTranscriptLoading(false);
-                  setEvidenceId(
-                    evidenceId === item.evidence_id ? null : item.evidence_id,
-                  );
-                }}
-              >
-                {item.available ? item.verbatim : "来源原文已不可读取"}
-              </button>
-              {item.extraction_state &&
-                item.extraction_state !== "extracted" && (
-                  <small>{extractionStateLabel(item.extraction_state)}</small>
-                )}
-              {item.available && evidenceId === item.evidence_id && (
-                <div
-                  className="map-evidence-expanded"
-                  id={`evidence-body-${item.evidence_id}`}
-                >
-                  <p className="map-section-title">关联记忆</p>
-                  {active
-                    .filter((m) => m.evidence_ids.includes(item.evidence_id))
-                    .map((m) => (
-                      <button
-                        className="quiet map-related"
-                        type="button"
-                        key={m.memory_id}
-                        aria-label={`定位关联记忆：${m.content}`}
-                        onClick={() => pick(m.memory_id)}
-                      >
-                        {m.content}
-                        <ChevronRight size={14} />
-                      </button>
-                    ))}
-                  <button
-                    type="button"
-                    className="quiet"
-                    disabled={transcriptLoading}
-                    onClick={() => void openConversation(item.evidence_id)}
-                  >
-                    {transcriptLoading
-                      ? "正在读取完整对话…"
-                      : transcriptError
-                        ? "重试读取完整对话"
-                        : "看完整对话"}
-                  </button>
-                  {transcriptError && <p role="alert">{transcriptError}</p>}
-                  {transcript && (
-                    <ol className="map-transcript">
-                      {transcript.messages.map((m) => (
-                        <li key={m.evidence_id}>
-                          <small>{author(m.written_by)}</small>
-                          <p>{m.verbatim}</p>
-                        </li>
-                      ))}
-                    </ol>
-                  )}
-                </div>
-              )}
-            </article>
-          ))}
-        {!props.simplified && !!visibleDetail?.history.length && (
-          <details className="map-history">
-            <summary>修改历史 · {visibleDetail.history.length} 个版本</summary>
-            {visibleDetail.history.map((h) => (
-              <article key={h.revision}>
-                <small>第 {h.revision} 版</small>
-                <p>{h.content}</p>
-              </article>
-            ))}
-          </details>
-        )}
       </MemoryEvidencePanel>
     </section>
   );
-}
-
-function author(who: string | null) {
-  return who === "person" || who === "user"
-    ? "你"
-    : who === "agent" || who === "assistant"
-      ? "Agent"
-      : who === "tool"
-        ? "工具"
-        : "作者待核对";
 }

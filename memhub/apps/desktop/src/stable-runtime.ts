@@ -144,10 +144,16 @@ const SAFE_STABLE_RUNTIME_ERROR_CODES = new Set([
   "runtime_service_not_ready",
 ]);
 
+/** Every migration code is a stable token Core or the orchestrator chose;
+ * keeping it (instead of collapsing to `desktop_start_failed`) is what lets a
+ * report be matched to the line in `sdk-migration.log`. */
+const MIGRATION_CODE = /^sdk_(?:migration|data_plane)_[a-z0-9_]{1,80}$/;
+
 export function stableRuntimeErrorCode(error: unknown): string {
   if (
     error instanceof Error &&
-    SAFE_STABLE_RUNTIME_ERROR_CODES.has(error.message)
+    (SAFE_STABLE_RUNTIME_ERROR_CODES.has(error.message) ||
+      MIGRATION_CODE.test(error.message))
   ) {
     return error.message;
   }

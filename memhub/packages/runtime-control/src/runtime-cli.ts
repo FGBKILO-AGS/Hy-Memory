@@ -5,6 +5,7 @@ import { createReadStream } from "node:fs";
 import { access, lstat, readlink, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { RecallBroker } from "@one-memory/host-bridge";
 import {
   type BackgroundHealth,
@@ -19,6 +20,15 @@ import { RecallBrokerSupervisor } from "./recall-broker-supervisor.js";
 import { recallHosts } from "./recall-hosts.js";
 import { RuntimeService } from "./runtime-service.js";
 import { RuntimeSupervisor } from "./runtime-supervisor.js";
+import {
+  runSdkMigration,
+  type SdkMigrationOptions,
+  type SdkMigrationResult,
+} from "./sdk-migration.js";
+import {
+  readSdkMigrationBlock,
+  writeSdkMigrationLog,
+} from "./sdk-migration-log.js";
 import { createServiceLogCapture } from "./service-log.js";
 import {
   appOwnedRuntimeShouldStop,
@@ -51,9 +61,6 @@ export interface RuntimeCliConfig {
   nodeCommand: string;
   hostHome?: string;
   brokerPort?: number;
-  /** Read-only Reader child. Default false; forced off on Windows until the
-   *  Reader's launcher and service wiring are verified on that platform. */
-  readerEnabled?: boolean;
   /** Package/build identity when the runtime is running from a built package.
    *  Source checkouts leave it undefined rather than inventing an id. */
   buildIdentity?: {
@@ -389,19 +396,7 @@ export function resolveRuntimeCliConfig(
     requestedBrokerPort !== 18765
       ? requestedBrokerPort
       : undefined;
-  // Reader default: off (absent means no Reader child). Explicitly enabled
-  // by the launcher, and never on Windows, where the launch path and service
-  // registration differ enough that an unverified second child would be a new
-  // failure mode.
-  const readerRequested = environment.ONE_MEMORY_READER_ENABLED?.trim();
-  const readerEnabled =
-    process.platform === "win32"
-      ? false
-      : readerRequested === undefined
-        ? false
-        : readerRequested === "1" || readerRequested.toLowerCase() === "true";
   return {
-    ...(readerEnabled ? { readerEnabled: true } : {}),
     dataDir: path.normalize(dataDir),
     runtimeEntry: path.resolve(
       environment.ONE_MEMORY_RUNTIME_ENTRY?.trim() ||
@@ -694,7 +689,6 @@ export async function createRuntimeService(
         launch: { command: config.coreCommand, args: config.coreArgs },
         dataDir: config.dataDir,
         port,
-        ...(config.readerEnabled ? { readerEnabled: true } : {}),
         webDirectory: config.webDirectory,
         diagnostics,
         buildIdentity: config.buildIdentity,
@@ -815,6 +809,96 @@ export async function createRuntimeService(
   });
 }
 
+/**
+ * The Runtime service runs the SDK migration itself before it spawns Core.
+ *
+ * Desktop and CLI install/upgrade migrate before they start the service, but a
+ * login start, `memhub start`/`restart` and a launchd restart reach this
+ * process directly; without this gate they served a home that never finished
+ * its upgrade. The service is the Runtime owner here and Core is not running
+ * yet, so the maintenance fence (which stops the Runtime and disables its
+ * service) must not be used: it would stop this very process.
+ */
+export async function gateServeOnSdkMigration(
+  config: Pick<RuntimeCliConfig, "dataDir" | "coreCommand" | "buildIdentity">,
+  migrate: (
+    options: SdkMigrationOptions,
+  ) => Promise<SdkMigrationResult> = runSdkMigration,
+): Promise<SdkMigrationResult> {
+  return migrate({
+    dataDir: config.dataDir,
+    core: { command: config.coreCommand },
+    runtimeBuild:
+      config.buildIdentity?.buildNumber ??
+      config.buildIdentity?.version ??
+      "unknown",
+    caller: "runtime-service",
+    fence: async (_dataDir, action) => action(),
+  });
+}
+
+/**
+ * Run the migration gate until the home is on SDK authority, or the service is
+ * asked to stop. Core is never spawned while this has not returned "serve".
+ *
+ * A deferred migration leaves the service alive but idle (no Core), instead of
+ * exiting: an exit would have launchd/systemd re-run the failed migration
+ * every few seconds. The refusal goes to the migration log and the Runtime
+ * diagnostics, the block note tells `status`/`doctor` and Desktop why. When a
+ * migration elsewhere (Desktop, `memhub upgrade`) succeeds it clears the
+ * note, and the gate runs again here.
+ */
+export async function holdUntilSdkMigrated(
+  config: Pick<RuntimeCliConfig, "dataDir" | "coreCommand" | "buildIdentity">,
+  options: {
+    stopped: Promise<unknown>;
+    migrate?: (options: SdkMigrationOptions) => Promise<SdkMigrationResult>;
+    pollIntervalMs?: number;
+  },
+): Promise<"serve" | "stop"> {
+  let stop = false;
+  void options.stopped.then(() => {
+    stop = true;
+  });
+  for (;;) {
+    if (stop) return "stop";
+    const migration = await gateServeOnSdkMigration(config, options.migrate);
+    if (migration.state !== "deferred") return "serve";
+    const code = migration.code ?? "sdk_migration_incomplete";
+    await writeSdkMigrationLog(config.dataDir, {
+      writer: "runtime-service",
+      event: "service.core_refused",
+      outcome: "refused",
+      code,
+      runtimeBuild:
+        config.buildIdentity?.buildNumber ?? config.buildIdentity?.version,
+    });
+    await new DiagnosticLogger({
+      dataDir: config.dataDir,
+      service: "runtime",
+      sessionId: process.env.ONE_MEMORY_RUNTIME_SESSION_ID,
+    })
+      .log({
+        level: "error",
+        component: "runtime.service",
+        event: "service.start_failed",
+        outcome: "blocked",
+        error_code: code,
+      })
+      .catch(() => undefined);
+    process.stderr.write(`sdk_migration_required: ${code}\n`);
+    // Wait for a stop, or for another migrator to clear the block note.
+    for (;;) {
+      const outcome = await Promise.race([
+        options.stopped.then(() => "stop" as const),
+        delay(options.pollIntervalMs ?? 2_000).then(() => "poll" as const),
+      ]);
+      if (outcome === "stop") return "stop";
+      if ((await readSdkMigrationBlock(config.dataDir)) === null) break;
+    }
+  }
+}
+
 export async function runRuntimeCli(
   arguments_: readonly string[],
   environment: NodeJS.ProcessEnv = process.env,
@@ -856,12 +940,32 @@ export async function runRuntimeCli(
     process.stdout.on("data", mirror("stdout"));
     process.stderr.on("data", mirror("stderr"));
   }
+  // One listener for the whole life of the process: a stop while waiting on
+  // an unfinished migration and a stop while serving are the same request.
+  const stopRequested = waitForStopSignal();
+  const idleRemoval = new AbortController();
+  const held = await holdUntilSdkMigrated(config, {
+    stopped: Promise.race([
+      stopRequested,
+      waitForAppRemoval(
+        {
+          dataDir: config.dataDir,
+          markerPath: environment.ONE_MEMORY_SERVICE_ENABLE_MARKER,
+        },
+        idleRemoval.signal,
+      ),
+    ]),
+  }).finally(() => idleRemoval.abort());
+  if (held === "stop") {
+    await ownLogs?.flush();
+    return 0;
+  }
   const service = await createRuntimeService(config);
   await service.start();
   const appRemoval = new AbortController();
   try {
     await Promise.race([
-      waitForStopSignal(),
+      stopRequested,
       waitForAppRemoval(
         {
           dataDir: config.dataDir,

@@ -153,7 +153,7 @@ export const OWNER_VALUE = "one-memory";
  * embedded in the marker so a disk skill can say which template produced it
  * without a second file to keep in step.
  */
-export const SKILL_VERSION = 17;
+export const SKILL_VERSION = 18;
 
 /** Marker written after the complete YAML frontmatter of every managed skill.
  *
@@ -2912,9 +2912,8 @@ Loading this Skill is not a memory lookup. Give one action notice per logical lo
 not once per instruction file or tool discovery. Keep another memory provider separately
 attributed; its results do not prove MemHub success.
 For \`MemHub_context\`, use \`query\`; \`raw_source_ids\` filters raw only. Do not pass identity,
-workspace or scope fields. Inspect \`schema_version\` and each returned item. Schema v1
-includes path/evidence metadata; schema v2 is SDK-native and does not. Raw-only results
-are original conversations, not generated memories. Use only source, time and identifiers
+workspace or scope fields. Inspect each returned item; items carry no path or evidence
+metadata. Raw-only results are original conversations, not generated memories. Use only source, time and identifiers
 actually returned; never invent revision, evidence, author, path or adoption fields.
 Partial with zero items means coverage was limited, not that memories were retrieved.
 If the context call is denied, unavailable or requires an upgrade, report that state;
@@ -2955,9 +2954,8 @@ verbatim excerpts, which app each came from, and when.
 - When using returned excerpts, quote or summarise them, name the app they came
   from, and then continue. Do not silently absorb them and act as though you
   were always in this thread.
-- Interpret \`empty_reason\` \`no_matches\` as no matches for this query, and
-  \`nothing_imported\` as no imported messages available to this search, not
-  that the user has no history. Do not infer either reason from empty hits alone.
+- An empty result means no matches for this query among the conversations this
+  installation may read, not that the user has no history.
   Apply the result presentation rules above for the brief visible receipt;
   explain missing evidence when historical confirmation is needed. Never use
   the success receipt for empty or partial results.
@@ -3157,8 +3155,7 @@ Keep another memory provider separately attributed. Context mode works without a
 model, but requires this installation's existing read permissions and credential file.
 Use \`--kind raw\` or \`--kind memory\` only to narrow, and repeat \`--raw-source <id>\`
 to filter raw sources only. Context mode does not accept \`--workspace-path\` or \`--scope\`.
-Inspect schema version and item kinds: schema v1 has path/evidence metadata while schema
-v2 does not. Original conversations are not generated memories; partial zero-item results
+Inspect item kinds; items carry no path or evidence metadata. Original conversations are not generated memories; partial zero-item results
 are not successful retrieval. Never invent revision, evidence, path or adoption fields.
 Context exit 4 reports unavailable/denied, exit 5 requires a runtime upgrade; do not
 retry with the legacy command or broaden access. The legacy command above is retained

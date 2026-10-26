@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 
 PRIMARY_MARKERS = ("unit", "contract", "integration", "performance", "live")
-EXPECTED_TEST_FILE_COUNT = 309
-EXPECTED_TEST_FILES_SHA256 = "ef6165c249971f5a2ab71a0c49f6d859c8c0f3612e3f749fba0acce0eab513ea"
+EXPECTED_TEST_FILE_COUNT = 297
+EXPECTED_TEST_FILES_SHA256 = "50fc934916818220efdd6259dafb8831c2e568a19fc63e2ea6a9b865d1a75c90"
 
 # Pure transformations, validation models, parity checks and state machines.
 # This list is intentionally small: uncertain files default to contract.
@@ -57,17 +57,14 @@ INTEGRATION_FILES = frozenset(
         "test_chat_exports.py",
         "test_cli_lifecycle.py",
         "test_connection_lifetime.py",
-        "test_context_search_both_paths.py",
         "test_conversation_search.py",
         "test_credential_responsiveness.py",
-        "test_d93_same_process_load.py",
         "test_diagnostic_trace.py",
         "test_diagnostic_trace_api.py",
         "test_external_installation_permissions.py",
         "test_fault_matrix.py",
         "test_file_import_operations.py",
         "test_graph_width_endpoint.py",
-        "test_home_summary.py",
         "test_import_api.py",
         "test_live_capture.py",
         "test_live_watch_grants.py",
@@ -78,8 +75,6 @@ INTEGRATION_FILES = frozenset(
         "test_measure_c1_loop_blocking_contract.py",
         "test_memory_content_import.py",
         "test_memory_freshness_integration_review.py",
-        "test_memory_governance_api.py",
-        "test_memory_graph_api.py",
         "test_memory_notes.py",
         "test_memory_qa_api.py",
         "test_memory_server_durable_queue.py",
@@ -94,13 +89,11 @@ INTEGRATION_FILES = frozenset(
         "test_onboarding_profile.py",
         "test_parent_watchdog.py",
         "test_policy_api_wiring.py",
-        "test_raw_search_without_model.py",
-        "test_reader_app.py",
-        "test_recall_fusion_live.py",
         "test_recall_scope_control.py",
         "test_retrieval_lifespan.py",
         "test_runtime.py",
         "test_secret_store_error_code_api.py",
+        "test_sdk_migration_log.py",
         "test_secret_store_error_codes.py",
         "test_secure_storage.py",
         "test_soak_probe_effectiveness.py",
@@ -114,6 +107,7 @@ INTEGRATION_FILES = frozenset(
         "test_source_sync_permissions.py",
         "test_ui_session_api.py",
         "test_unified_write_entry_wiring.py",
+        "test_v2_authority_and_call_events.py",
         "test_visibility_background.py",
     }
 )

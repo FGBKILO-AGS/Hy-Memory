@@ -8,12 +8,10 @@ import type { AddressInfo } from "node:net";
 import type {
   AskMemoryRequest,
   ContextSearchRequest,
-  ConversationSearchResponse,
-  HostAskMemoryResponse,
-  HostContextSearchResponse,
-  MemoryAuthorityResponse,
   RecallReceipt,
   RecallRequest,
+  SdkAskMemoryResponse,
+  SdkContextSearchResponse,
 } from "@one-memory/contracts";
 import axios from "axios";
 import type { CallEventDeliveryRequest } from "./broker-client.js";
@@ -33,6 +31,10 @@ import {
   type VerifiedHostIdentity,
 } from "./host-grants.js";
 import {
+  isMemoryWriteRequest,
+  isMemoryWriteRequestId,
+} from "./memory-write-protocol.js";
+import {
   SourceNotificationDispatcher,
   SourceNotificationError,
   type SourceNotificationHandler,
@@ -41,8 +43,14 @@ import {
 const LOOPBACK_HOST = "127.0.0.1";
 const DEFAULT_PORT = 18_765;
 const MAX_BODY_BYTES = 64 * 1024;
+/** Core accepts up to 200 messages of 12,000 characters each. */
+const MAX_MEMORY_WRITE_BODY_BYTES = 8 * 1024 * 1024;
 const CONNECTION_DIAGNOSTIC_SUMMARY_MS = 5 * 60 * 1000;
 const DELIVERY_BINDING_TTL_MS = 60_000;
+/** Raw-only context for MemHub_conversations: Core caps a search at 20 items. */
+const CONVERSATION_DEFAULT_LIMIT = 20;
+const CONVERSATION_CHARACTER_BUDGET = 12_000;
+const CONVERSATION_TIMEOUT_MS = 8_000;
 const CALL_EVENT_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const HOST_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_:-]{0,127}$/;
@@ -62,9 +70,6 @@ export interface RecallBrokerOptions {
   discoveryPath: string;
   instanceId: string;
   preferredPort?: number;
-  /** Reader process base URL. When set, recall/context reads try it first
-   *  and fall back to Core on failure or timeout. */
-  readerBaseUrl?: string | null;
   now?: () => number;
   /** Production must supply a store. Omission retains legacy standalone mode
    * only; this option does not replace Core scope/source/content enforcement. */
@@ -111,56 +116,11 @@ export class RecallBroker {
     }
   >();
 
-  private readerCircuitOpenUntil = 0;
   private pairingFailureWindowStartedAt = 0;
   private pairingFailureCount = 0;
 
   constructor(options: RecallBrokerOptions) {
     this.options = Object.freeze({ ...options });
-  }
-
-  private readerAvailable(): boolean {
-    return (
-      Boolean(this.options.readerBaseUrl) &&
-      Date.now() >= this.readerCircuitOpenUntil
-    );
-  }
-
-  private openReaderCircuit(): void {
-    this.readerCircuitOpenUntil = Date.now() + 30_000;
-  }
-
-  /** Try a read against the Reader process; fall back to Core on any failure. */
-  private async readViaReader<T>(
-    path: string,
-    body: unknown,
-    headers: Record<string, string>,
-    timeout_ms: number,
-    fallback: () => Promise<T>,
-    signal?: AbortSignal,
-  ): Promise<T> {
-    signal?.throwIfAborted();
-    if (!this.readerAvailable()) return fallback();
-    try {
-      const response = await axios.post<T>(
-        `${this.options.readerBaseUrl}${path}`,
-        body,
-        {
-          headers,
-          proxy: false,
-          maxRedirects: 0,
-          timeout: Math.min(timeout_ms, 1_500),
-          signal,
-        },
-      );
-      return response.data;
-    } catch (error) {
-      // Caller cancellation is not a Reader failure and must not dispatch a
-      // second request through Core after the first request was aborted.
-      if (signal?.aborted) throw error;
-      this.openReaderCircuit();
-      return fallback();
-    }
   }
 
   get port(): number {
@@ -294,6 +254,13 @@ export class RecallBroker {
       await this.grantedTools(request, response);
       return;
     }
+    if (
+      request.method === "GET" &&
+      request.url?.startsWith("/memory-writes/")
+    ) {
+      await this.proxyMemoryWriteStatus(request, response);
+      return;
+    }
     if (request.method !== "POST") {
       sendJson(response, 404, { error: "not found" });
       return;
@@ -366,6 +333,10 @@ export class RecallBroker {
       await this.proxyContext(request, response);
       return;
     }
+    if (request.url === "/memory-writes") {
+      await this.proxyMemoryWrite(request, response);
+      return;
+    }
     if (request.url === "/diagnostics/trace") {
       try {
         const body = await readJsonBody(request);
@@ -408,10 +379,6 @@ export class RecallBroker {
       }
       return;
     }
-    if (request.url === "/boundary/peek" || request.url === "/boundary/ack") {
-      await this.proxyBoundary(request, response);
-      return;
-    }
     if (request.url === "/call-events/delivery") {
       await this.proxyDelivery(request, response);
       return;
@@ -422,51 +389,6 @@ export class RecallBroker {
     }
     if (request.url === "/conversations") {
       await this.proxyConversations(request, response);
-      return;
-    }
-    if (request.url === "/matters") {
-      try {
-        const body = await readJsonBody(request);
-        if (
-          !body ||
-          typeof body !== "object" ||
-          Array.isArray(body) ||
-          Object.keys(body).some((key) => key !== "query") ||
-          !("query" in body) ||
-          typeof body.query !== "string" ||
-          body.query.trim().length < 1 ||
-          body.query.length > 512
-        ) {
-          sendJson(response, 400, { error: "invalid matter query" });
-          return;
-        }
-        const authorized = await this.authorizeHost(
-          request,
-          "om_matters",
-          "all-apps",
-        );
-        const result = await axios.post(
-          `${this.options.coreBaseUrl}/api/v1/matters/context/search`,
-          body,
-          {
-            headers: authorized.headers,
-            proxy: false,
-            maxRedirects: 0,
-            timeout: 15_000,
-          },
-        );
-        await authorized.verifyBeforeRelease();
-        sendJson(response, 200, result.data);
-      } catch (error) {
-        if (sendAuthorizationError(response, error)) return;
-        if (error instanceof BodyReadError) {
-          sendJson(response, error.status, { error: error.message });
-          return;
-        }
-        sendJson(response, 502, {
-          error: "MemHub matter context is unavailable",
-        });
-      }
       return;
     }
     sendJson(response, 404, { error: "not found" });
@@ -809,62 +731,22 @@ export class RecallBroker {
         return;
       }
       const authorized = await this.authorizeHost(request, body, "all-apps");
-      const authorityResponse = await axios.get<unknown>(
-        `${this.options.coreBaseUrl}/api/v2/memory-authority`,
+      const result = await axios.post(
+        `${this.options.coreBaseUrl}/api/v2/context/search`,
+        body,
         {
-          headers: {
-            Authorization: `Bearer ${this.options.coreApiToken}`,
-            "x-one-memory-trace-id": requestTraceId(request),
-          },
+          headers: authorized.headers,
           proxy: false,
           maxRedirects: 0,
-          timeout: 1_500,
+          timeout: (body.timeout_ms ?? 2000) + 1000,
+          maxContentLength: 2 * 1024 * 1024,
           signal: abort.signal,
         },
       );
-      if (!isMemoryAuthorityResponse(authorityResponse.data))
-        throw new Error("invalid_memory_authority");
-      const authority = authorityResponse.data;
-      const contextPath =
-        authority.authority === "sdk"
-          ? "/api/v2/context/search"
-          : "/api/v1/context/search";
-      const readContext = async () => {
-        const result = await axios.post(
-          `${this.options.coreBaseUrl}${contextPath}`,
-          body,
-          {
-            headers: authorized.headers,
-            proxy: false,
-            maxRedirects: 0,
-            timeout: (body.timeout_ms ?? 2000) + 1000,
-            maxContentLength: 2 * 1024 * 1024,
-            signal: abort.signal,
-          },
-        );
-        await authorized.verifyBeforeRelease();
-        return result.data;
-      };
-      const result = {
-        data:
-          authority.authority === "legacy"
-            ? await this.readViaReader<unknown>(
-                contextPath,
-                body,
-                authorized.headers,
-                (body.timeout_ms ?? 2000) + 1000,
-                readContext,
-                abort.signal,
-              )
-            : await readContext(),
-      };
       const invalidField = contextResponseInvalidField(result.data);
       const identity = authorized.identity;
       const responseFailure =
         invalidField ??
-        (!matchesContextAuthority(result.data, authority)
-          ? "schema_version"
-          : null) ??
         (!isContextResponseForRequest(result.data, body)
           ? "request_or_budget"
           : !identity
@@ -885,10 +767,11 @@ export class RecallBroker {
         throw new Error("invalid_context_response");
       }
       if (!identity) throw new Error("invalid_context_response");
-      const contextResult = result.data as HostContextSearchResponse;
+      const contextResult = result.data as SdkContextSearchResponse;
       await authorized.verifyBeforeRelease();
+      // Core records an external context search under its request id, so a
+      // WorkBuddy injection can later report that this result was delivered.
       if (
-        contextResult.schema_version === 1 &&
         identity.hostId === "workbuddy" &&
         CALL_EVENT_ID.test(contextResult.request_id)
       ) {
@@ -912,42 +795,6 @@ export class RecallBroker {
       sendJson(response, 502, { error: "context_unavailable" });
     } finally {
       response.off("close", onClose);
-    }
-  }
-
-  private async proxyBoundary(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> {
-    try {
-      const body = await readJsonBody(request);
-      const authorized = await this.authorizeHost(
-        request,
-        "om_recall",
-        "all-apps",
-      );
-      if (authorized.identity?.hostId !== "workbuddy")
-        throw new HostGrantError("host_grant_scope_denied");
-      const endpoint = request.url === "/boundary/ack" ? "ack" : "peek";
-      const result = await axios.post(
-        `${this.options.coreBaseUrl}/api/v1/boundary/${endpoint}`,
-        body,
-        {
-          headers: authorized.headers,
-          proxy: false,
-          maxRedirects: 0,
-          timeout: 700,
-        },
-      );
-      await authorized.verifyBeforeRelease();
-      sendJson(response, 200, result.data);
-    } catch (error) {
-      if (sendAuthorizationError(response, error)) return;
-      if (error instanceof BodyReadError) {
-        sendJson(response, error.status, { error: error.message });
-        return;
-      }
-      sendJson(response, 502, { error: "boundary_unavailable" });
     }
   }
 
@@ -1125,27 +972,18 @@ export class RecallBroker {
           },
         });
       });
-      const coreResponse = await this.readViaReader<RecallReceipt>(
-        "/api/v1/recall",
+      const result = await axios.post<RecallReceipt>(
+        `${this.options.coreBaseUrl}/api/v1/recall`,
         body,
-        authorized.headers,
-        15_000,
-        async () => {
-          const result = await axios.post<RecallReceipt>(
-            `${this.options.coreBaseUrl}/api/v1/recall`,
-            body,
-            {
-              headers: authorized.headers,
-              proxy: false,
-              maxRedirects: 0,
-              timeout: 15_000,
-            },
-          );
-          await authorized.verifyBeforeRelease();
-          return result.data;
+        {
+          headers: authorized.headers,
+          proxy: false,
+          maxRedirects: 0,
+          timeout: 15_000,
         },
       );
-      sendJson(response, 200, coreResponse);
+      await authorized.verifyBeforeRelease();
+      sendJson(response, 200, result.data);
     } catch (error) {
       if (sendAuthorizationError(response, error)) return;
       if (error instanceof BodyReadError) {
@@ -1161,10 +999,11 @@ export class RecallBroker {
   /** Search the original conversations, not the memories drawn from them.
    *
    * An agent asked to pick a task back up needs what was actually said in the
-   * other app. Recall cannot supply that: it returns governed memories, which
-   * are conclusions, and a conclusion is not enough to resume work from.
+   * other app. Recall cannot supply that: it returns memories, which are
+   * conclusions, and a conclusion is not enough to resume work from.
    *
-   * Read-only, and reads nothing that was not already imported. */
+   * Core's context search with only the raw lane. Core decides which sources
+   * this installation may read; the broker never widens the request. */
   private async proxyConversations(
     request: IncomingMessage,
     response: ServerResponse,
@@ -1180,18 +1019,32 @@ export class RecallBroker {
         "om_conversations",
         "all-apps",
       );
-      const coreResponse = await axios.get<ConversationSearchResponse>(
-        `${this.options.coreBaseUrl}/api/v1/conversations/search`,
+      const search: ContextSearchRequest = {
+        query: body.query,
+        kinds: ["raw"],
+        limit: Math.min(body.limit ?? CONVERSATION_DEFAULT_LIMIT, 20),
+        character_budget: CONVERSATION_CHARACTER_BUDGET,
+        timeout_ms: CONVERSATION_TIMEOUT_MS,
+      };
+      const result = await axios.post<unknown>(
+        `${this.options.coreBaseUrl}/api/v2/context/search`,
+        search,
         {
-          params: { query: body.query, limit: body.limit ?? 20 },
           headers: authorized.headers,
           proxy: false,
           maxRedirects: 0,
-          timeout: 15_000,
+          timeout: CONVERSATION_TIMEOUT_MS + 1000,
+          maxContentLength: 2 * 1024 * 1024,
         },
       );
+      if (
+        !isContextResponseForRequest(result.data, search) ||
+        !authorized.identity ||
+        !isContextResponseAuthorized(result.data, authorized.identity)
+      )
+        throw new Error("invalid_conversation_response");
       await authorized.verifyBeforeRelease();
-      sendJson(response, 200, coreResponse.data);
+      sendJson(response, 200, result.data);
     } catch (error) {
       if (sendAuthorizationError(response, error)) return;
       if (error instanceof BodyReadError) {
@@ -1219,25 +1072,10 @@ export class RecallBroker {
         "om_ask",
         body.scope ?? "all-apps",
       );
-      const authorityResponse = await axios.get<unknown>(
-        `${this.options.coreBaseUrl}/api/v2/memory-authority`,
-        {
-          headers: {
-            Authorization: `Bearer ${this.options.coreApiToken}`,
-            "x-one-memory-trace-id": requestTraceId(request),
-          },
-          proxy: false,
-          maxRedirects: 0,
-          timeout: 1_500,
-        },
-      );
-      if (!isMemoryAuthorityResponse(authorityResponse.data))
-        throw new Error("invalid_memory_authority");
-      const authority = authorityResponse.data;
       // Ask may call a generation model; keep the broker timeout aligned with
       // the web client's 120s budget rather than the short recall budget.
-      const coreResponse = await axios.post<HostAskMemoryResponse>(
-        `${this.options.coreBaseUrl}/api/${authority.authority === "sdk" ? "v2" : "v1"}/memories/ask`,
+      const coreResponse = await axios.post<unknown>(
+        `${this.options.coreBaseUrl}/api/v2/memories/ask`,
         body,
         {
           headers: authorized.headers,
@@ -1246,7 +1084,7 @@ export class RecallBroker {
           timeout: 120_000,
         },
       );
-      if (!isHostAskResponse(coreResponse.data, authority.authority))
+      if (!isSdkAskResponse(coreResponse.data))
         throw new Error("invalid_ask_response");
       await authorized.verifyBeforeRelease();
       sendJson(response, 200, coreResponse.data);
@@ -1258,6 +1096,135 @@ export class RecallBroker {
       }
       sendJson(response, 502, {
         error: "MemHub Core ask is unavailable",
+      });
+    }
+  }
+
+  /** The installation behind a request: authenticated, never tool-authorized.
+   *
+   * Memory writes are not grant-governed, but they must name a host: the
+   * source of every write is this identity's host id, not anything the
+   * request says. Without a grant store there is no identity, so no write. */
+  private async authenticateHost(
+    request: IncomingMessage,
+  ): Promise<VerifiedHostIdentity> {
+    const store = this.options.hostGrantStore;
+    if (store === undefined)
+      throw new HostGrantError("host_grant_store_unavailable");
+    const authorization = request.headers.authorization;
+    const authorizationCount = request.rawHeaders.filter(
+      (value, index) =>
+        index % 2 === 0 && value.toLowerCase() === "authorization",
+    ).length;
+    if (
+      authorizationCount !== 1 ||
+      typeof authorization !== "string" ||
+      !/^Bearer omhg_v1_[A-Za-z0-9_-]{43}$/i.test(authorization)
+    ) {
+      throw new HostGrantError("host_grant_authentication_failed");
+    }
+    try {
+      return await store.authenticate(authorization.slice(7));
+    } catch (error) {
+      if (error instanceof HostGrantError) throw error;
+      throw new HostGrantError("host_grant_store_unavailable");
+    }
+  }
+
+  /** Core's v2 write entry, as the authenticated host.
+   *
+   * Sent as a trusted local caller: Core refuses memory writes that carry the
+   * external read envelope, and writes are not grant-governed. */
+  private coreWriteHeaders(request: IncomingMessage): Record<string, string> {
+    return {
+      Authorization: `Bearer ${this.options.coreApiToken}`,
+      "Content-Type": "application/json",
+      "x-one-memory-trace-id": requestTraceId(request),
+    };
+  }
+
+  private async proxyMemoryWrite(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    try {
+      const identity = await this.authenticateHost(request);
+      const body = await readJsonBody(
+        request,
+        undefined,
+        MAX_MEMORY_WRITE_BODY_BYTES,
+      );
+      if (!isMemoryWriteRequest(body)) {
+        sendJson(response, 400, { error: "invalid_memory_write" });
+        return;
+      }
+      const result = await axios.post<unknown>(
+        `${this.options.coreBaseUrl}/api/v2/memory-writes`,
+        { ...body, source_id: identity.hostId },
+        {
+          headers: this.coreWriteHeaders(request),
+          proxy: false,
+          maxRedirects: 0,
+          timeout: 15_000,
+          maxBodyLength: MAX_MEMORY_WRITE_BODY_BYTES,
+          validateStatus: () => true,
+        },
+      );
+      if ([202, 409, 422].includes(result.status)) {
+        sendJson(response, result.status, result.data);
+        return;
+      }
+      sendJson(response, 502, { error: "MemHub memory write is unavailable" });
+    } catch (error) {
+      if (sendAuthorizationError(response, error)) return;
+      if (error instanceof BodyReadError) {
+        sendJson(response, error.status, { error: error.message });
+        return;
+      }
+      sendJson(response, 502, { error: "MemHub memory write is unavailable" });
+    }
+  }
+
+  private async proxyMemoryWriteStatus(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    let requestId: string;
+    try {
+      const segment = (request.url ?? "").slice("/memory-writes/".length);
+      if (segment.includes("/") || segment.includes("?")) throw new Error();
+      requestId = decodeURIComponent(segment);
+    } catch {
+      sendJson(response, 400, { error: "invalid_memory_write_request_id" });
+      return;
+    }
+    if (!isMemoryWriteRequestId(requestId)) {
+      sendJson(response, 400, { error: "invalid_memory_write_request_id" });
+      return;
+    }
+    try {
+      await this.authenticateHost(request);
+      const result = await axios.get<unknown>(
+        `${this.options.coreBaseUrl}/api/v2/memory-writes/${encodeURIComponent(requestId)}`,
+        {
+          headers: this.coreWriteHeaders(request),
+          proxy: false,
+          maxRedirects: 0,
+          timeout: 10_000,
+          validateStatus: () => true,
+        },
+      );
+      if (result.status === 200 || result.status === 404) {
+        sendJson(response, result.status, result.data);
+        return;
+      }
+      sendJson(response, 502, {
+        error: "MemHub memory write status is unavailable",
+      });
+    } catch (error) {
+      if (sendAuthorizationError(response, error)) return;
+      sendJson(response, 502, {
+        error: "MemHub memory write status is unavailable",
       });
     }
   }
@@ -1439,8 +1406,8 @@ function brokerOperation(url: string | undefined): string | null {
       "/context": "context",
       "/call-events/delivery": "call_event_delivery",
       "/ask": "ask",
+      "/memory-writes": "memory_write",
       "/conversations": "conversations",
-      "/matters": "matters",
       "/source-changed": "source_notification",
       "/control/connections": "connection_control",
     }[url ?? ""] ?? null
@@ -1570,6 +1537,7 @@ class BodyReadError extends Error {
 async function readJsonBody(
   request: IncomingMessage,
   deadlineMs?: number,
+  maxBytes = MAX_BODY_BYTES,
 ): Promise<unknown> {
   const deadline =
     deadlineMs === undefined
@@ -1584,7 +1552,7 @@ async function readJsonBody(
     for await (const chunk of request) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       bytes += buffer.length;
-      if (bytes > MAX_BODY_BYTES) {
+      if (bytes > maxBytes) {
         throw new BodyReadError(413, "request body is too large");
       }
       chunks.push(buffer);
@@ -1616,53 +1584,17 @@ function sendJson(
   response.end(`${JSON.stringify(value)}\n`);
 }
 
-function isMemoryAuthorityResponse(
-  value: unknown,
-): value is MemoryAuthorityResponse {
-  if (value === null || typeof value !== "object" || Array.isArray(value))
-    return false;
-  const record = value as Record<string, unknown>;
-  if (
-    Object.keys(record).length !== 2 ||
-    !Object.hasOwn(record, "authority") ||
-    !Object.hasOwn(record, "migration_id")
-  )
-    return false;
-  return record.authority === "legacy"
-    ? record.migration_id === null
-    : record.authority === "sdk" &&
-        typeof record.migration_id === "string" &&
-        record.migration_id.length > 0 &&
-        record.migration_id.length <= 512;
-}
-
-function matchesContextAuthority(
-  value: unknown,
-  authority: MemoryAuthorityResponse,
-): boolean {
-  if (value === null || typeof value !== "object" || Array.isArray(value))
-    return false;
-  return (
-    (value as { schema_version?: unknown }).schema_version ===
-    (authority.authority === "sdk" ? 2 : 1)
-  );
-}
-
-function isHostAskResponse(
-  value: unknown,
-  authority: "legacy" | "sdk",
-): value is HostAskMemoryResponse {
+function isSdkAskResponse(value: unknown): value is SdkAskMemoryResponse {
   if (value === null || typeof value !== "object" || Array.isArray(value))
     return false;
   const response = value as Record<string, unknown>;
   if (
+    response.schema_version !== 2 ||
     typeof response.answer !== "string" ||
     !["generated", "extractive", "empty"].includes(String(response.mode)) ||
     !Array.isArray(response.memories)
   )
     return false;
-  if (authority === "legacy") return response.schema_version === undefined;
-  if (response.schema_version !== 2) return false;
   return response.memories.every((item) => {
     if (item === null || typeof item !== "object" || Array.isArray(item))
       return false;

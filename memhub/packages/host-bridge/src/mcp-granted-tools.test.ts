@@ -13,7 +13,6 @@ function sessionWith(granted: GrantedTools): McpSession {
     undefined,
     undefined,
     undefined,
-    undefined,
     granted,
   );
 }
@@ -36,14 +35,12 @@ describe("BUG-15: the listed tools follow what the grant allows", () => {
         "om_recall",
         "om_ask",
         "om_conversations",
-        "om_matters",
         "om_diagnostic_trace",
       ]),
     );
     expect(names).toContain("MemHub_recall");
     expect(names).toContain("MemHub_ask");
     expect(names).toContain("MemHub_conversations");
-    expect(names).toContain("MemHub_matters");
     expect(names).toContain("MemHub_diagnostic_trace");
   });
 
@@ -52,7 +49,6 @@ describe("BUG-15: the listed tools follow what the grant allows", () => {
     expect(names).toContain("MemHub_recall");
     expect(names).not.toContain("MemHub_ask");
     expect(names).not.toContain("MemHub_conversations");
-    expect(names).not.toContain("MemHub_matters");
     expect(names).not.toContain("MemHub_diagnostic_trace");
   });
 

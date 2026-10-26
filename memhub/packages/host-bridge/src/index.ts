@@ -7,7 +7,6 @@ export {
   type CallEventDeliveryResponse,
   contextThroughBroker,
   type HostCredentialProvider,
-  mattersThroughBroker,
   readHostCredentialFile,
   recallThroughBroker,
   reportCallEventDeliveryThroughBroker,

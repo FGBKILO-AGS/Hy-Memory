@@ -387,7 +387,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       {
         flag: "--content-file <path>",
         summary:
-          "从有界普通文件读取新增/纠正正文；计划只保存摘要，执行时再次校验。",
+          "从有界普通文件读取 update 的新正文；预览只显示摘要，--confirm 时才写入。",
       },
       DIRECT_CONFIRM_OPTION,
       JSON_OPTION,
@@ -485,7 +485,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "recall",
     summary:
-      "从当前授权的原文与治理记忆统一检索上下文；本地只读，不调用模型、不触发补索引。",
+      "从当前授权的原文与已沉淀记忆统一检索上下文；本地只读，不调用模型、不触发补索引。",
     usage:
       "memhub recall <query> [--kind <raw|memory>] [--source <id>] [--limit <n>] [--character-budget <n>] [--timeout-ms <n>] [--json]\n            memhub recall --query-file <path> [...]\n            memhub recall --stdin [...]",
     options: [

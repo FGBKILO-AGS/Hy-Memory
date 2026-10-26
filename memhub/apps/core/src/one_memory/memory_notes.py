@@ -67,20 +67,6 @@ class MemoryNoteReceipt(BaseModel):
     error: str | None = None
 
 
-class SavedMemoryNoteEvidence(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    available: Literal[True] = True
-    evidence_id: str
-    source_id: str
-    revision: int
-    imported_at: datetime
-    role: str
-    written_by: WrittenBy
-    created_at: datetime | None
-    verbatim: str
-
-
 class LegacyMemoryNoteReader:
     """Read pre-cutover note receipts without retaining any write runtime."""
 
@@ -436,48 +422,6 @@ def memory_note_router(dependencies: Sequence[Depends]) -> APIRouter:
     def get(evidence_id: str, request: Request) -> MemoryNoteReceipt:
         try:
             return store(request).receipt(evidence_id)
-        except KeyError as error:
-            raise HTTPException(404, "memory_note_not_found") from error
-        except ValueError as error:
-            raise HTTPException(409, str(error)) from error
-
-    @router.get("/{evidence_id}/evidence", response_model=SavedMemoryNoteEvidence)
-    def evidence(evidence_id: str, request: Request) -> SavedMemoryNoteEvidence:
-        try:
-            notes = store(request)
-            if notes.sdk_authority:
-                raise HTTPException(409, "memory_note_evidence_retired")
-            with notes.evidence._connect() as connection:
-                record = notes.evidence._get_with_connection(connection, evidence_id)
-                metadata = record.origin_meta.get(EvidenceOrigin.MANUAL_IMPORT) if record else None
-                if (
-                    record is None
-                    or record.user_id != "local"
-                    or record.source_id != SOURCE_ID
-                    or metadata is None
-                    or metadata.raw_meta.get("input_mode") != "direct_memory_note"
-                ):
-                    raise KeyError(evidence_id)
-                grant = connection.execute(
-                    "SELECT revoked_at FROM source_grants WHERE user_id='local' AND source_id=?",
-                    (SOURCE_ID,),
-                ).fetchone()
-                if grant is None or grant[0] is not None:
-                    raise ValueError("memory_note_source_revoked")
-                result = SavedMemoryNoteEvidence(
-                    evidence_id=record.evidence_id,
-                    source_id=record.source_id,
-                    revision=record.revision,
-                    imported_at=record.imported_at,
-                    role=record.role,
-                    written_by=record.written_by,
-                    created_at=record.created_at,
-                    verbatim=record.verbatim,
-                )
-            # The returned body and reference share one snapshot. Recheck authority
-            # after that read so a revoked source is not released from a stale view.
-            notes.require(evidence_id)
-            return result
         except KeyError as error:
             raise HTTPException(404, "memory_note_not_found") from error
         except ValueError as error:

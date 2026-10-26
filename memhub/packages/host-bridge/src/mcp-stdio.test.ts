@@ -42,7 +42,6 @@ describe("built MCP stdio server", () => {
       "MemHub_recall",
       "MemHub_ask",
       "MemHub_conversations",
-      "MemHub_matters",
       "MemHub_context",
       "MemHub_memory_write",
       "MemHub_memory_write_status",

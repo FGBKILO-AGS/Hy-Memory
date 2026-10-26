@@ -72,7 +72,6 @@ describe("MemHub rename keeps technical identities", () => {
       ["MemHub_recall", "MemHub recall"],
       ["MemHub_ask", "MemHub ask"],
       ["MemHub_conversations", "MemHub conversation"],
-      ["MemHub_matters", "MemHub matters"],
       ["MemHub_context", "MemHub context"],
       ["MemHub_memory_write", "MemHub memory write"],
       ["MemHub_memory_write_status", "MemHub memory write status"],
