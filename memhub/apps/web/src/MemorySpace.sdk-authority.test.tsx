@@ -46,12 +46,19 @@ vi.mock("./MemoryMap", () => ({
     graph,
     loaded,
     onOpenMemory,
+    libraryView,
   }: {
     hidden: boolean;
     memories: GovernedMemory[];
     graph: MemoryGraphResponse | null;
     loaded: boolean;
     onOpenMemory(id: string): void;
+    libraryView?: {
+      page: { source_ids_by_memory?: Record<string, string[]> } | null;
+      unattributedSource?: string;
+      onSource(value: string): void;
+      resetPage(): void;
+    };
   }) => (
     <div hidden={hidden} data-testid="map">
       <span data-testid="map-memories">
@@ -59,8 +66,29 @@ vi.mock("./MemoryMap", () => ({
       </span>
       <span data-testid="map-nodes">{graph?.nodes.length ?? "none"}</span>
       <span data-testid="map-loaded">{String(loaded)}</span>
+      <span data-testid="map-sources">
+        {memories
+          .map((m) =>
+            (libraryView?.page?.source_ids_by_memory?.[m.memory_id] ?? []).join(
+              "+",
+            ),
+          )
+          .join(",")}
+      </span>
+      <span data-testid="map-unattributed">
+        {libraryView?.unattributedSource ?? ""}
+      </span>
       <button type="button" onClick={() => onOpenMemory("a")}>
         open a
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          libraryView?.onSource("workbuddy");
+          libraryView?.resetPage();
+        }}
+      >
+        pick workbuddy
       </button>
     </div>
   ),
@@ -137,11 +165,59 @@ it("draws the map from SDK memories on SDK authority, without legacy reads", asy
   expect(screen.getByTestId("map-nodes").textContent).toBe("3");
   expect(await screen.findByText(/3,018/)).toBeTruthy();
   expect(api.sdkLibrary).toHaveBeenCalledWith(
-    { statuses: ["active"], offset: 0, limit: 300 },
+    {
+      statuses: ["active"],
+      source: undefined,
+      query: undefined,
+      offset: 0,
+      limit: 100,
+    },
+    expect.any(AbortSignal),
+  );
+  expect(api.sdkGraph).toHaveBeenCalledWith(
+    { source: undefined, offset: 0, limit: 100 },
     expect.any(AbortSignal),
   );
   expect(api.legacyLibrary).not.toHaveBeenCalled();
   expect(api.legacyGraph).not.toHaveBeenCalled();
+});
+
+it("keeps rows, sources, count and graph on the one filtered page", async () => {
+  sdkAuthority();
+  render(<MemorySpace simplified active />);
+  await waitFor(() =>
+    expect(screen.getByTestId("map-loaded").textContent).toBe("true"),
+  );
+  api.sdkLibrary.mockResolvedValue({
+    memories: [
+      { ...record("w1"), source: "workbuddy" },
+      { ...record("w2"), source: "default" },
+    ],
+    total: 566,
+    limit: 100,
+    offset: 0,
+  });
+
+  fireEvent.click(screen.getByText("pick workbuddy"));
+
+  await waitFor(() =>
+    expect(screen.getByTestId("map-memories").textContent).toBe(
+      "w1:confirmed,w2:confirmed",
+    ),
+  );
+  expect(screen.getByTestId("map-sources").textContent).toBe(
+    "workbuddy,default",
+  );
+  expect(screen.getByTestId("map-unattributed").textContent).toBe("default");
+  expect(api.sdkLibrary).toHaveBeenLastCalledWith(
+    expect.objectContaining({ source: "workbuddy", offset: 0 }),
+    expect.any(AbortSignal),
+  );
+  expect(api.sdkGraph).toHaveBeenLastCalledWith(
+    { source: "workbuddy", offset: 0, limit: 100 },
+    expect.any(AbortSignal),
+  );
+  expect(await screen.findByText(/566/)).toBeTruthy();
 });
 
 it("opens an SDK memory in place instead of switching away from the map", async () => {

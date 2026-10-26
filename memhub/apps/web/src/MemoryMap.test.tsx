@@ -511,6 +511,65 @@ it("D96: lists a memory by when its conversation happened, not when it was gener
   ).toBeTruthy();
 });
 
+it("names the SDK's no-source bucket 未识别来源, apart from a source under review", () => {
+  const items = ["有来源", "无来源"].map((content, i) => ({
+    ...memories[0],
+    memory_id: `s${i}`,
+    content,
+  })) as GovernedMemory[];
+  render(
+    <Host
+      simplified
+      items={items}
+      sources={[
+        {
+          source_id: "codex",
+          display_name: "Codex",
+          authorized: true,
+          imported_messages: 1,
+          imported_conversations: 1,
+        } as SourceResponse,
+      ]}
+      libraryView={{
+        ...pagedView({
+          items,
+          total: 2,
+          offset: 0,
+          limit: 100,
+          source_ids_by_memory: { s0: ["codex"], s1: ["default"] },
+          search_window: 500,
+        }),
+        query: "版本",
+        unattributedSource: "default",
+      }}
+    />,
+  );
+  const list = screen.getByRole("list", { name: "地图记忆列表" });
+  expect(
+    within(list).getByRole("button", { name: /有来源/ }).textContent,
+  ).toContain("Codex");
+  const unattributed = within(list).getByRole("button", { name: /无来源/ });
+  expect(unattributed.textContent).toContain("未识别来源");
+  expect(unattributed.textContent).not.toContain("待核对");
+  expect(screen.getByText("只在最相关的 500 条记忆里查找关键词")).toBeTruthy();
+});
+
+it("says a filtered source is empty rather than that nothing matched", () => {
+  render(
+    <Host
+      simplified
+      items={[]}
+      libraryView={{
+        ...pagedView({ items: [], total: 0, offset: 0, limit: 100 }),
+        source: "default",
+        unattributedSource: "default",
+      }}
+    />,
+  );
+  expect(screen.getByText("这个来源下还没有记忆")).toBeTruthy();
+  expect(screen.queryByText("没有匹配的记忆")).toBeNull();
+});
+
 it("D96: with conversations imported and no memory yet, says how many were imported", () => {
   render(
     <Host

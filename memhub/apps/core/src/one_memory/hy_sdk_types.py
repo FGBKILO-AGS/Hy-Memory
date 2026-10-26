@@ -92,6 +92,9 @@ class HySdkMemoryPage(BaseModel):
     total: int = Field(ge=0)
     limit: int = Field(ge=1)
     offset: int = Field(ge=0)
+    # Set on a search whose relevance window was full: matches were looked for
+    # only among this many most relevant memories, so `total` may undercount.
+    search_window: int | None = None
 
     @classmethod
     def from_sdk(cls, raw: object, *, limit: int, offset: int) -> HySdkMemoryPage:
@@ -322,6 +325,38 @@ def parse_sdk_search(raw: object, *, error_code: str) -> tuple[SemanticMemoryHit
             )
         )
     return tuple(found)
+
+
+def library_keyword_hits(raw: object, query: str) -> tuple[tuple[str, ...], int]:
+    """Ids in an SDK search window whose text contains every query term.
+
+    The local SDK store has no keyword channel (Chroma's keyword search is
+    empty), so search is pure vector similarity: a word in the library can
+    score below the floor, and a word in none of it still scores above. The
+    library search asks the SDK for its most relevant window and keeps only the
+    rows that actually contain the words, most relevant first. Returns those ids
+    and how many distinct rows the window held.
+    """
+    rows = _reply_rows(raw, "hy_memory_search_shape_unknown")
+    terms = query.casefold().split()
+    seen: set[str] = set()
+    matched: list[str] = []
+    for item in sorted(rows, key=_score, reverse=True):
+        memory_id = item.get("memory_id") or item.get("id")
+        if not isinstance(memory_id, str) or not memory_id or memory_id in seen:
+            continue
+        seen.add(memory_id)
+        content = item.get("content")
+        tags = item.get("tags")
+        text = " ".join(
+            [
+                content if isinstance(content, str) else "",
+                *(tag for tag in (tags if isinstance(tags, list) else ()) if isinstance(tag, str)),
+            ]
+        ).casefold()
+        if all(term in text for term in terms):
+            matched.append(memory_id)
+    return tuple(matched), len(seen)
 
 
 def parse_sdk_raw_search(raw: object) -> tuple[HySdkRawHit, ...]:

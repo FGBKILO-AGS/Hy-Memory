@@ -62,8 +62,8 @@ import { subscribePoll } from "./poll-scheduler";
 import { R6Button } from "./R6Controls";
 import { SdkMemoryLibrary } from "./SdkMemoryLibrary";
 import { SdkRawHistory } from "./SdkRawHistory";
-import { sdkDetail, sdkLibraryPage, sdkMapMemory } from "./sdk-memory-map";
-import { sourceNameOr } from "./source-label";
+import { sdkDetail, sdkLibraryPage } from "./sdk-memory-map";
+import { sourceNameOr, UNATTRIBUTED_SOURCE_ID } from "./source-label";
 import { traceUiAction } from "./ui-trace";
 import { useMemoryLibrary } from "./use-memory-library";
 import { isDefiniteRefusal, writeTraceStatus } from "./write-outcome";
@@ -303,25 +303,30 @@ export function MemorySpace({
   // The SDK library is no longer where a memory opens from the map; the id is
   // kept so the panel still has a focus target for its own tests.
   const [sdkFocusedMemoryId] = useState<string | null>(null);
-  // The map on SDK authority. Legacy reads (library page, governed graph)
-  // are refused there, so it draws SDK memories and the v2 graph instead.
-  const [sdkMap, setSdkMap] = useState<{
-    memories: GovernedMemory[];
-    graph: MemoryGraphResponse;
-  } | null>(null);
-  const [sdkMapFailed, setSdkMapFailed] = useState(false);
+  // The map on SDK authority. Legacy reads (library page, governed graph) are
+  // refused there. Like the governed map, the list, its count, its source and
+  // time labels and the graph are all one page: the library page and the graph
+  // for that same source and window, read together. Reading the graph from a
+  // different, unfiltered window made rows, sources and totals disagree.
+  const [sdkGraph, setSdkGraph] = useState<MemoryGraphResponse | null>(null);
   // A write on SDK authority has no governed refresh to ride on; bumping this
   // re-reads the SDK page and graph after an edit or a delete.
   const [sdkMapRevision, setSdkMapRevision] = useState(0);
   const bumpSdkMap = useCallback(() => setSdkMapRevision((v) => v + 1), []);
-  // The map's left list pages through the SDK library the same way it pages
-  // through the governed one: the list is always one page, and the count above
-  // it is the library's total, not the page's length.
   const [sdkLibrary, setSdkLibrary] = useState<{
     page: MemoryLibraryPage | null;
     loading: boolean;
     failed: boolean;
-  }>({ page: null, loading: false, failed: false });
+    /** The filter the shown page was read with, for the count above it. */
+    settledSource: string;
+    settledQuery: string;
+  }>({
+    page: null,
+    loading: false,
+    failed: false,
+    settledSource: "",
+    settledQuery: "",
+  });
   const [sdkLibraryQuery, setSdkLibraryQuery] = useState("");
   const [sdkLibrarySource, setSdkLibrarySource] = useState("");
   const [sdkLibraryOffset, setSdkLibraryOffset] = useState(0);
@@ -337,80 +342,83 @@ export function MemorySpace({
     void sdkMapRevision;
     let cancelled = false;
     let controller: AbortController | null = null;
-    const read = async () => {
+    const source = sdkLibrarySource || undefined;
+    const query = sdkLibraryQuery || undefined;
+    const read = async (first: boolean) => {
       controller?.abort();
       const request = new AbortController();
       controller = request;
+      if (first) setSdkLibrary((current) => ({ ...current, loading: true }));
       try {
         const [page, graph] = await Promise.all([
           getSdkMemoryLibrary(
-            { statuses: ["active"], offset: 0, limit: 300 },
+            {
+              statuses: ["active"],
+              source,
+              query,
+              offset: sdkLibraryOffset,
+              limit: 100,
+            },
             request.signal,
           ),
-          getSdkMemoryGraph(request.signal),
+          // The overlay is decoration: the list stands without it.
+          getSdkMemoryGraph(
+            { source, offset: query ? 0 : sdkLibraryOffset, limit: 100 },
+            request.signal,
+          ).catch(() => null),
         ]);
-        if (cancelled) return;
-        setSdkMap({ memories: page.memories.map(sdkMapMemory), graph });
-        setSdkMapFailed(false);
-      } catch {
-        if (!cancelled && !request.signal.aborted) setSdkMapFailed(true);
-      }
-    };
-    void read();
-    const timer = setInterval(() => void read(), 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-      controller?.abort();
-    };
-  }, [sdkMapVisible, sdkMapRevision]);
-  useEffect(() => {
-    if (memoryAuthority !== "sdk" || !simplified || !active) return;
-    if (displayedMode !== "map") return;
-    void sdkMapRevision;
-    let cancelled = false;
-    const controller = new AbortController();
-    setSdkLibrary((current) => ({ ...current, loading: true }));
-    void getSdkMemoryLibrary(
-      {
-        statuses: ["active"],
-        source: sdkLibrarySource || undefined,
-        query: sdkLibraryQuery || undefined,
-        offset: sdkLibraryOffset,
-        limit: 100,
-      },
-      controller.signal,
-    )
-      .then((page) => {
         if (cancelled) return;
         setSdkLibrary({
           page: sdkLibraryPage(page),
           loading: false,
           failed: false,
+          settledSource: sdkLibrarySource,
+          settledQuery: sdkLibraryQuery,
         });
-      })
-      .catch(() => {
-        if (cancelled || controller.signal.aborted) return;
+        setSdkGraph(graph);
+      } catch {
+        if (cancelled || request.signal.aborted) return;
         setSdkLibrary((current) => ({
           ...current,
           loading: false,
           failed: true,
         }));
-      });
+      }
+    };
+    void read(true);
+    const timer = setInterval(() => void read(false), 30_000);
     return () => {
       cancelled = true;
-      controller.abort();
+      clearInterval(timer);
+      controller?.abort();
     };
   }, [
-    memoryAuthority,
-    simplified,
-    active,
-    displayedMode,
+    sdkMapVisible,
+    sdkMapRevision,
     sdkLibraryOffset,
     sdkLibraryQuery,
     sdkLibrarySource,
-    sdkMapRevision,
   ]);
+  const sdkFilterLabel = [
+    sdkLibrary.settledSource
+      ? `${t("memory:来源")} ${
+          sdkLibrary.settledSource === UNATTRIBUTED_SOURCE_ID
+            ? t("memory:未识别来源")
+            : sourceNameOr(
+                sources,
+                sdkLibrary.settledSource,
+                sdkLibrary.settledSource,
+              )
+        }`
+      : "",
+    sdkLibrary.settledQuery.trim()
+      ? t("memory:关键词“{query}”", {
+          query: sdkLibrary.settledQuery.trim(),
+        })
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const [draft, setDraft] = useState("");
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const bulkInFlight = useRef(false);
@@ -1621,20 +1629,22 @@ export function MemorySpace({
           </h1>
           <span className="memory-loaded-count">
             {memoryAuthority === "sdk" && simplified && !management
-              ? sdkMapFailed && !sdkMap
-                ? t("memory:记忆读取失败")
-                : sdkMap
-                  ? tn(
-                      "memory:已沉淀 {count} 条{filter} · 当前展示 {shown} 条",
-                      sdkMap.graph.total_memories,
-                      {
-                        filter: "",
-                        shown: new Intl.NumberFormat(locale).format(
-                          sdkLibrary.page?.items.length ??
-                            sdkMap.memories.length,
-                        ),
-                      },
-                    )
+              ? sdkLibrary.page
+                ? tn(
+                    "memory:已沉淀 {count} 条{filter} · 当前展示 {shown} 条",
+                    sdkLibrary.page.total,
+                    {
+                      filter: sdkFilterLabel
+                        ? t("memory:（{filter}）", { filter: sdkFilterLabel })
+                        : "",
+                      shown: new Intl.NumberFormat(locale).format(
+                        sdkLibrary.page.items.length,
+                      ),
+                    },
+                  )
+                : // The list below says a failed read once, with its retry.
+                  sdkLibrary.failed
+                  ? null
                   : t("memory:正在读取…")
               : memoryAuthority === "sdk"
                 ? null
@@ -1671,6 +1681,9 @@ export function MemorySpace({
           suspended={!active}
           onPendingChange={setPendingNote}
           onSaved={() => {
+            // A finished note is a new SDK memory: re-read the page now
+            // rather than leave it for the next poll.
+            if (memoryAuthority === "sdk") bumpSdkMap();
             void refresh(query).catch((reason) => setError(message(reason, t)));
           }}
           onOpenMemory={(id) => {
@@ -1848,9 +1861,11 @@ export function MemorySpace({
       <ModelPrompt
         processing={processing}
         hasMemories={
-          simplified
-            ? knownMapTotal.current > 0 || (mapLibrary.page?.total ?? 0) > 0
-            : memories.length > 0
+          memoryAuthority === "sdk"
+            ? (sdkLibrary.page?.total ?? 0) > 0
+            : simplified
+              ? knownMapTotal.current > 0 || (mapLibrary.page?.total ?? 0) > 0
+              : memories.length > 0
         }
         onConfigureModel={onConfigureModel}
       />
@@ -2016,6 +2031,7 @@ export function MemorySpace({
                 loading: sdkLibrary.loading,
                 failed: sdkLibrary.failed,
                 stale: false,
+                unattributedSource: UNATTRIBUTED_SOURCE_ID,
                 onQuery: setSdkLibraryQuery,
                 onSource: setSdkLibrarySource,
                 resetPage: () => setSdkLibraryOffset(0),
@@ -2048,14 +2064,14 @@ export function MemorySpace({
         hidden={!active || displayedMode !== "map"}
         memories={
           memoryAuthority === "sdk"
-            ? (sdkMap?.memories ?? [])
+            ? (sdkLibrary.page?.items ?? [])
             : simplified
               ? (mapLibrary.page?.items ?? [])
               : memories
         }
         graph={
           memoryAuthority === "sdk"
-            ? (sdkMap?.graph ?? null)
+            ? sdkGraph
             : simplified && sourceSnapshotStale
               ? null
               : graph
@@ -2066,7 +2082,7 @@ export function MemorySpace({
         onViewHistory={simplified ? onConnect : () => setMode("history")}
         loaded={
           memoryAuthority === "sdk"
-            ? sdkMap !== null
+            ? sdkLibrary.page !== null
             : simplified
               ? mapLibrary.page !== null
               : loaded
@@ -2077,7 +2093,7 @@ export function MemorySpace({
           !active ||
           deleteCount > 0 ||
           (memoryAuthority === "sdk"
-            ? sdkMap === null
+            ? sdkLibrary.page === null
             : simplified && (!mapLibrary.page || sourceSnapshotStale))
         }
         draft={draft}

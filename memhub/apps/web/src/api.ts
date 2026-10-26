@@ -1169,12 +1169,21 @@ export async function getMemory(memoryId: string): Promise<MemoryDetail> {
 let pendingMemoryGraph: Promise<MemoryGraphResponse> | null = null;
 
 /** The memory map on SDK authority: SDK memories plus the graph overlay. */
+/** The SDK map for one list page: the same source and window the list reads. */
 export async function getSdkMemoryGraph(
+  {
+    source,
+    offset = 0,
+    limit = 100,
+  }: { source?: string; offset?: number; limit?: number } = {},
   signal?: AbortSignal,
 ): Promise<MemoryGraphResponse> {
   const response = await client.get<MemoryGraphResponse>(
     "/api/v2/memories/graph",
-    { params: { limit: 300 }, signal },
+    {
+      params: { limit, offset, ...(source ? { source } : {}) },
+      signal,
+    },
   );
   return response.data;
 }

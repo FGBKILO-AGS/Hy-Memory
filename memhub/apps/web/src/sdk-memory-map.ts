@@ -21,6 +21,28 @@ function stamp(seconds: number | null | undefined): string {
     : "";
 }
 
+const EARLIEST_PLAUSIBLE = Date.UTC(2000, 0, 1) / 1_000;
+
+/** A conversation time that can be true: not before 2000, not tomorrow or later.
+ *
+ * A historical Cursor bug stored a file hash as the message time (years like
+ * 2254). Such a value is not shown as when the conversation happened; the
+ * import time, or "time unknown", says what is actually known.
+ */
+function plausible(seconds: number | null | undefined): number | null {
+  return typeof seconds === "number" &&
+    Number.isFinite(seconds) &&
+    seconds >= EARLIEST_PLAUSIBLE &&
+    seconds <= Date.now() / 1_000 + 86_400
+    ? seconds
+    : null;
+}
+
+/** The SDK writes "default" when no source was given; keep it as that bucket. */
+function sourceOf(record: SdkMemoryRecord): string {
+  return record.source || "default";
+}
+
 /** An SDK memory in the shape the memory map draws.
  *
  * The map groups and labels by id, content, kind, status and tags only, so the
@@ -72,9 +94,8 @@ export function sdkDetail(record: SdkMemoryRecord): MemoryDetail {
     history: [],
     index_sync: null,
     sdk_status: record.status,
-    source_id:
-      record.source && record.source !== "default" ? record.source : null,
-    sdk_memory_at: stamp(record.memory_at) || null,
+    source_id: sourceOf(record),
+    sdk_memory_at: stamp(plausible(record.memory_at)) || null,
     sdk_created_at: stamp(record.gmt_created) || null,
   };
 }
@@ -94,13 +115,13 @@ export function sdkLibraryPage(page: SdkMemoryPage): MemoryLibraryPage {
   > = {};
   const sourceIds: Record<string, string[]> = {};
   for (const record of page.memories) {
-    if (record.source && record.source !== "default")
-      sourceIds[record.memory_id] = [record.source];
-    const at = record.memory_at ?? record.gmt_created;
-    if (typeof at !== "number" || !Number.isFinite(at)) continue;
+    sourceIds[record.memory_id] = [sourceOf(record)];
+    const conversation = plausible(record.memory_at);
+    const at = conversation ?? plausible(record.gmt_created);
+    if (at === null) continue;
     sourceTime[record.memory_id] = {
       at: new Date(at * 1_000).toISOString(),
-      basis: record.memory_at ? "conversation" : "import",
+      basis: conversation !== null ? "conversation" : "import",
     };
   }
   return {
@@ -110,5 +131,6 @@ export function sdkLibraryPage(page: SdkMemoryPage): MemoryLibraryPage {
     limit: page.limit,
     source_ids_by_memory: sourceIds,
     source_time_by_memory: sourceTime,
+    search_window: page.search_window ?? null,
   };
 }

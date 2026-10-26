@@ -63,6 +63,8 @@ type Props = Parameters<typeof Workbench>[0] & {
     loading: boolean;
     failed: boolean;
     stale: boolean;
+    /** The source id the SDK uses for "no source given" (shown as 未识别来源). */
+    unattributedSource?: string;
     onQuery(value: string): void;
     onSource(value: string): void;
     resetPage(): void;
@@ -168,12 +170,27 @@ export function MemoryMap(props: Props) {
   } = props;
   const library = props.libraryView;
   const serverPaged = library !== undefined;
+  const unattributedLabel = text("未识别来源");
   const graph = useMemo(
     () =>
       serverPaged
-        ? projectPagedSourceMap(baseGraph, library?.page ?? null, sources)
+        ? projectPagedSourceMap(
+            baseGraph,
+            library?.page ?? null,
+            sources,
+            library?.unattributedSource
+              ? { [library.unattributedSource]: unattributedLabel }
+              : undefined,
+          )
         : baseGraph,
-    [baseGraph, serverPaged, library?.page, sources],
+    [
+      baseGraph,
+      serverPaged,
+      library?.page,
+      library?.unattributedSource,
+      sources,
+      unattributedLabel,
+    ],
   );
   const refreshing = !!library?.page && library.loading;
   const overlaysSuspended = hidden || !!props.overlayBlocked;
@@ -338,7 +355,11 @@ export function MemoryMap(props: Props) {
       const ids = library.page?.source_ids_by_memory?.[memoryId];
       return ids?.length
         ? ids
-            .map((id) => sourceNameOr(sources, id, text("来源待核对")))
+            .map((id) =>
+              id === library.unattributedSource
+                ? text("未识别来源")
+                : sourceNameOr(sources, id, text("来源待核对")),
+            )
             .join("、")
         : text("来源待核对");
     }
@@ -556,6 +577,8 @@ export function MemoryMap(props: Props) {
     setGroupNode(null);
     if (library) {
       clear();
+      // A source picked on the map sets this too; keep both on the one choice.
+      setGroupKey(key);
       library.onSource(key.startsWith("source:") ? key.slice(7) : "");
       library.resetPage();
       return;
@@ -611,6 +634,10 @@ export function MemoryMap(props: Props) {
       (source) =>
         source.authorized && groupKey === `source:${source.source_id}`,
     )?.display_name ??
+    (library?.unattributedSource &&
+    groupKey === `source:${library.unattributedSource}`
+      ? text("未识别来源")
+      : null) ??
     text("全部记忆");
   if (
     props.simplified &&
@@ -740,6 +767,7 @@ export function MemoryMap(props: Props) {
               options={[
                 { value: "", label: text("全部应用") },
                 ...(library?.source &&
+                library.source !== library.unattributedSource &&
                 !sources.some(
                   (source) =>
                     source.source_id === library.source && source.authorized,
@@ -752,12 +780,22 @@ export function MemoryMap(props: Props) {
                     ]
                   : []),
                 ...(library
-                  ? sources
-                      .filter((source) => source.authorized)
-                      .map((source) => ({
-                        value: `source:${source.source_id}`,
-                        label: source.display_name,
-                      }))
+                  ? [
+                      ...sources
+                        .filter((source) => source.authorized)
+                        .map((source) => ({
+                          value: `source:${source.source_id}`,
+                          label: source.display_name,
+                        })),
+                      ...(library.unattributedSource
+                        ? [
+                            {
+                              value: `source:${library.unattributedSource}`,
+                              label: text("未识别来源"),
+                            },
+                          ]
+                        : []),
+                    ]
                   : groups.map((group) => ({
                       value: group.key,
                       label: group.label,
@@ -1038,11 +1076,23 @@ export function MemoryMap(props: Props) {
           !library.stale &&
           !filtered.length && (
             <p className="map-empty">
-              {library.query || library.source
+              {library.query
                 ? text("没有匹配的记忆")
-                : groupKey
-                  ? text("本页没有匹配的主题记忆")
-                  : text("还没有已生成的记忆")}
+                : library.source
+                  ? text("这个来源下还没有记忆")
+                  : groupKey
+                    ? text("本页没有匹配的主题记忆")
+                    : text("还没有已生成的记忆")}
+            </p>
+          )}
+        {libraryPane === "memories" &&
+          library?.page?.search_window &&
+          !library.loading &&
+          !library.failed && (
+            <p className="map-empty">
+              {text("只在最相关的 {count} 条记忆里查找关键词", {
+                count: count(library.page.search_window),
+              })}
             </p>
           )}
         {libraryPane === "memories" &&

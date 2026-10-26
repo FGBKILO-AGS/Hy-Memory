@@ -402,15 +402,25 @@ def test_sdk_memory_library_uses_sdk_search_and_skips_empty_rows_without_mutatio
                 )
                 assert response.status_code == 200
                 body = response.json()
-                # `total` counts the bounded relevance window; the superseded
-                # hit is in it but is not listed as an active memory.
+                # `total` counts the window's keyword matches; the superseded
+                # hit matches but is not listed as an active memory.
                 assert body["total"] == 2
+                assert body["search_window"] is None
                 assert [item["memory_id"] for item in body["memories"]] == ["release"]
                 assert search_calls[0][0] == "release"
                 assert search_calls[0][1]["include_sources"] == ["cursor"]
                 assert search_calls[0][1]["limit"] == 500
                 assert search_calls[0][1]["intention_limit"] == 0
+                assert search_calls[0][1]["min_score"] == 0.0
                 assert list_calls == []
+
+                # The SDK still returns its nearest rows for a word that is in
+                # none of them; the library reports no match instead.
+                unmatched = await client.get(
+                    "/api/v2/memory-library", params={"query": "zzz nowhere"}
+                )
+                assert unmatched.json()["total"] == 0
+                assert unmatched.json()["memories"] == []
 
                 listed = await client.get(
                     "/api/v2/memory-library",

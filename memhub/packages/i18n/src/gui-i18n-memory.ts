@@ -146,6 +146,10 @@ export const memoryChineseMessages = {
   "memory:全部记忆": "全部记忆",
   "memory:来源待核对": "来源待核对",
   "memory:所选来源待核对": "所选来源待核对",
+  "memory:未识别来源": "未识别来源",
+  "memory:这个来源下还没有记忆": "这个来源下还没有记忆",
+  "memory:只在最相关的 {count} 条记忆里查找关键词":
+    "只在最相关的 {count} 条记忆里查找关键词",
   "memory:未知来源": "未知来源",
   "memory:记忆读取失败": "记忆读取失败",
   "memory:正在读取…": "正在读取…",
@@ -538,6 +542,10 @@ export const memorySpanishMessages: Record<
   "memory:全部记忆": "Todas las memorias",
   "memory:来源待核对": "Origen sin verificar",
   "memory:所选来源待核对": "Origen seleccionado sin verificar",
+  "memory:未识别来源": "Origen no identificado",
+  "memory:这个来源下还没有记忆": "Aún no hay recuerdos de este origen",
+  "memory:只在最相关的 {count} 条记忆里查找关键词":
+    "Las palabras clave solo se buscan entre los {count} recuerdos más relevantes",
   "memory:未知来源": "Origen desconocido",
   "memory:记忆读取失败": "Error al leer las memorias",
   "memory:正在读取…": "Leyendo…",
