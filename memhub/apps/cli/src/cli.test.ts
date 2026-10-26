@@ -833,13 +833,17 @@ describe("public One Memory CLI", () => {
         command: "upgrade",
         code: "restart failed",
       });
-      expect(JSON.parse(streams.stderr())).toMatchObject({ rolled_back: false });
+      expect(JSON.parse(streams.stderr())).toMatchObject({
+        rolled_back: false,
+      });
       // Product rule: the previous Runtime may predate the SDK migration gate,
       // so it is never restored after the migration was handed the home.
       expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
       expect(aliasMocks.rollbackManagedCliLink).not.toHaveBeenCalled();
       expect(runtimeMocks.restartUserService).toHaveBeenCalledOnce();
-      expect((runtimeMocks.restartUserService.mock.calls as unknown[][])[0]?.[0]).toMatchObject({
+      expect(
+        (runtimeMocks.restartUserService.mock.calls as unknown[][])[0]?.[0],
+      ).toMatchObject({
         dataDir: "/tmp/custom data",
         installRoot: "/tmp/install/current",
       });
@@ -987,7 +991,9 @@ describe("public One Memory CLI", () => {
       expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
       expect(aliasMocks.rollbackManagedCliLink).not.toHaveBeenCalled();
       expect(runtimeMocks.restartUserService).toHaveBeenCalledOnce();
-      expect((runtimeMocks.restartUserService.mock.calls as unknown[][])[0]?.[0]).toMatchObject({
+      expect(
+        (runtimeMocks.restartUserService.mock.calls as unknown[][])[0]?.[0],
+      ).toMatchObject({
         installRoot: "/tmp/install/current",
       });
     });

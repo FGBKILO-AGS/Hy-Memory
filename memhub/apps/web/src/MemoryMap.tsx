@@ -644,6 +644,7 @@ export function MemoryMap(props: Props) {
             ))}
           </fieldset>
         )}
+        {/* biome-ignore lint/a11y/useSemanticElements: the search form is the flex row .map-search styles; a <search> wrapper would add a box around it. */}
         <form
           className="map-search"
           role="search"
