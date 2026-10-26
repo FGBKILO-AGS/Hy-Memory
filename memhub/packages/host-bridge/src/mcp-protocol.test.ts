@@ -38,7 +38,6 @@ describe("MemHub MCP protocol", () => {
       "MemHub_recall",
       "MemHub_ask",
       "MemHub_conversations",
-      "MemHub_matters",
       "MemHub_context",
       "MemHub_memory_write",
       "MemHub_memory_write_status",
@@ -62,7 +61,6 @@ describe("MemHub MCP protocol", () => {
     }));
     const session = new McpSession(
       "/fixture/discovery.json",
-      undefined,
       undefined,
       undefined,
       undefined,

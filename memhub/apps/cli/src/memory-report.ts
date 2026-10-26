@@ -15,6 +15,29 @@ export function isMemoryId(value: string): boolean {
   );
 }
 
+const CONTENT_MAX_CHARACTERS = 100_000;
+
+/** A memory body read from `--content-file`: UTF-8, non-blank, bounded, and
+ * free of control characters other than tab and newline. */
+export function parseMemoryContent(bytes: Buffer): string | null {
+  if (bytes.byteLength > CONTENT_MAX_CHARACTERS * 4 + 2) return null;
+  let decoded: string;
+  try {
+    decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+  const content = decoded.replace(/\r?\n$/, "");
+  return content.trim().length > 0 &&
+    [...content].length <= CONTENT_MAX_CHARACTERS &&
+    ![...content].some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 8 || (code >= 11 && code <= 31) || code === 127;
+    })
+    ? content
+    : null;
+}
+
 export interface MemoryQuery {
   query?: string;
   status?: string;

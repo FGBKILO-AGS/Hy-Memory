@@ -8,14 +8,12 @@ import axios from "axios";
  */
 const READ_ONLY_PATHS = [
   "/api/v1/call-events",
-  "/api/v1/home-summary",
   "/api/v1/import-jobs",
   "/api/v1/live-sync",
-  "/api/v1/memory-library",
   "/api/v1/memory-processing",
-  "/api/v1/memory-tasks",
   "/api/v1/model-profiles",
   "/api/v1/sources",
+  "/api/v2/home-summary",
   "/api/v2/memory-library",
   "/api/v2/user-profile",
 ] as const;
@@ -67,13 +65,10 @@ export function createUiSessionRequest(attachment: {
   };
 }
 
-const MEMORY_DETAIL = /^\/api\/v1\/memories\/[A-Za-z0-9][\w.-]{0,127}$/;
 const IMPORT_JOB =
   /^\/api\/v1\/import-jobs\/[A-Za-z0-9][\w.-]{0,127}(?:\/issues)?$/;
 const OPERATION_RECEIPT =
   /^\/api\/v1\/(?:source-connections|model-profile-creations|model-probe-operations)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const MEMORY_MUTATION_RECEIPT =
-  /^\/api\/v1\/memory-mutations\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /**
  * Core registers these static routes before `/{memory_id}`, so a memory whose
  * id happens to be one of them would reach a different handler: `graph`
@@ -173,7 +168,7 @@ export function createCoreContextQuery(attachment: {
     let response: { status: number; data: unknown };
     try {
       response = await client.post(
-        "/api/v1/context/search",
+        "/api/v2/context/search",
         body,
         options?.signal ? { signal: options.signal } : undefined,
       );
@@ -197,10 +192,8 @@ export function isReadOnlyPath(path: string): boolean {
   if ((READ_ONLY_PATHS as readonly string[]).includes(path)) return true;
   if (IMPORT_JOB.test(path)) return true;
   if (OPERATION_RECEIPT.test(path)) return true;
-  if (MEMORY_MUTATION_RECEIPT.test(path)) return true;
-  if (SDK_MEMORY_DETAIL.test(path)) return true;
-  if (!MEMORY_DETAIL.test(path)) return false;
-  const segment = path.slice("/api/v1/memories/".length);
+  if (!SDK_MEMORY_DETAIL.test(path)) return false;
+  const segment = path.slice("/api/v2/memories/".length);
   return !(RESERVED_MEMORY_SEGMENTS as readonly string[]).includes(segment);
 }
 

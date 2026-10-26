@@ -2,19 +2,13 @@ import type {
   HostHomeSummary,
   LiveSyncHealth,
   MemoryProcessingSummary,
-  RecentConversationItem,
   SourceResponse,
 } from "@one-memory/contracts";
 import { type GuiLocale, isMessageKey } from "@one-memory/i18n";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import {
-  getHomeSummary,
-  getLiveSyncHealth,
-  getMemoryProcessing,
-  getRecentConversations,
-} from "./api";
+import { getHomeSummary, getLiveSyncHealth, getMemoryProcessing } from "./api";
 import { AppMark } from "./app-mark";
 import {
   type CallEvent,
@@ -61,14 +55,6 @@ type HomeViewState = {
  * 首页用它是否存在来决定要不要拉最近调用。
  */
 export const CALL_HISTORY_ENTRY_VISIBLE = false;
-
-// 2026-10-12: Codex 侧曾把 MCP 调试帧（如 `[write_stdout] {"chars":…`）存成
-// 对话摘要，首页“最近更新”会原样露出机器文本。展示层拦掉这类帧，宁可退回
-// 显示记忆或空态，也不把协议帧当动态内容。
-const DEBUG_FRAME_PREFIX = /^\s*\[(?:write_stdout|write_stderr|read_request)\b/;
-function presentableDialogue(text: string): boolean {
-  return !DEBUG_FRAME_PREFIX.test(text);
-}
 
 const retainedViews = new WeakMap<object, HomeViewState>();
 
@@ -189,8 +175,6 @@ export function ApplicationsHome({
   imports: ReturnType<typeof useImportSources>;
   onManage(sourceId?: string): void;
   onMemories(memoryId?: string): void;
-  /** 保留兼容旧调用方；“查看会话”入口已按产品要求下线。 */
-  onConversations?(): void;
   onSettings?(): void;
   onCalls?(): void;
   active?: boolean;
@@ -221,11 +205,6 @@ export function ApplicationsHome({
     "loading" | "ready" | "unavailable" | "disabled" | "incomplete"
   >("loading");
   const [callRevision, setCallRevision] = useState(0);
-  const [latestDialogue, setLatestDialogue] =
-    useState<RecentConversationItem | null>(null);
-  const [dialogueState, setDialogueState] = useState<
-    "loading" | "ready" | "unavailable"
-  >("loading");
   const [activityView, setActivityView] = useState<ActivityChoice | null>(null);
   const [restartingBackground, setRestartingBackground] = useState(false);
   useEffect(() => {
@@ -566,11 +545,10 @@ export function ApplicationsHome({
     async function refresh() {
       if (busy || document.hidden) return;
       busy = true;
-      const [home, state, sync, recent] = await Promise.allSettled([
+      const [home, state, sync] = await Promise.allSettled([
         getHomeSummary(),
         getMemoryProcessing(),
         getLiveSyncHealth(),
-        getRecentConversations({ limit: 1, recentActivity: true }),
         refreshSedimentation(),
       ]);
       busy = false;
@@ -586,12 +564,6 @@ export function ApplicationsHome({
       }
       if (state.status === "fulfilled") setProcessing(state.value);
       if (sync.status === "fulfilled") setSyncHealth(sync.value);
-      if (recent.status === "fulfilled") {
-        setLatestDialogue(recent.value.items[0] ?? null);
-        setDialogueState("ready");
-      } else {
-        setDialogueState("unavailable");
-      }
     }
     void refresh();
     const stop = subscribePoll({
@@ -611,15 +583,7 @@ export function ApplicationsHome({
     recentCall !== null &&
     (callState === "ready" || callState === "incomplete");
   const hasMemory = latest !== null && latest !== undefined;
-  const dialogueReady =
-    dialogueState === "ready" &&
-    latestDialogue !== null &&
-    presentableDialogue(latestDialogue.excerpt);
-  const updateKind: "memory" | "dialogue" | null = dialogueReady
-    ? "dialogue"
-    : hasMemory
-      ? "memory"
-      : null;
+  const updateKind: "memory" | null = hasMemory ? "memory" : null;
   const availableActivities: ActivityChoice[] = [
     ...(hasCall ? (["call"] as const) : []),
     ...(updateKind ? (["update"] as const) : []),
@@ -906,9 +870,7 @@ export function ApplicationsHome({
             </div>
             <div className="r6-home-activity">
               {availableActivities.length > 1 &&
-              (activity === "call" ||
-                activity === "memory" ||
-                activity === "dialogue") ? (
+              (activity === "call" || activity === "memory") ? (
                 <div className="r6-home-activity-tabs" role="tablist">
                   {(["update", "call"] as const).map((item) => (
                     <button
@@ -918,7 +880,7 @@ export function ApplicationsHome({
                       aria-selected={
                         item === "call"
                           ? activity === "call"
-                          : activity === "memory" || activity === "dialogue"
+                          : activity === "memory"
                       }
                       onClick={() => setActivityView(item)}
                     >
@@ -934,7 +896,7 @@ export function ApplicationsHome({
                     ? t("apps.activityUnavailable")
                     : activity === "call"
                       ? t("apps.recentCall")
-                      : activity === "dialogue" || activity === "memory"
+                      : activity === "memory"
                         ? t("apps.recentUpdate")
                         : t("apps.firstBatch")}
                 </p>
@@ -964,13 +926,6 @@ export function ApplicationsHome({
                     );
                     return source ? <SourceMark source={source} /> : null;
                   })()
-                ) : activity === "dialogue" && latestDialogue ? (
-                  (() => {
-                    const source = imports.sources.find(
-                      (item) => item.source_id === latestDialogue.source_id,
-                    );
-                    return source ? <SourceMark source={source} /> : null;
-                  })()
                 ) : null}
                 <section>
                   <h3>
@@ -987,17 +942,15 @@ export function ApplicationsHome({
                           )
                         : activity === "memory" && latest
                           ? `${latest.content}${"truncated" in latest && latest.truncated ? "…" : ""}`
-                          : activity === "dialogue" && latestDialogue
-                            ? `${latestDialogue.excerpt}${latestDialogue.truncated ? "…" : ""}`
-                            : activity === "importing"
-                              ? t("apps.importing")
-                              : activity === "first-running"
-                                ? t("apps.firstRunning")
-                                : activity === "first-queued"
-                                  ? t("apps.firstQueued")
-                                  : activity === "loading"
-                                    ? t("apps.readingActivity")
-                                    : t("apps.emptyMemories")}
+                          : activity === "importing"
+                            ? t("apps.importing")
+                            : activity === "first-running"
+                              ? t("apps.firstRunning")
+                              : activity === "first-queued"
+                                ? t("apps.firstQueued")
+                                : activity === "loading"
+                                  ? t("apps.readingActivity")
+                                  : t("apps.emptyMemories")}
                   </h3>
                   <small>
                     {activity === "unavailable"
@@ -1010,11 +963,9 @@ export function ApplicationsHome({
                           ? "revision" in latest
                             ? `${time} · ${memoryAction(latest.action, t)} · ${latestSourceIds.map((id) => imports.sources.find((s) => s.source_id === id)?.display_name ?? id).join(", ")} · ${t("apps.revision", { count: new Intl.NumberFormat(locale).format(latest.revision) })}`
                             : `${time} · SDK ${latest.layer} · ${latestSourceIds.map((id) => imports.sources.find((s) => s.source_id === id)?.display_name ?? id).join("、")}`
-                          : activity === "dialogue" && latestDialogue
-                            ? `${clockParts(latestDialogue.created_at ?? latestDialogue.imported_at, locale)?.clock ?? t("apps.unknownTime")} ${latestDialogue.time_basis === "conversation" ? t("apps.conversationTime") : t("apps.importTime")} · ${imports.sources.find((source) => source.source_id === latestDialogue.source_id)?.display_name ?? latestDialogue.source_id}`
-                            : activity === "importing"
-                              ? t("apps.savingConversations")
-                              : t("apps.waitingMemories")}
+                          : activity === "importing"
+                            ? t("apps.savingConversations")
+                            : t("apps.waitingMemories")}
                   </small>
                 </section>
                 {(activity === "unavailable" ||

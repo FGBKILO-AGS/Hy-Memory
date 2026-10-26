@@ -79,6 +79,11 @@ ALLOWED = {
         "normal WAL-aware read-only view",
         calls=2,
     ),
+    ("sdk_migration_log.py", "migration_rows"): Allowed(
+        "a read-only snapshot of migration attempts for the migration log, taken "
+        "before the access layer exists (Core refusing a legacy home, sdk-migrate)",
+        opened_with="?mode=ro",
+    ),
     ("library_upgrade.py", "_backup_problem"): Allowed(
         "the finished upgrade backup, checked read-only before migration relies on it",
         opened_with="?mode=ro&immutable=1",

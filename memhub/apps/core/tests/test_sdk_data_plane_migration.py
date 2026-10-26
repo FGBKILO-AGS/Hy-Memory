@@ -1070,18 +1070,14 @@ def _app_settings(tmp_path) -> Settings:
 
 
 async def _authority(tmp_path) -> tuple[dict[str, object], str]:
+    """What a starting Core reads as authority, and the gate it then holds."""
     app = create_app(_app_settings(tmp_path), secret_store=InMemorySecretStore())
-    async with (
-        app.router.lifespan_context(app),
-        AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://test",
-            headers={"Authorization": "Bearer authority-test"},
-        ) as client,
-    ):
-        response = await client.get("/api/v2/memory-authority")
-        assert response.status_code == 200
-        return response.json(), app.state.memory_authority.value
+    async with app.router.lifespan_context(app):
+        authority, migration_id = app.state.sdk_data_plane_migrations.authority_state()
+        return (
+            {"authority": authority.value, "migration_id": migration_id},
+            app.state.memory_authority.value,
+        )
 
 
 @pytest.mark.integration
@@ -1196,7 +1192,6 @@ def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -
                 )
 
             app.state.sdk_memory_runtime.graph_snapshot = graph_snapshot
-            assert (await client.get("/api/v1/memories/graph")).status_code == 409
             response = await client.get(
                 "/api/v2/memories/graph",
                 params={"source": "cursor", "offset": 100, "limit": 100},

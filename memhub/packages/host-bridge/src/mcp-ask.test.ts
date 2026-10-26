@@ -23,7 +23,6 @@ describe("om_ask MCP tool", () => {
       "MemHub_recall",
       "MemHub_ask",
       "MemHub_conversations",
-      "MemHub_matters",
       "MemHub_context",
       "MemHub_memory_write",
       "MemHub_memory_write_status",
@@ -41,6 +40,7 @@ describe("om_ask MCP tool", () => {
 
   it("forwards question and scope, and injects host workspace_path", async () => {
     const ask = vi.fn(async () => ({
+      schema_version: 2 as const,
       answer: "现有记忆不足以回答这个问题。",
       memories: [],
       mode: "empty" as const,
@@ -74,6 +74,7 @@ describe("om_ask MCP tool", () => {
     });
     // Refuse must pass through unchanged — the bridge must not invent an answer.
     expect(response.result.structuredContent).toEqual({
+      schema_version: 2,
       answer: "现有记忆不足以回答这个问题。",
       memories: [],
       mode: "empty",

@@ -65,21 +65,15 @@ it("localizes the whole home live without repeating reads or changing imported t
   expect(summary).toHaveBeenCalledTimes(calls);
 });
 
-const {
-  summary,
-  processing,
-  sedimentation,
-  history,
-  liveSync,
-  recentConversations,
-} = vi.hoisted(() => ({
-  summary: vi.fn(),
-  processing: vi.fn(),
-  sedimentation: vi.fn(),
-  history: vi.fn(),
-  liveSync: vi.fn(),
-  recentConversations: vi.fn(),
-}));
+const { summary, processing, sedimentation, history, liveSync } = vi.hoisted(
+  () => ({
+    summary: vi.fn(),
+    processing: vi.fn(),
+    sedimentation: vi.fn(),
+    history: vi.fn(),
+    liveSync: vi.fn(),
+  }),
+);
 vi.mock("./call-history-client", async (original) => ({
   ...(await original<typeof import("./call-history-client")>()),
   getCallHistory: history,
@@ -89,7 +83,6 @@ vi.mock("./api", () => ({
   getLiveSyncHealth: liveSync,
   getMemoryProcessing: processing,
   getSedimentation: sedimentation,
-  getRecentConversations: recentConversations,
   getSources: vi.fn().mockResolvedValue([]),
 }));
 const sources = Array.from(
@@ -134,12 +127,6 @@ beforeEach(() => {
     imports_unaffected: true,
   });
   liveSync.mockReset().mockResolvedValue([]);
-  recentConversations.mockReset().mockResolvedValue({
-    items: [],
-    total: 0,
-    offset: 0,
-    limit: 1,
-  });
   window.oneMemory = {
     restartBackground: vi.fn().mockResolvedValue({ state: "restarted" }),
     getRecallHosts: vi.fn().mockResolvedValue([
@@ -212,38 +199,6 @@ it("localizes failure and empty states without leaking errors", async () => {
   ).toBeTruthy();
   expect(document.body.textContent).not.toContain("synthetic_private_error");
 });
-it("hides a debug-frame dialogue excerpt from 最近更新 and falls back to memory", async () => {
-  recentConversations.mockResolvedValue({
-    items: [
-      {
-        evidence_id: "ev-1",
-        conversation_id: "c1",
-        source_id: "app-1",
-        role: "user",
-        written_by: "user",
-        created_at: "2026-10-12T06:06:00Z",
-        imported_at: "2026-10-12T06:06:00Z",
-        time_basis: "conversation",
-        excerpt: '[write_stdout] {"chars":"{\\"session_id\\":93099}',
-        truncated: false,
-      },
-    ],
-    total: 1,
-    offset: 0,
-    limit: 1,
-  });
-  render(
-    <ApplicationsHome
-      imports={imports}
-      onManage={() => {}}
-      onMemories={() => {}}
-      onSettings={() => {}}
-    />,
-  );
-  await screen.findByText("实际治理记忆");
-  expect(screen.queryByText(/write_stdout/)).toBeNull();
-});
-
 it("shows latest recorded call separately from newly generated memory and opens its history", async () => {
   history.mockResolvedValue({
     available: true,
@@ -1253,49 +1208,6 @@ it("does not show zero connected apps while cold-start insertion is still applyi
   await screen.findByText("601");
   expect(screen.getByText("正在核对中")).toBeTruthy();
   expect(screen.queryByText("0 个应用已接入")).toBeNull();
-});
-
-it("shows a newly imported conversation ahead of an older memory", async () => {
-  recentConversations.mockResolvedValue({
-    items: [
-      {
-        evidence_id: "e-live",
-        conversation_id: "c1",
-        source_id: "app-0",
-        role: "user",
-        written_by: "person",
-        created_at: "2026-01-01T00:00:00Z",
-        imported_at: "2026-09-23T06:47:00Z",
-        excerpt: "刚从 Cursor 同步进来的原话",
-        truncated: false,
-      },
-    ],
-    total: 1,
-    offset: 0,
-    limit: 1,
-  });
-  const onConversations = vi.fn();
-  render(
-    <ApplicationsHome
-      imports={imports}
-      onManage={() => {}}
-      onMemories={() => {}}
-      onConversations={onConversations}
-      onSettings={() => {}}
-    />,
-  );
-  expect(await screen.findByText("刚从 Cursor 同步进来的原话")).toBeTruthy();
-  expect(screen.getAllByText("最近更新").length).toBeGreaterThan(0);
-  expect(screen.queryByText("对话")).toBeNull();
-  expect(screen.queryByText("记忆")).toBeNull();
-  expect(screen.queryByText(/原始对话/)).toBeNull();
-  // 查看会话入口已按产品要求从“最近更新”屏蔽（2026-10-12）。
-  expect(screen.queryByRole("button", { name: "查看会话" })).toBeNull();
-  expect(onConversations).not.toHaveBeenCalled();
-  expect(recentConversations).toHaveBeenCalledWith({
-    limit: 1,
-    recentActivity: true,
-  });
 });
 
 function homeWithHosts(getRecallHosts: ReturnType<typeof vi.fn>) {

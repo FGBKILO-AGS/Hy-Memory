@@ -102,6 +102,7 @@ import {
   wasOpenedByLegacyLoginItem,
 } from "./login-item";
 import { readLoginPreference, setLoginPreference } from "./login-preference";
+import { showMigrationFailureDialog } from "./migration-failure-dialog";
 import { isAllowedNavigation } from "./navigation-policy";
 import { installDenyAllPermissionPolicy } from "./permissions";
 import { isHostPresent, recallHosts } from "./recall-hosts";
@@ -743,7 +744,6 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       resourcesPath: process.resourcesPath,
       platform: process.platform,
     }),
-    readerEnabled: process.platform !== "win32",
     dataDir,
     attempts: app.isPackaged ? 300 : 50,
     delayMs: app.isPackaged ? 250 : 200,
@@ -1083,6 +1083,7 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
     const migration = await runStartupSdkMigration({
       dataDir,
       core,
+      caller: "desktop",
       runtimeBuild:
         packagedBuildNumber === undefined
           ? typeof app.getVersion === "function"
@@ -1694,6 +1695,21 @@ if (desktopVersion !== null) {
         "MemHub desktop failed",
         error instanceof Error ? error.name : "UnknownError",
       );
+      // An unfinished upgrade gets its own dialog: MemHub never runs on a
+      // half-migrated home, so the person is handed the log to report it.
+      if (
+        showMigrationFailureDialog({
+          error,
+          dataDir: runtimeDataDir,
+          locale: languagePreferences?.read().locale ?? "zh-CN",
+          dependencies: {
+            showMessageBoxSync: (options) => dialog.showMessageBoxSync(options),
+            showItemInFolder: (target) => shell.showItemInFolder(target),
+            openExternal: (url) => shell.openExternal(url),
+          },
+        })
+      )
+        return;
       dialog.showErrorBox(
         translate(
           languagePreferences?.read().locale ?? "zh-CN",

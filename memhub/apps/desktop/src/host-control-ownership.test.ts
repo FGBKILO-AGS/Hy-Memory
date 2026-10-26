@@ -317,14 +317,6 @@ async function invoke(channel: string, ...args: unknown[]) {
 }
 
 describe("packaged Desktop host-control ownership", () => {
-  it("enables the read-only Reader on non-Windows desktop launch", async () => {
-    await startup();
-
-    expect(fake.coreOptions).toMatchObject({
-      readerEnabled: process.platform !== "win32",
-    });
-  });
-
   it("blocks every host write when an explicit noncanonical data directory is used", async () => {
     fake.dataDir = path.join(fake.home, "coldstart", "data");
     await mkdir(fake.dataDir, { recursive: true, mode: 0o700 });

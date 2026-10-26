@@ -207,11 +207,14 @@ describe("RecallBroker", () => {
         response.setHeader("Content-Type", "application/json");
         response.end(
           JSON.stringify(
-            request.url === "/api/v2/memory-authority"
-              ? { authority: "legacy", migration_id: null }
-              : request.url === "/api/v1/memories/ask"
-                ? { answer: "empty", memories: [], mode: "empty" }
-                : { state: "empty" },
+            request.url === "/api/v2/memories/ask"
+              ? {
+                  schema_version: 2,
+                  answer: "empty",
+                  memories: [],
+                  mode: "empty",
+                }
+              : { state: "empty" },
           ),
         );
       });
@@ -260,11 +263,14 @@ describe("RecallBroker", () => {
         response.setHeader("Content-Type", "application/json");
         response.end(
           JSON.stringify(
-            request.url === "/api/v2/memory-authority"
-              ? { authority: "legacy", migration_id: null }
-              : request.url === "/api/v1/memories/ask"
-                ? { answer: "empty", memories: [], mode: "empty" }
-                : { state: "empty" },
+            request.url === "/api/v2/memories/ask"
+              ? {
+                  schema_version: 2,
+                  answer: "empty",
+                  memories: [],
+                  mode: "empty",
+                }
+              : { state: "empty" },
           ),
         );
       });
@@ -304,14 +310,7 @@ describe("RecallBroker", () => {
     "preserves %s scope denial instead of claiming Core is offline",
     async (endpoint) => {
       const diagnostics: Array<Record<string, unknown>> = [];
-      const core = createServer((request, response) => {
-        if (request.url === "/api/v2/memory-authority") {
-          response.setHeader("Content-Type", "application/json");
-          response.end(
-            JSON.stringify({ authority: "legacy", migration_id: null }),
-          );
-          return;
-        }
+      const core = createServer((_request, response) => {
         response.statusCode = 403;
         response.setHeader("Content-Type", "application/json");
         response.end(

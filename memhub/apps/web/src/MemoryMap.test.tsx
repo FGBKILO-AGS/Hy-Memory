@@ -36,29 +36,14 @@ it("traduce los controles del mapa en español sin cambiar etiquetas importadas"
 });
 
 import { useState } from "react";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  DIALOGUE_PANE_VISIBLE,
-  hitToDialogueItem,
-  MemoryMap,
-} from "./MemoryMap";
+import { afterEach, expect, it, vi } from "vitest";
+import { MemoryMap } from "./MemoryMap";
 import type { MemoryArrival } from "./memory-arrival-state";
 
-const {
-  conversation,
-  recentConversations,
-  searchConversations,
-  sourceReceipt,
-} = vi.hoisted(() => ({
-  conversation: vi.fn(),
-  recentConversations: vi.fn(),
-  searchConversations: vi.fn(),
+const { sourceReceipt } = vi.hoisted(() => ({
   sourceReceipt: vi.fn(),
 }));
 vi.mock("./api", () => ({
-  getConversation: conversation,
-  getRecentConversations: recentConversations,
-  searchConversations,
   getSourceImportReceipt: sourceReceipt,
 }));
 vi.mock("./MemoryGraph3D", () => ({
@@ -85,15 +70,6 @@ vi.mock("./MemoryGraph3D", () => ({
     </div>
   ),
 }));
-beforeEach(() => {
-  recentConversations.mockResolvedValue({
-    items: [],
-    total: 0,
-    offset: 0,
-    limit: 30,
-  });
-  searchConversations.mockResolvedValue({ hits: [], empty_reason: "no_match" });
-});
 afterEach(() => {
   cleanup();
   vi.resetAllMocks();
@@ -397,10 +373,8 @@ function Host({
       onAsk={() => {}}
       onDraft={() => {}}
       onSave={() => {}}
-      onAction={() => {}}
-      onSyncIndex={() => {}}
+      onDelete={() => {}}
       onSaveAnswer={() => {}}
-      onBuildRelations={() => {}}
       onConnect={() => {}}
       onConfigureModel={onConfigureModel}
     />
@@ -486,8 +460,6 @@ it("D96: the memory page has no raw-dialogue tab and never loads the dialogue li
   expect(screen.queryByRole("tab", { name: "原始对话" })).toBeNull();
   expect(screen.queryByRole("tablist", { name: "记忆或原始对话" })).toBeNull();
   expect(screen.getByRole("list", { name: "地图记忆列表" })).toBeTruthy();
-  await act(async () => {});
-  expect(recentConversations).not.toHaveBeenCalled();
 });
 
 it("D96: lists a memory by when its conversation happened, not when it was generated", () => {
@@ -615,60 +587,6 @@ it("D96: with conversations imported and no memory yet, says how many were impor
   expect(screen.getByText(/已导入 12 段对话/)).toBeTruthy();
 });
 
-it.skipIf(!DIALOGUE_PANE_VISIBLE)(
-  "lets keyboard arrows move between the memory and original-dialogue tabs",
-  async () => {
-    const user = userEvent.setup();
-    render(<Host simplified />);
-    const memoriesTab = screen.getByRole("tab", { name: "记忆" });
-    const dialoguesTab = screen.getByRole("tab", { name: "原始对话" });
-    expect(memoriesTab.getAttribute("aria-selected")).toBe("true");
-    expect(dialoguesTab.getAttribute("aria-selected")).toBe("false");
-    memoriesTab.focus();
-    await user.keyboard("{ArrowRight}");
-    expect(dialoguesTab.getAttribute("aria-selected")).toBe("true");
-    expect(document.activeElement).toBe(dialoguesTab);
-    await user.keyboard("{ArrowLeft}");
-    expect(memoriesTab.getAttribute("aria-selected")).toBe("true");
-    expect(document.activeElement).toBe(memoriesTab);
-  },
-);
-
-it.skipIf(!DIALOGUE_PANE_VISIBLE)(
-  "searches all conversations through the backend in simplified mode",
-  async () => {
-    conversation.mockResolvedValueOnce({
-      conversation_id: "conversation-1",
-      source_id: "workbuddy",
-      messages: [],
-    });
-    searchConversations.mockResolvedValue({
-      hits: [
-        {
-          evidence_id: "hit-1",
-          source_id: "workbuddy",
-          conversation_id: "conversation-1",
-          excerpt: "红眼航班要靠过道",
-          imported_at: "2026-10-04T10:00:00Z",
-          written_by: "person",
-          truncated: false,
-        },
-      ],
-      empty_reason: null,
-      imported_messages: 1,
-    });
-    render(<Host simplified />);
-    await userEvent.click(screen.getByRole("tab", { name: "原始对话" }));
-    await userEvent.type(
-      screen.getByRole("textbox", { name: "筛选地图记忆" }),
-      "红眼",
-    );
-
-    expect(await screen.findByText("红眼航班要靠过道")).toBeTruthy();
-    expect(searchConversations).toHaveBeenLastCalledWith("红眼", 100);
-  },
-);
-
 it("simplifies the surface without a question form and disposes the hidden graph owner", () => {
   const view = render(<Host simplified />);
   expect(screen.queryByRole("textbox", { name: "向记忆提问" })).toBeNull();
@@ -728,7 +646,6 @@ it("adds real memories without replacing graph, current detail, or question draf
     (screen.getByRole("textbox", { name: "向记忆提问" }) as HTMLInputElement)
       .value,
   ).toBe("保留这个问题");
-  expect(screen.getByRole("button", { name: "共同原文" })).toBeDefined();
   expect(screen.getByText("新增 1 条记忆")).toBeDefined();
   await userEvent.click(
     screen.getByRole("button", { name: "关闭新增记忆提示" }),
@@ -756,7 +673,7 @@ it("does not reannounce removed and restored IDs as new memories", () => {
   view.rerender(<Host />);
   expect(screen.queryByText(/新增 .* 条记忆/)).toBeNull();
 });
-it("keeps graph, list and reverse evidence selections linked", async () => {
+it("keeps graph and list selections linked", async () => {
   render(<Host />);
   await userEvent.click(
     within(screen.getByRole("list", { name: "地图记忆列表" })).getByRole(
@@ -765,9 +682,8 @@ it("keeps graph, list and reverse evidence selections linked", async () => {
     ),
   );
   expect(screen.getByTestId("canvas").dataset.selected).toBe("memory:m0");
-  await userEvent.click(screen.getByRole("button", { name: "共同原文" }));
   await userEvent.click(
-    screen.getByRole("button", { name: "定位关联记忆：第二条" }),
+    screen.getByRole("button", { name: "图中选择 第二条" }),
   );
   expect(screen.getByTestId("canvas").dataset.selected).toBe("memory:m1");
   await userEvent.click(
@@ -779,33 +695,6 @@ it("keeps graph, list and reverse evidence selections linked", async () => {
       .getAttribute("aria-pressed"),
   ).toBe("true");
 });
-it("does not reopen a previous transcript after switching memory", async () => {
-  let finish: (value: unknown) => void = () => {};
-  conversation.mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        finish = resolve;
-      }),
-  );
-  render(<Host />);
-  await userEvent.click(
-    screen.getByRole("button", { name: "图中选择 第一条" }),
-  );
-  await userEvent.click(screen.getByRole("button", { name: "共同原文" }));
-  await userEvent.click(screen.getByRole("button", { name: "看完整对话" }));
-  await userEvent.click(
-    screen.getByRole("button", { name: "图中选择 第二条" }),
-  );
-  await act(async () =>
-    finish({
-      messages: [
-        { evidence_id: "old", verbatim: "过期原文", written_by: "person" },
-      ],
-    }),
-  );
-  expect(screen.queryByText("过期原文")).toBeNull();
-});
-
 it("MEM-MAP-13: closing a handoff does not clear the background selection", async () => {
   render(<Host />);
   await userEvent.click(
@@ -815,30 +704,6 @@ it("MEM-MAP-13: closing a handoff does not clear the background selection", asyn
   await userEvent.keyboard("{Escape}");
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(screen.getByTestId("canvas").dataset.selected).toBe("memory:m0");
-});
-
-it("MEM-EVID-02: reopening evidence clears its previous request error", async () => {
-  conversation.mockRejectedValue(new Error("unavailable"));
-  render(<Host />);
-  await userEvent.click(
-    screen.getByRole("button", { name: "图中选择 第一条" }),
-  );
-  const quote = screen.getByRole("button", { name: "共同原文" });
-  await userEvent.click(quote);
-  await userEvent.click(screen.getByRole("button", { name: "看完整对话" }));
-  expect(await screen.findByRole("alert")).toBeDefined();
-  await userEvent.click(quote);
-  await userEvent.click(quote);
-  expect(screen.queryByRole("alert")).toBeNull();
-});
-
-it("MEM-EVID-01: invalid evidence time stays unknown", async () => {
-  render(<Host date="not-a-date" />);
-  await userEvent.click(
-    screen.getByRole("button", { name: "图中选择 第一条" }),
-  );
-  expect(screen.queryByText("Invalid Date")).toBeNull();
-  expect(screen.getByText("时间未知")).toBeDefined();
 });
 
 it("GRF-08: filtering keeps a still-visible selection and clears an excluded one", async () => {
@@ -865,28 +730,6 @@ it("MEM-MAP-16: IME confirmation does not submit a question", () => {
   fireEvent.submit(form);
   expect((input as HTMLInputElement).value).toBe("当前背景");
   expect(screen.getByPlaceholderText("询问全部已授权可用记忆…")).toBeDefined();
-});
-
-it("MEM-EVID-05: an availability change without a memory revision clears an open transcript", async () => {
-  conversation.mockResolvedValue({
-    messages: [
-      {
-        evidence_id: "original",
-        written_by: "person",
-        verbatim: "完整敏感原文",
-      },
-    ],
-  });
-  const view = render(<Host />);
-  await userEvent.click(
-    screen.getByRole("button", { name: "图中选择 第一条" }),
-  );
-  await userEvent.click(screen.getByRole("button", { name: "共同原文" }));
-  await userEvent.click(screen.getByRole("button", { name: "看完整对话" }));
-  expect(await screen.findByText("完整敏感原文")).toBeDefined();
-  view.rerender(<Host available={false} />);
-  expect(screen.queryByText("完整敏感原文")).toBeNull();
-  expect(screen.queryByRole("button", { name: "看完整对话" })).toBeNull();
 });
 
 it.each(["hidden", "overlayBlocked"] as const)(
@@ -936,9 +779,6 @@ it.each(["hidden", "overlayBlocked"] as const)(
       </>,
     );
     expect(screen.getByRole("dialog", { name: "记忆与原文" })).toBe(panel);
-    expect(
-      within(panel).getByRole("button", { name: "共同原文" }),
-    ).toBeTruthy();
   },
 );
 
@@ -1000,19 +840,6 @@ const importedReceipt: Receipt = {
     },
   ],
 };
-const importedConversation = {
-  source_id: "codex",
-  conversation_id: "conversation-codex",
-  messages: [
-    {
-      evidence_id: "raw-codex",
-      role: "user",
-      written_by: "person",
-      created_at: null,
-      verbatim: "合成来源完整对话。",
-    },
-  ],
-};
 async function openSourceReceipt() {
   await userEvent.click(
     screen.getByRole("button", { name: "图中选择 Codex · 2 段" }),
@@ -1067,9 +894,8 @@ it("REV09: fallback search matches source names and IDs without bypassing the se
   expect(screen.queryByText("查看已读内容")).toBeNull();
 });
 
-it("REV09: source selection uses the actual permission-checked receipt and original conversation APIs", async () => {
+it("REV09: source selection uses the actual permission-checked receipt API", async () => {
   sourceReceipt.mockResolvedValue(importedReceipt);
-  conversation.mockResolvedValue(importedConversation);
   render(<Host items={[]} sources={importedSources} />);
   await openSourceReceipt();
   expect(
@@ -1079,10 +905,8 @@ it("REV09: source selection uses the actual permission-checked receipt and origi
   expect(screen.getByText("原始消息").nextElementSibling?.textContent).toBe(
     "5",
   );
-  expect(conversation).not.toHaveBeenCalled();
-  await userEvent.click(screen.getByRole("button", { name: "查看完整对话" }));
-  expect(await screen.findByText("合成来源完整对话。")).toBeTruthy();
-  expect(conversation).toHaveBeenCalledExactlyOnceWith("raw-codex");
+  // No raw conversation is read by id on the SDK data plane.
+  expect(screen.queryByRole("button", { name: "查看完整对话" })).toBeNull();
 });
 
 it.each(["revoked", "removed", "revoked-hidden"])(
@@ -1119,92 +943,23 @@ it.each(["revoked", "removed", "revoked-hidden"])(
   },
 );
 
-it("REV09: revocation clears an already visible original and rejects a later conversation response", async () => {
-  sourceReceipt.mockResolvedValue(importedReceipt);
-  conversation.mockResolvedValueOnce(importedConversation);
-  let finish: (value: unknown) => void = () => {};
-  const view = render(<Host items={[]} sources={[importedSources[0]]} />);
-  await openSourceReceipt();
-  await userEvent.click(
-    await screen.findByRole("button", { name: "查看完整对话" }),
-  );
-  expect(await screen.findByText("合成来源完整对话。")).toBeTruthy();
-  conversation.mockImplementationOnce(
-    () =>
-      new Promise((resolve) => {
-        finish = resolve;
-      }),
-  );
-  await userEvent.click(screen.getByRole("button", { name: "查看完整对话" }));
-  expect(conversation).toHaveBeenCalledTimes(2);
-  view.rerender(
-    <Host
-      items={[]}
-      sources={[{ ...importedSources[0], authorized: false }]}
-    />,
-  );
-  expect(document.querySelector(".source-import-receipt")).toBeNull();
-  await act(async () => finish(importedConversation));
-  view.rerender(<Host items={[]} sources={[importedSources[0]]} />);
-  expect(screen.queryByText("合成来源完整对话。")).toBeNull();
-  expect(screen.queryByText(importedReceipt.examples[0].excerpt)).toBeNull();
-});
-
-it("REV09: changing source discards the previous source's pending original", async () => {
-  sourceReceipt.mockResolvedValue(importedReceipt);
-  let finish: (value: unknown) => void = () => {};
-  conversation.mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        finish = resolve;
-      }),
-  );
-  render(<Host items={[]} sources={importedSources} />);
-  await openSourceReceipt();
-  await userEvent.click(
-    await screen.findByRole("button", { name: "查看完整对话" }),
-  );
-  await userEvent.click(screen.getByRole("button", { name: /全部记忆/ }));
-  await userEvent.click(
-    screen.getByRole("button", { name: "图中选择 Cursor · 1 段" }),
-  );
-  await act(async () => finish(importedConversation));
-  expect(screen.queryByText("合成来源完整对话。")).toBeNull();
-  expect(screen.queryByText(importedReceipt.examples[0].excerpt)).toBeNull();
-  expect(screen.getByTestId("canvas").dataset.selected).toBe(
-    "source:cursor-local",
-  );
-  expect(sourceReceipt).toHaveBeenCalledTimes(1);
-});
-
-it("REV09: compact preview close discards a pending original but keeps source selection for reopening", async () => {
+it("REV09: compact preview close keeps source selection for reopening", async () => {
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: query.includes("max-width"),
     addEventListener() {},
     removeEventListener() {},
   }));
   sourceReceipt.mockResolvedValue(importedReceipt);
-  let finish: (value: unknown) => void = () => {};
-  conversation.mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        finish = resolve;
-      }),
-  );
   render(<Host items={[]} sources={importedSources} />);
   await openSourceReceipt();
-  await userEvent.click(
-    await screen.findByRole("button", { name: "查看完整对话" }),
-  );
+  await screen.findByText(importedReceipt.examples[0].excerpt);
   await userEvent.click(screen.getByRole("button", { name: "关闭记忆详情" }));
-  await act(async () => finish(importedConversation));
   expect(document.querySelector(".source-import-receipt")).toBeNull();
   expect(screen.getByTestId("canvas").dataset.selected).toBe("source:codex");
   await userEvent.click(
     screen.getByRole("button", { name: "查看选中来源原文" }),
   );
   expect(screen.getByRole("dialog", { name: "记忆与原文" })).toBeTruthy();
-  expect(screen.queryByText("合成来源完整对话。")).toBeNull();
   expect(screen.getByText("查看已读内容")).toBeTruthy();
 });
 
@@ -1222,7 +977,6 @@ it("REV09: first governed memories replace fallback without remounting the graph
   );
   expect(canvas.dataset.selected).toBe("memory:m0");
   expect(screen.queryByText("查看已读内容")).toBeNull();
-  expect(screen.getByRole("button", { name: "共同原文" })).toBeTruthy();
 });
 
 it.each([
@@ -1246,30 +1000,4 @@ it.each([
   expect(screen.queryByTestId("canvas")).toBeNull();
   expect(document.querySelector(".source-import-receipt")).toBeNull();
   expect(sourceReceipt).not.toHaveBeenCalled();
-});
-
-const searchHit = {
-  evidence_id: "hit-1",
-  conversation_id: "conversation-1",
-  source_id: "workbuddy",
-  workspace: null,
-  project: null,
-  created_at: "2026-10-04T10:00:00Z",
-  excerpt: "红眼航班要靠过道",
-  role: "assistant",
-  written_by: "agent",
-};
-
-it("BUG-02: a search hit listed as a dialogue stays with who wrote it", () => {
-  expect(hitToDialogueItem(searchHit)).toMatchObject({
-    role: "assistant",
-    written_by: "agent",
-  });
-});
-
-it("BUG-02: a search hit with no time of its own falls back to its import", () => {
-  expect(hitToDialogueItem({ ...searchHit, created_at: null })).toMatchObject({
-    imported_at: "",
-    time_basis: "import",
-  });
 });

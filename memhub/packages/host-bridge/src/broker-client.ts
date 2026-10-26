@@ -4,12 +4,10 @@ import path from "node:path";
 import type {
   AskMemoryRequest,
   ContextSearchRequest,
-  ConversationSearchResponse,
-  HostAskMemoryResponse,
-  HostContextSearchResponse,
-  MatterContext,
   RecallReceipt,
   RecallRequest,
+  SdkAskMemoryResponse,
+  SdkContextSearchResponse,
 } from "@one-memory/contracts";
 import axios from "axios";
 import {
@@ -18,6 +16,7 @@ import {
   isContextSearchRequest,
 } from "./context-protocol.js";
 import { readDiscovery } from "./discovery.js";
+import type { MemoryWriteRequest } from "./memory-write-protocol.js";
 
 export type HostCredentialProvider = () => string | Promise<string>;
 
@@ -59,44 +58,6 @@ export async function diagnosticTraceThroughBroker(
   );
 }
 
-export interface BoundaryPeekResponse {
-  hookSpecificOutput?: {
-    hookEventName: string;
-    additionalContext: string;
-  };
-  one_memory_ack?: string;
-}
-
-export function boundaryPeekThroughBroker(
-  discoveryPath: string,
-  request: unknown,
-  timeout: number,
-  options?: BrokerClientOptions,
-): Promise<BoundaryPeekResponse> {
-  return postThroughBroker(
-    discoveryPath,
-    "boundary/peek",
-    request,
-    timeout,
-    options,
-  );
-}
-
-export function boundaryAckThroughBroker(
-  discoveryPath: string,
-  token: string,
-  timeout: number,
-  options?: BrokerClientOptions,
-): Promise<{ acknowledged: boolean }> {
-  return postThroughBroker(
-    discoveryPath,
-    "boundary/ack",
-    { token },
-    timeout,
-    options,
-  );
-}
-
 export type BrokerClientErrorCode =
   | "host_credential_unavailable"
   | "host_authorization_required"
@@ -108,6 +69,8 @@ export type BrokerClientErrorCode =
   | "context_unavailable"
   | "context_cancelled"
   | "context_timeout"
+  | "memory_write_conflict"
+  | "memory_write_invalid"
   | "broker_request_failed"
   | "broker_unavailable";
 
@@ -122,6 +85,9 @@ const CLIENT_MESSAGES: Record<BrokerClientErrorCode, string> = {
     "MemHub context response is invalid or incompatible.",
   context_unavailable:
     "MemHub is running, but context search is temporarily unavailable.",
+  memory_write_conflict:
+    "MemHub already holds a different write under this request_id. Poll MemHub_memory_write_status for it, or use a new request_id for new content.",
+  memory_write_invalid: "MemHub rejected this memory write as invalid.",
   host_credential_unavailable:
     "MemHub host credential is unavailable. Re-link this installation in MemHub.",
   host_authorization_required:
@@ -261,19 +227,11 @@ export async function grantedToolsThroughBroker(
   }
 }
 
-export async function mattersThroughBroker(
-  discoveryPath: string,
-  request: { query: string },
-  options?: BrokerClientOptions,
-): Promise<MatterContext[]> {
-  return postThroughBroker(discoveryPath, "matters", request, 15_000, options);
-}
-
-/** A write accepted by the unified Memory Server entry.
+/** A write accepted by Core's v2 memory-write entry.
  *
  * `request_id` is the durable handle a caller keeps: it can be queried later
- * with `memoryWriteStatusThroughBroker` instead of retrying the write. Retrying
- * is unsafe because HY has no idempotency key (A0-03).
+ * with `memoryWriteStatusThroughBroker` instead of resubmitting. A retry must
+ * reuse the same id; Core treats it as the idempotency key.
  */
 export interface MemoryWriteReceipt {
   request_id: string;
@@ -281,23 +239,18 @@ export interface MemoryWriteReceipt {
   created_at: string;
   updated_at: string;
   detail?: string;
+  raw_ids?: string[];
+  memory_ids?: string[];
 }
 
-/** A3-02: submit a write through the same durable entry every entry uses.
+/** Submit a write through the broker to Core `POST /api/v2/memory-writes`.
  *
- * The MCP tool is one of several doors (HTTP, scanner, hooks); all of them land
- * in the same queue. Nothing here calls HY directly.
+ * The broker authenticates the installation and names the source from it;
+ * nothing here calls HY directly.
  */
 export async function memoryWriteThroughBroker(
   discoveryPath: string,
-  request: {
-    internal_session_id: string;
-    first_round: number;
-    last_round: number;
-    evidence_ids: string[];
-    priority?: "live" | "normal";
-    idempotency_key?: string;
-  },
+  request: MemoryWriteRequest,
   options?: BrokerClientOptions,
 ): Promise<MemoryWriteReceipt> {
   return postThroughBroker(
@@ -382,7 +335,7 @@ export async function contextThroughBroker(
   discoveryPath: string,
   asked: ContextSearchRequest,
   options?: BrokerClientOptions,
-): Promise<HostContextSearchResponse> {
+): Promise<SdkContextSearchResponse> {
   if (!isContextSearchRequest(asked))
     throw new BrokerClientError("context_invalid_request");
   const request = {
@@ -434,7 +387,7 @@ export async function askThroughBroker(
   discoveryPath: string,
   request: AskMemoryRequest,
   options?: BrokerClientOptions,
-): Promise<HostAskMemoryResponse> {
+): Promise<SdkAskMemoryResponse> {
   return postThroughBroker(discoveryPath, "ask", request, 125_000, options);
 }
 
@@ -442,12 +395,13 @@ export async function askThroughBroker(
  *
  * Separate from recall on purpose. Recall answers "what does MemHub know
  * about me"; this answers "what did I actually say over there", which is what
- * an agent needs to pick a piece of work back up. */
+ * an agent needs to pick a piece of work back up. The broker reads Core's raw
+ * context lane, so the answer is an SDK context response of raw items only. */
 export async function searchConversationsThroughBroker(
   discoveryPath: string,
   request: { query: string; limit?: number },
   options?: BrokerClientOptions,
-): Promise<ConversationSearchResponse> {
+): Promise<SdkContextSearchResponse> {
   return postThroughBroker(
     discoveryPath,
     "conversations",
@@ -482,10 +436,7 @@ async function postThroughBroker<T>(
     | "recall"
     | "ask"
     | "conversations"
-    | "matters"
     | "context"
-    | "boundary/peek"
-    | "boundary/ack"
     | "call-events/delivery"
     | "memory-writes"
     | "diagnostics/trace",
@@ -521,6 +472,15 @@ async function postThroughBroker<T>(
         throw new BrokerClientError("context_upgrade_required");
       if (endpoint === "context" && (error.response?.status ?? 0) >= 500)
         throw new BrokerClientError("context_unavailable");
+      // A reused request_id with different content is a conflict, not an
+      // outage: the caller must pick a new id or poll the original.
+      if (endpoint === "memory-writes" && error.response?.status === 409)
+        throw new BrokerClientError("memory_write_conflict");
+      if (
+        endpoint === "memory-writes" &&
+        [400, 422].includes(error.response?.status ?? 0)
+      )
+        throw new BrokerClientError("memory_write_invalid");
       if (error.response?.status === 401)
         throw new BrokerClientError("host_authorization_required");
       if (error.response?.status === 403) {

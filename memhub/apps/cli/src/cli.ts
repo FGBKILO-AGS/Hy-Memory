@@ -32,6 +32,7 @@ import {
   processIsAlive,
   type ResolvedRuntimeRelease,
   RuntimeDiscoveryError,
+  readSdkMigrationBlock,
   removeRuntimeServiceOwner,
   resolveRuntimeCliConfig,
   resolveRuntimeRelease,
@@ -42,6 +43,7 @@ import {
   runSdkMigration,
   runtimeInstallLayout,
   type SdkMigrationResult,
+  sdkMigrationLogPath,
   stopRuntimeProcess,
 } from "@one-memory/runtime-control";
 import axios from "axios";
@@ -178,20 +180,9 @@ import {
   rollbackManagedCliLink,
 } from "./managed-cli-link.js";
 import {
-  executeMemoryMutation,
-  inspectMemoryPlan,
-  type MemoryFlowDocument,
-  memoryFlowExitCode,
-  memoryPlanAcceptsContent,
-  parseMemoryContent,
-  planExistingMemoryMutation,
-  planMemoryAdd,
-  readMemoryMutationReceipt,
-  renderMemoryFlowText,
-} from "./memory-flows.js";
-import {
   isMemoryId,
   type MemoryQuery,
+  parseMemoryContent,
   readMemoryDetail,
   readMemoryPage,
   renderMemoryDetailText,
@@ -1197,6 +1188,28 @@ async function runCommand(
           : state === "already_running"
             ? "MemHub Runtime 已在运行。\n"
             : "Runtime 服务已注册但未就绪；请运行 memhub logs 查看原因。\n";
+    // A Runtime that did not come up because its service refuses to serve an
+    // unmigrated home reports that cause, the migration log and where to send
+    // it, instead of a generic budget timeout.
+    const migrationBlocked = async (): Promise<string | null> => {
+      const blocked = await runtimeMigrationBlock(config.dataDir, command);
+      if (blocked === null) return null;
+      return asJson
+        ? `${JSON.stringify({
+            schema_version: 1,
+            product: PRODUCT,
+            command,
+            state: "blocked",
+            code: blocked.code,
+            message: blocked.message,
+            log_file: blocked.log_file,
+            issues_url: blocked.issues_url,
+          })}\n`
+        : `${blocked.message}\n`;
+    };
+    const notReady = async () =>
+      (await migrationBlocked()) ??
+      lifecycle("not-ready", "runtime_not_ready_within_budget");
     // A launchd-managed Runtime must be driven through launchctl. Spawning a
     // second process while the service holds the data directory is exactly what
     // produced "Runtime exited before becoming ready".
@@ -1241,16 +1254,12 @@ async function runCommand(
             process.stdout.write(lifecycle("restarted", "runtime_verified"));
             return EXIT_OK;
           }
-          process.stdout.write(
-            lifecycle("not-ready", "runtime_not_ready_within_budget"),
-          );
+          process.stdout.write(await notReady());
           await restoreEnableState();
           return EXIT_FAILED;
         }
         if (restarted === "not-ready") {
-          process.stdout.write(
-            lifecycle("not-ready", "runtime_not_ready_within_budget"),
-          );
+          process.stdout.write(await notReady());
           await restoreEnableState();
           return EXIT_FAILED;
         }
@@ -1306,16 +1315,12 @@ async function runCommand(
           process.stdout.write(lifecycle("started", "runtime_verified"));
           return EXIT_OK;
         }
-        process.stdout.write(
-          lifecycle("not-ready", "runtime_not_ready_within_budget"),
-        );
+        process.stdout.write(await notReady());
         await restoreEnableState();
         return EXIT_FAILED;
       }
       if (startedManaged === "not-ready") {
-        process.stdout.write(
-          lifecycle("not-ready", "runtime_not_ready_within_budget"),
-        );
+        process.stdout.write(await notReady());
         await restoreEnableState();
         return EXIT_FAILED;
       }
@@ -1344,6 +1349,11 @@ async function runCommand(
       // A spawned Runtime that exits before ready is a failure of this command,
       // not a crash: report it as a structured document (JSON) or a plain
       // message, with a non-zero exit, instead of letting it escape.
+      const blocked = await migrationBlocked();
+      if (blocked !== null) {
+        process.stdout.write(blocked);
+        return EXIT_FAILED;
+      }
       const message = error instanceof Error ? error.message : String(error);
       process.stdout.write(
         asJson
@@ -1540,6 +1550,24 @@ async function runCommand(
       return uiExitCode(result);
     };
     if (attachment === null) {
+      const migration = await runtimeMigrationBlock(config.dataDir, "ui");
+      if (migration !== null) {
+        emit(
+          asJson
+            ? `${JSON.stringify({
+                schema_version: 1,
+                product: PRODUCT,
+                command: "ui",
+                state: "blocked",
+                code: migration.code,
+                message: migration.message,
+                log_file: migration.log_file,
+                issues_url: migration.issues_url,
+              })}\n`
+            : `ui 未打开：${migration.code}\n${migration.message}\n`,
+        );
+        return uiExitCode({ state: "blocked", code: migration.code });
+      }
       return emitUi(
         { state: "blocked", code: "runtime_not_running" },
         `先运行 ${PRODUCT} start 启动 Runtime。`,
@@ -1644,7 +1672,7 @@ async function runCommand(
     });
     if (runtime.state !== "running") {
       const document: ContextSearchDocument = {
-        schema_version: 1,
+        schema_version: 2,
         product: PRODUCT,
         state: "unavailable",
         code: runtime.code,
@@ -1668,7 +1696,7 @@ async function runCommand(
           timeout_ms: parsed.timeoutMs,
         })
       : ({
-          schema_version: 1,
+          schema_version: 2,
           product: PRODUCT,
           state: "unavailable",
           code: attached.failure ?? "runtime_attach_failed",
@@ -2434,20 +2462,20 @@ async function runCommand(
       };
     }
     if (blocked || !reader) {
-      if (
-        parsed.kind === "update" ||
-        parsed.kind === "delete" ||
-        parsed.kind === "plan-add" ||
-        parsed.kind === "plan-existing" ||
-        parsed.kind === "apply"
-      ) {
-        const document: MemoryFlowDocument = {
-          schema_version: 1,
+      if (parsed.kind === "update" || parsed.kind === "delete") {
+        const document = {
+          schema_version: 2,
           product: PRODUCT,
           state: "unknown",
+          operation: parsed.kind,
+          memory_id: parsed.memoryId,
           code: blocked?.code ?? "runtime_attach_failed",
         };
-        emitMemoryFlow(document, asJson);
+        emit(
+          asJson
+            ? `${JSON.stringify(document)}\n`
+            : `记忆操作未完成：${document.state}（${document.code}）\n`,
+        );
         return runtime.state === "stopped" ? 3 : 1;
       }
       const document =
@@ -2541,73 +2569,7 @@ async function runCommand(
       );
       return outcome.state === "committed" ? EXIT_OK : EXIT_FAILED;
     }
-    if (parsed.kind === "plan-add") {
-      const content = await readMemoryContentFile(parsed.contentFile);
-      if (content === null) return usage();
-      const document = planMemoryAdd({
-        content,
-        memoryKind: parsed.memoryKind,
-        scopes: parsed.scopes,
-        evidenceIds: parsed.evidenceIds,
-      });
-      emitMemoryFlow(document, asJson);
-      return memoryFlowExitCode(document);
-    }
-    if (parsed.kind === "plan-existing") {
-      let content: string | undefined;
-      if (parsed.contentFile) {
-        const read = await readMemoryContentFile(parsed.contentFile);
-        if (read === null) return usage();
-        content = read;
-      }
-      const document = await planExistingMemoryMutation(reader, {
-        operation: parsed.operation,
-        memoryId: parsed.memoryId,
-        ...(content === undefined ? {} : { content }),
-      });
-      emitMemoryFlow(document, asJson);
-      return memoryFlowExitCode(document);
-    }
-    if (!operations) {
-      const document: MemoryFlowDocument = {
-        schema_version: 1,
-        product: PRODUCT,
-        state: "unknown",
-        code: "runtime_attach_failed",
-      };
-      emitMemoryFlow(document, asJson);
-      return EXIT_FAILED;
-    }
-    const file = await readBoundedJson(parsed.planFile);
-    if (file === null) return usage();
-    const plan = unwrapPlan(file);
-    const identity = inspectMemoryPlan(plan);
-    if (!identity) return usage();
-    let content: string | undefined;
-    if (parsed.contentFile) {
-      const read = await readMemoryContentFile(parsed.contentFile);
-      if (read === null) return usage();
-      content = read;
-    }
-    if (
-      (identity.needsContent && content === undefined) ||
-      (!identity.needsContent && content !== undefined) ||
-      !memoryPlanAcceptsContent(plan, content)
-    ) {
-      return usage();
-    }
-    const attempt = await claimPlanAttempt(parsed.planFile, {
-      schema_version: 1,
-      operation_id: identity.operationId,
-      plan_digest: identity.digest,
-    });
-    if (attempt === "invalid") return usage();
-    const document =
-      attempt === "prior"
-        ? await readMemoryMutationReceipt(reader, plan)
-        : await executeMemoryMutation(plan, content, operations, reader);
-    emitMemoryFlow(document, asJson);
-    return memoryFlowExitCode(document);
+    return usage();
   }
   if (named === "calls" || named === "import-file") {
     const parsed = parseUiWriteCommand(named, arguments_.slice(1));
@@ -2817,10 +2779,15 @@ async function runCommand(
         if (!ready) throw new Error("runtime_service_activation_unverified");
         return plan;
       })
-      .catch((error: unknown) => {
+      .catch(async (error: unknown) => {
+        const migration =
+          error instanceof Error &&
+          error.message === "runtime_service_activation_unverified"
+            ? await runtimeMigrationBlock(layout.dataDir, "service-install")
+            : null;
         process.stderr.write(
           `${JSON.stringify(
-            serviceErrorDocument("service-install", error),
+            migration ?? serviceErrorDocument("service-install", error),
             null,
             2,
           )}\n`,
@@ -3155,6 +3122,9 @@ async function runCommand(
     let installReceiptWritten = false;
     let serviceApplied = false;
     let migrated = false;
+    // `null` until the migration is handed this home; "failed" if it threw.
+    let migrationState: SdkMigrationResult["state"] | "failed" | null = null;
+    let deferredCode: string | null = null;
     let previousOwner:
       | Awaited<ReturnType<typeof claimCliServiceOwnership>>
       | undefined;
@@ -3167,6 +3137,7 @@ async function runCommand(
       previousOwner = await claimCliServiceOwnership(layout.dataDir);
       // `install` over an existing home (reinstall, App-to-CLI takeover) must
       // migrate it too, before the new Runtime starts serving it.
+      migrationState = "failed";
       const migration = await (
         controls.migrateSdkData ?? migrateSdkDataBeforeStart
       )({
@@ -3174,15 +3145,24 @@ async function runCommand(
         dataDir: layout.dataDir,
         runtimeBuild: String(plan.build_number ?? plan.version),
         asJson: true,
+        caller: "cli-install",
       });
+      migrationState = migration.state;
+      // A deferred migration keeps this install: the new Runtime service is
+      // registered and its migration gate keeps Core down until the home is
+      // migrated. Rolling back would hand the home to the previous (App or CLI)
+      // Runtime, which has no gate and would serve the legacy data.
       if (migration.state === "deferred") {
-        throw new SdkMigrationDeferred(
-          migration.code ?? "sdk_migration_incomplete",
-        );
+        deferredCode = migration.code ?? "sdk_migration_incomplete";
       }
       migrated =
         migration.state === "cutover" || migration.state === "complete";
-      await applyPreparedServiceInstall(preparedService);
+      // From here the previous LaunchAgent is never re-bootstrapped: it may
+      // be an older Runtime with no migration gate.
+      await applyPreparedServiceInstall({
+        ...preparedService,
+        restorePreviousOnFailure: false,
+      });
       serviceApplied = true;
       // The receipt exists so a later command can find the data dir without
       // flags. An isolated install named its data dir explicitly, and writing
@@ -3198,6 +3178,7 @@ async function runCommand(
         });
         installReceiptWritten = true;
       }
+      if (deferredCode !== null) throw new SdkMigrationDeferred(deferredCode);
       // Registering the service is not the same as a working install: on a host
       // where Core cold-start stalls, launchd reports a pid while status is
       // still `runtime_service_running`. Gate on real readiness (same predicate
@@ -3233,10 +3214,38 @@ async function runCommand(
           );
         }
       };
-      if (migrated) {
-        // An older Runtime refuses a migrated home: keep this install.
+      // Once the migration has been handed this home nothing rolls back: the
+      // previous version (App or CLI) may be an older Runtime without the
+      // migration gate, and restoring it could serve a home that is not on SDK
+      // authority. This install stays; its service keeps Core down until the
+      // home is migrated. Only a failure before the migration ran (the
+      // previous Runtime was never stopped and the service never touched) is
+      // rolled back below.
+      if (migrationState !== null) {
+        if (!serviceApplied && !migrated && deferredCode === null) {
+          // The migration threw. Hand the data dir to this version's gated
+          // service anyway so that the previous Runtime does not come back.
+          await applyPreparedServiceInstall({
+            ...preparedService,
+            restorePreviousOnFailure: false,
+          }).catch(() => undefined);
+        }
         process.stderr.write(
-          `${JSON.stringify(notReadyAfterMigration("install"), null, 2)}\n`,
+          `${JSON.stringify(
+            deferredCode !== null
+              ? sdkMigrationFailure("install", deferredCode, layout.dataDir)
+              : migrated
+                ? notReadyAfterMigration("install")
+                : migrationState === "failed"
+                  ? sdkMigrationFailure(
+                      "install",
+                      sdkMigrationErrorCode(error),
+                      layout.dataDir,
+                    )
+                  : notReadyAfterUpgrade("install", error),
+            null,
+            2,
+          )}\n`,
         );
         return EXIT_FAILED;
       }
@@ -3249,13 +3258,7 @@ async function runCommand(
         await rollbackFilesAndOwner();
       }
       process.stderr.write(
-        `${JSON.stringify(
-          error instanceof SdkMigrationDeferred
-            ? sdkMigrationFailure("install", error.code)
-            : serviceErrorDocument("install", error),
-          null,
-          2,
-        )}\n`,
+        `${JSON.stringify(serviceErrorDocument("install", error), null, 2)}\n`,
       );
       return EXIT_FAILED;
     }
@@ -3618,9 +3621,17 @@ async function runCommand(
       | Awaited<ReturnType<typeof claimCliServiceOwnership>>
       | undefined;
     let migrated = false;
-    const rollbackUpgrade = async (
-      dataDir: string | undefined,
-    ): Promise<void> => {
+    // `null` until the migration is handed this home; "failed" if it threw.
+    let migrationState: SdkMigrationResult["state"] | "failed" | null = null;
+    /**
+     * Restore the previous version's files and ownership. Only used for a
+     * failure before the migration ran: the previous Runtime was never stopped
+     * and the service never restarted, so nothing new starts serving. After
+     * the migration has been handed the home the upgrade never rolls back:
+     * the previous Runtime may predate the migration gate and would serve a
+     * home that is not on SDK authority.
+     */
+    const rollbackUpgrade = async (): Promise<void> => {
       for (const receipt of memhubReceipts.reverse()) {
         await rollbackManagedCliLink(receipt);
       }
@@ -3630,25 +3641,29 @@ async function runCommand(
           () => undefined,
         );
       }
-      await restartUserService(
-        runtimeInstallLayout({
-          platform: plan.platform,
-          home: parsed.home,
-          installRoot: canonicalManagedServiceRoot(
-            plan.platform,
-            plan.current_link,
-          ),
-          dataDir,
-          ...hourlyIsolationFromEnvironment(environment),
-        }),
-        serviceOptions,
-      ).catch(() => undefined);
+    };
+    /**
+     * After a migration that did not finish, make sure the process holding the
+     * data dir is the new version's service (gated: it keeps Core down while
+     * the migration is deferred) and not the previous Runtime. The migration
+     * fence already stopped it unless the status probe itself failed.
+     */
+    const keepUpgradedRuntimeOffLegacyHome = async (): Promise<void> => {
+      try {
+        await restartUserService(layout, serviceOptions);
+      } catch {
+        await (controls.stopRuntime ?? stopRuntimeProcess)({
+          dataDir: parsed.dataDir ?? layout.dataDir,
+          probeIdentity,
+        }).catch(() => undefined);
+      }
     };
     try {
       for (const link of companionLinks) {
         memhubReceipts.push(await installManagedCliLink(link));
       }
       previousOwner = await claimCliServiceOwnership(layout.dataDir);
+      migrationState = "failed";
       const migration = await (
         controls.migrateSdkData ?? migrateSdkDataBeforeStart
       )({
@@ -3656,16 +3671,22 @@ async function runCommand(
         dataDir: parsed.dataDir ?? layout.dataDir,
         runtimeBuild: String(plan.build_number ?? plan.version),
         asJson,
+        caller: "cli-upgrade",
       });
+      migrationState = migration.state;
       if (migration.state === "deferred") {
-        await rollbackUpgrade(parsed.dataDir);
+        // Stay on the new version. Its Runtime service refuses to spawn Core
+        // while the migration is deferred, so nothing serves the legacy home;
+        // rolling back would restart the old Runtime, which has no such gate.
+        await keepUpgradedRuntimeOffLegacyHome();
         process.stderr.write(
-          `${JSON.stringify(sdkMigrationFailure("upgrade", migration.code ?? "sdk_migration_incomplete"), null, 2)}\n`,
+          `${JSON.stringify(sdkMigrationFailure("upgrade", migration.code ?? "sdk_migration_incomplete", parsed.dataDir ?? layout.dataDir), null, 2)}\n`,
         );
         return EXIT_FAILED;
       }
-      // An older Runtime refuses a migrated home, so from here a failure
-      // keeps the new version instead of rolling back to one that cannot start.
+      // From here a failure keeps the new version: an older Runtime either
+      // refuses a migrated home or, predating the migration gate, would serve
+      // one that is not on SDK authority.
       migrated =
         migration.state === "cutover" || migration.state === "complete";
       await restartUserService(layout, serviceOptions);
@@ -3673,8 +3694,8 @@ async function runCommand(
       // accepted the command. O-22: the first `upgrade` implementation
       // reported success even when the new artifact crash-looped, leaving
       // `current` on a version that never came up. Verify the restarted
-      // Runtime actually becomes healthy; if it does not, roll back to the
-      // previously working version.
+      // Runtime actually becomes healthy; if it does not, fail loudly. It is
+      // not rolled back (product rule: SDK authority or not serving at all).
       const dataDir = parsed.dataDir ?? layout.dataDir;
       const ready = await (controls.waitForRuntimeReady ?? waitForRuntimeReady)(
         dataDir,
@@ -3686,20 +3707,11 @@ async function runCommand(
         return EXIT_FAILED;
       }
       if (!ready) {
-        await rollbackUpgrade(parsed.dataDir);
+        // Not rolled back: see `rollbackUpgrade`. If the service is blocked on
+        // the migration (it re-runs it before spawning Core), say so.
+        const blocked = await runtimeMigrationBlock(dataDir, "upgrade");
         process.stderr.write(
-          `${JSON.stringify(
-            {
-              schema_version: 1,
-              product: PRODUCT,
-              command: "upgrade",
-              status: "error",
-              code: "upgrade_health_check_failed",
-              message: "新版本重启后未在限定时间内就绪，已回滚到上一版本。",
-            },
-            null,
-            2,
-          )}\n`,
+          `${JSON.stringify(blocked ?? notReadyAfterUpgrade("upgrade"), null, 2)}\n`,
         );
         return EXIT_FAILED;
       }
@@ -3712,9 +3724,32 @@ async function runCommand(
         });
       }
     } catch (error) {
-      if (!migrated) await rollbackUpgrade(parsed.dataDir);
+      if (migrationState === null) {
+        await rollbackUpgrade();
+        process.stderr.write(
+          `${JSON.stringify(serviceErrorDocument("upgrade", error), null, 2)}\n`,
+        );
+        return EXIT_FAILED;
+      }
+      if (migrated) {
+        // An older Runtime refuses a migrated home: keep the new version.
+        process.stderr.write(
+          `${JSON.stringify(notReadyAfterMigration("upgrade"), null, 2)}\n`,
+        );
+        return EXIT_FAILED;
+      }
+      if (migrationState === "failed") {
+        // The migration itself threw: its outcome is unknown, so treat the
+        // home as not migrated and keep the old Runtime off it.
+        await keepUpgradedRuntimeOffLegacyHome();
+        process.stderr.write(
+          `${JSON.stringify(sdkMigrationFailure("upgrade", sdkMigrationErrorCode(error), parsed.dataDir ?? layout.dataDir), null, 2)}\n`,
+        );
+        return EXIT_FAILED;
+      }
+      // `not_required`: the restart itself failed. Stay on the new version.
       process.stderr.write(
-        `${JSON.stringify(migrated ? notReadyAfterMigration("upgrade") : serviceErrorDocument("upgrade", error), null, 2)}\n`,
+        `${JSON.stringify(notReadyAfterUpgrade("upgrade", error), null, 2)}\n`,
       );
       return EXIT_FAILED;
     }
@@ -4100,11 +4135,13 @@ async function migrateSdkDataBeforeStart(options: {
   dataDir: string;
   runtimeBuild: string;
   asJson: boolean;
+  caller?: "cli-install" | "cli-upgrade";
 }): Promise<SdkMigrationResult> {
   return runSdkMigration({
     dataDir: options.dataDir,
     core: { command: options.coreCommand },
     runtimeBuild: options.runtimeBuild,
+    ...(options.caller === undefined ? {} : { caller: options.caller }),
     onProgress: (step) => {
       process.stderr.write(
         options.asJson
@@ -4133,33 +4170,105 @@ function notReadyAfterMigration(command: "install" | "upgrade") {
   };
 }
 
+/**
+ * The new version did not come up and was not rolled back: the previous one
+ * may predate the SDK migration gate. `error` carries the underlying code
+ * (a failed service restart), never free text from a child process.
+ */
+function notReadyAfterUpgrade(command: "install" | "upgrade", error?: unknown) {
+  return {
+    schema_version: 1,
+    product: PRODUCT,
+    command,
+    status: "error",
+    code:
+      error !== undefined
+        ? serviceErrorDocument(command, error).code
+        : command === "upgrade"
+          ? "upgrade_health_check_failed"
+          : "install_runtime_not_ready",
+    rolled_back: false,
+    message:
+      "新版本 Runtime 没有启动或没有在限定时间内就绪。为避免旧版本打开记忆数据，已保留新版本，没有回滚。请运行 memhub restart 重试，或运行 memhub doctor 查看原因；如果仍然失败，请在 GitHub 提交反馈：" +
+      MIGRATION_ISSUES_URL,
+    issues_url: MIGRATION_ISSUES_URL,
+  };
+}
+
 const SDK_MIGRATION_FAILURES: Record<string, string> = {
   sdk_migration_disk_space_insufficient:
-    "磁盘空间不足，记忆数据迁移没有完成，已回滚到上一版本。请腾出与记忆数据同等大小的空间后重试；原有记忆数据不会丢失。",
+    "磁盘空间不足，记忆数据迁移没有完成。请腾出与记忆数据同等大小的空间后运行 memhub restart 重试。",
   sdk_migration_memory_unreadable:
-    "核对发现新版本还读不到你的全部记忆，没有切换数据源，已回滚到上一版本。请把这个错误码反馈给我们；原有记忆数据不会丢失。",
+    "核对发现新版本还读不到你的全部记忆，没有切换数据源。",
   sdk_migration_model_profile_required:
-    "迁移需要先有可用的模型配置，用来核对新版本能否读回记忆。已回滚到上一版本；请先用 memhub models setup 完成配置后再升级。",
+    "迁移需要先有可用的模型配置，用来核对新版本能否读回记忆。请先用 memhub models setup 完成配置，再运行 memhub restart 重试。",
 };
 
-function sdkMigrationFailure(command: "install" | "upgrade", code: string) {
+const MIGRATION_ISSUES_URL =
+  "https://github.com/Tencent-Hunyuan/Hy-Memory/issues/new";
+
+/**
+ * Why MemHub is not serving: the home has not reached SDK authority.
+ *
+ * Product rule: after an upgrade the home is on SDK authority or MemHub does
+ * not serve it at all. Nothing here rolls back to an older Runtime (it has no
+ * migration gate and would serve the legacy home); the user gets the code, the
+ * migration log and where to report it.
+ */
+function sdkMigrationFailure(
+  command: string,
+  code: string,
+  dataDir: string,
+  context: "upgrade" | "blocked" = "upgrade",
+) {
+  const logFile = sdkMigrationLogPath(dataDir);
+  const reason =
+    SDK_MIGRATION_FAILURES[code] ??
+    "记忆数据迁移没有完成。可以运行 memhub restart 重试。";
+  const lead =
+    context === "upgrade"
+      ? `${reason}已保留新版本；在迁移完成前 MemHub 不会启动，也不会用旧版本打开未迁移的数据。`
+      : `MemHub 没有启动：记忆数据还没有迁移到新版本（${code}）。${reason}`;
   return {
     schema_version: 1,
     product: PRODUCT,
     command,
     status: "error",
     code,
-    message:
-      SDK_MIGRATION_FAILURES[code] ??
-      "记忆数据迁移没有完成，已回滚到上一版本。请重试；如果仍然失败，请把这个错误码反馈给我们。原有记忆数据不会丢失。",
+    message: `${lead}原有记忆数据不会丢失。迁移日志：${logFile}。请在 GitHub 提交反馈并附上这个日志文件：${MIGRATION_ISSUES_URL}`,
+    log_file: logFile,
+    issues_url: MIGRATION_ISSUES_URL,
   };
+}
+
+/** A stable code from a thrown migration error, never its free text. */
+function sdkMigrationErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  return /^[a-z][a-z0-9_]{0,95}$/.test(message)
+    ? message
+    : "sdk_migration_incomplete";
+}
+
+/**
+ * The Runtime service refuses to spawn Core while this home's migration is
+ * deferred and leaves a block note; report that instead of a generic
+ * "not ready within budget".
+ */
+async function runtimeMigrationBlock(
+  dataDir: string,
+  command: string,
+): Promise<ReturnType<typeof sdkMigrationFailure> | null> {
+  const block = await readSdkMigrationBlock(dataDir).catch(() => null);
+  if (block === null) return null;
+  return sdkMigrationFailure(command, block.code, dataDir, "blocked");
 }
 
 async function waitForRuntimeReady(
   dataDir: string,
   timeoutMs = 45_000,
 ): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
+  const started = Date.now();
+  const deadline = started + timeoutMs;
   while (Date.now() < deadline) {
     const runtime = await inspectRuntimeStatus({
       dataDir,
@@ -4167,6 +4276,11 @@ async function waitForRuntimeReady(
       requireServiceReceipt: true,
     }).catch(() => null);
     if (runtimeIsReady(runtime)) return true;
+    // The service deferred its migration during this wait and will not spawn
+    // Core: stop waiting. An older note may predate a retry still running, so
+    // only a note written after the wait began ends it early.
+    const blocked = await readSdkMigrationBlock(dataDir).catch(() => null);
+    if (blocked !== null && Date.parse(blocked.at) >= started) return false;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   return false;
@@ -6086,21 +6200,7 @@ type MemoryCommand =
       contentFile: string;
       confirmed: boolean;
     }
-  | { kind: "delete"; memoryId: string; confirmed: boolean }
-  | {
-      kind: "plan-add";
-      contentFile: string;
-      memoryKind: string;
-      scopes: string[];
-      evidenceIds: string[];
-    }
-  | {
-      kind: "plan-existing";
-      operation: "correct" | "delete";
-      memoryId: string;
-      contentFile?: string;
-    }
-  | { kind: "apply"; planFile: string; contentFile?: string };
+  | { kind: "delete"; memoryId: string; confirmed: boolean };
 
 async function parseMemoryCommand(
   rest: readonly string[],
@@ -6140,31 +6240,6 @@ async function parseMemoryCommand(
       ? { kind: "delete", memoryId, confirmed }
       : null;
   }
-  if (action === "plan" || action === "apply") return null;
-  if (action === "plan") return parseMemoryPlanCommand(tokens.slice(1));
-  if (action === "apply") {
-    let planFile: string | undefined;
-    let contentFile: string | undefined;
-    let confirmed = false;
-    for (let index = 1; index < tokens.length; index += 1) {
-      const flag = tokens[index];
-      if (flag === "--confirm") {
-        if (confirmed) return null;
-        confirmed = true;
-        continue;
-      }
-      const value = tokens[index + 1];
-      if (value === undefined || value.startsWith("--")) return null;
-      if (flag === "--plan-file" && planFile === undefined) planFile = value;
-      else if (flag === "--content-file" && contentFile === undefined)
-        contentFile = value;
-      else return null;
-      index += 1;
-    }
-    return planFile && confirmed
-      ? { kind: "apply", planFile, ...(contentFile ? { contentFile } : {}) }
-      : null;
-  }
   if (action !== "list") return null;
   let status: string | undefined;
   let offset = 0;
@@ -6191,71 +6266,9 @@ async function parseMemoryCommand(
   return { kind: "list", query: { status, offset, limit } };
 }
 
-function parseMemoryPlanCommand(
-  tokens: readonly string[],
-): MemoryCommand | null {
-  const operation = tokens[0];
-  const add = operation === "add";
-  if (!add && !["correct", "delete"].includes(operation)) {
-    return null;
-  }
-  const memoryId = add ? undefined : tokens[1];
-  if (!add && (!memoryId || !isMemoryId(memoryId))) return null;
-  let contentFile: string | undefined;
-  let memoryKind = "chat";
-  let kindSet = false;
-  const scopes: string[] = [];
-  const evidenceIds: string[] = [];
-  for (let index = add ? 1 : 2; index < tokens.length; index += 1) {
-    const flag = tokens[index];
-    const value = tokens[index + 1];
-    if (value === undefined || value.startsWith("--")) return null;
-    if (flag === "--content-file" && contentFile === undefined)
-      contentFile = value;
-    else if (flag === "--kind" && add && !kindSet) {
-      memoryKind = value;
-      kindSet = true;
-    } else if (flag === "--scope" && add && !scopes.includes(value))
-      scopes.push(value);
-    else if (flag === "--evidence" && add && !evidenceIds.includes(value))
-      evidenceIds.push(value);
-    else return null;
-    index += 1;
-  }
-  if (add) {
-    return contentFile && scopes.length > 0 && evidenceIds.length > 0
-      ? {
-          kind: "plan-add",
-          contentFile,
-          memoryKind,
-          scopes,
-          evidenceIds,
-        }
-      : null;
-  }
-  if (
-    (operation === "correct" && !contentFile) ||
-    (operation === "delete" && (contentFile !== undefined || scopes.length > 0))
-  ) {
-    return null;
-  }
-  return {
-    kind: "plan-existing",
-    operation: operation as "correct" | "delete",
-    memoryId: memoryId as string,
-    ...(contentFile ? { contentFile } : {}),
-  };
-}
-
 async function readMemoryContentFile(file: string): Promise<string | null> {
   const bytes = await readBoundedFile(file, 100_000 * 4 + 2);
   return bytes ? parseMemoryContent(bytes) : null;
-}
-
-function emitMemoryFlow(document: MemoryFlowDocument, asJson: boolean): void {
-  emit(
-    asJson ? `${JSON.stringify(document)}\n` : renderMemoryFlowText(document),
-  );
 }
 
 function emitModelWriteDocument(
@@ -6430,6 +6443,8 @@ function serviceErrorDocument(
       "服务文件不属于当前 MemHub 安装；请保留文件并确认其来源后再处理。",
     runtime_service_managed_upgrade_failed:
       "新服务启动失败，旧 MemHub 服务已恢复；检查新安装日志后重试。",
+    runtime_service_replacement_failed:
+      "新服务启动失败；记忆数据尚未处于新版本可用的状态，所以没有恢复旧服务。请运行 memhub doctor 检查服务状态。",
     runtime_service_managed_upgrade_rollback_failed:
       "新服务启动失败且旧服务恢复失败；请运行 memhub doctor 检查服务状态。",
     runtime_service_file_modified:

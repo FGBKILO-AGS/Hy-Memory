@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   claimRuntimeServiceForApp,
   readRuntimeServiceOwner,
+  recordSdkMigrationBlock,
   resolveRuntimeCliConfig,
 } from "@one-memory/runtime-control";
 import { describe, expect, it, vi } from "vitest";
@@ -790,7 +791,7 @@ describe("public One Memory CLI", () => {
       }
     });
 
-    it("upgrade failure restarts the restored artifact with the same data identity", async () => {
+    it("upgrade restart failure keeps the new version and never restarts the old one", async () => {
       vi.clearAllMocks();
       runtimeMocks.planCliLink.mockResolvedValueOnce({
         schema_version: 1,
@@ -832,25 +833,27 @@ describe("public One Memory CLI", () => {
         command: "upgrade",
         code: "restart failed",
       });
-      expect(runtimeMocks.rollbackLocalInstall).toHaveBeenCalledOnce();
-      // The CLI manages the objective aliases the package does not own
-      // (`memhub` + `memhub-cli`); both are rolled back.
-      expect(aliasMocks.rollbackManagedCliLink).toHaveBeenCalledTimes(2);
-      expect(runtimeMocks.restartUserService).toHaveBeenCalledTimes(2);
-      for (const call of runtimeMocks.restartUserService.mock
-        .calls as unknown[][]) {
-        expect(call[0]).toMatchObject({
-          dataDir: "/tmp/custom data",
-          installRoot: "/tmp/install/current",
-        });
-      }
+      expect(JSON.parse(streams.stderr())).toMatchObject({
+        rolled_back: false,
+      });
+      // Product rule: the previous Runtime may predate the SDK migration gate,
+      // so it is never restored after the migration was handed the home.
+      expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
+      expect(aliasMocks.rollbackManagedCliLink).not.toHaveBeenCalled();
+      expect(runtimeMocks.restartUserService).toHaveBeenCalledOnce();
+      expect(
+        (runtimeMocks.restartUserService.mock.calls as unknown[][])[0]?.[0],
+      ).toMatchObject({
+        dataDir: "/tmp/custom data",
+        installRoot: "/tmp/install/current",
+      });
     });
 
     // O-22 (2026-09-29 C8 H17): `upgrade --yes` on a manifest-valid but
     // crash-looping version reported exit 0 and left `current` on the bad
     // version. A restart that merely returns is not proof the new Runtime came
     // up, so the CLI now verifies health and rolls back if it never does.
-    it("rolls back and fails when the upgraded Runtime never becomes healthy", async () => {
+    it("fails without rolling back when the upgraded Runtime never becomes healthy", async () => {
       vi.clearAllMocks();
       runtimeMocks.planCliLink.mockResolvedValueOnce({
         schema_version: 1,
@@ -890,9 +893,9 @@ describe("public One Memory CLI", () => {
         command: "upgrade",
         code: "upgrade_health_check_failed",
       });
-      // Rolled back to the previous version and restarted it.
-      expect(runtimeMocks.rollbackLocalInstall).toHaveBeenCalledOnce();
-      expect(runtimeMocks.restartUserService).toHaveBeenCalledTimes(2);
+      // Kept on the new version; the old Runtime is not restarted.
+      expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
+      expect(runtimeMocks.restartUserService).toHaveBeenCalledOnce();
     });
 
     const upgradeArguments = [
@@ -948,7 +951,7 @@ describe("public One Memory CLI", () => {
       );
     });
 
-    it("rolls back to the previous version when the migration does not finish", async () => {
+    it("stays on the new version, not serving, when the migration does not finish", async () => {
       vi.clearAllMocks();
       runtimeMocks.planCliLink.mockResolvedValueOnce(presentCliLink);
       runtimeMocks.runSdkMigration.mockResolvedValueOnce({
@@ -967,11 +970,87 @@ describe("public One Memory CLI", () => {
         streams.restore();
       }
       expect(code!).toBe(1);
-      expect(JSON.parse(streams.stderr())).toMatchObject({
+      const failure = JSON.parse(streams.stderr());
+      expect(failure).toMatchObject({
         command: "upgrade",
         code: "sdk_migration_disk_space_insufficient",
+        // The one file support needs, and where to send it.
+        log_file: "/tmp/custom data/logs/sdk-migration.log",
+        issues_url: "https://github.com/Tencent-Hunyuan/Hy-Memory/issues/new",
       });
+      expect(failure.message).toContain(
+        "/tmp/custom data/logs/sdk-migration.log",
+      );
+      expect(failure.message).toContain("GitHub");
+      expect(failure.message).not.toContain("回滚到上一版本");
+      expect(runtimeMocks.runSdkMigration).toHaveBeenCalledWith(
+        expect.objectContaining({ caller: "cli-upgrade" }),
+      );
+      // No rollback: the old Runtime has no migration gate. The new service is
+      // (re)started so its gate, not the old Runtime, holds the data dir.
+      expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
+      expect(aliasMocks.rollbackManagedCliLink).not.toHaveBeenCalled();
+      expect(runtimeMocks.restartUserService).toHaveBeenCalledOnce();
+      expect(
+        (runtimeMocks.restartUserService.mock.calls as unknown[][])[0]?.[0],
+      ).toMatchObject({
+        installRoot: "/tmp/install/current",
+      });
+    });
+
+    it("stays on the new version when the migration itself throws", async () => {
+      vi.clearAllMocks();
+      runtimeMocks.planCliLink.mockResolvedValueOnce(presentCliLink);
+      runtimeMocks.runSdkMigration.mockRejectedValueOnce(
+        new Error("sdk_migration_fence_failed"),
+      );
+      const streams = captureStreams();
+      let code: number;
+      try {
+        code = await run(
+          upgradeArguments,
+          {},
+          { waitForRuntimeReady: async () => true },
+        );
+      } finally {
+        streams.restore();
+      }
+      expect(code!).toBe(1);
+      expect(JSON.parse(streams.stderr())).toMatchObject({
+        command: "upgrade",
+        code: "sdk_migration_fence_failed",
+        log_file: "/tmp/custom data/logs/sdk-migration.log",
+        issues_url: "https://github.com/Tencent-Hunyuan/Hy-Memory/issues/new",
+      });
+      expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
+    });
+
+    it("still rolls back a failure before the migration touched the home", async () => {
+      vi.clearAllMocks();
+      runtimeMocks.planCliLink.mockResolvedValueOnce(presentCliLink);
+      aliasMocks.installManagedCliLink.mockRejectedValueOnce(
+        new Error("cli_link_failed"),
+      );
+      const streams = captureStreams();
+      let code: number;
+      try {
+        code = await run(
+          upgradeArguments,
+          {},
+          { waitForRuntimeReady: async () => true },
+        );
+      } finally {
+        streams.restore();
+      }
+      expect(code!).toBe(1);
+      expect(JSON.parse(streams.stderr())).toMatchObject({
+        command: "upgrade",
+        code: "cli_link_failed",
+      });
+      expect(runtimeMocks.runSdkMigration).not.toHaveBeenCalled();
       expect(runtimeMocks.rollbackLocalInstall).toHaveBeenCalledOnce();
+      // The previous Runtime was never stopped; nothing is (re)started.
+      expect(runtimeMocks.restartUserService).not.toHaveBeenCalled();
     });
 
     it("keeps the new version when a migrated home is slow to come up", async () => {
@@ -1492,7 +1571,7 @@ describe("public One Memory CLI", () => {
     expect(JSON.parse(output.value()).apply).toBe(true);
   });
 
-  it("rolls back the distribution when service installation fails", async () => {
+  it("keeps the distribution when service installation fails after the migration ran", async () => {
     runtimeMocks.applyLocalInstall.mockResolvedValueOnce({
       schema_version: 1,
       source: "/tmp/distribution",
@@ -1533,13 +1612,14 @@ describe("public One Memory CLI", () => {
       command: "install",
       status: "error",
       code: "service failed",
+      rolled_back: false,
     });
-    expect(runtimeMocks.rollbackLocalInstall).toHaveBeenCalledOnce();
-    expect(runtimeMocks.rollbackCliLink).toHaveBeenCalledOnce();
-    expect(aliasMocks.rollbackManagedCliLink).toHaveBeenCalledTimes(2);
+    expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
+    expect(runtimeMocks.rollbackCliLink).not.toHaveBeenCalled();
+    expect(aliasMocks.rollbackManagedCliLink).not.toHaveBeenCalled();
   });
 
-  it("upgrades only an existing managed CLI and rolls back a failed restart", async () => {
+  it("upgrades only an existing managed CLI and keeps it after a failed restart", async () => {
     runtimeMocks.planCliLink.mockResolvedValueOnce({
       schema_version: 1,
       platform: "linux",
@@ -1579,7 +1659,7 @@ describe("public One Memory CLI", () => {
       status: "error",
       code: "restart failed",
     });
-    expect(runtimeMocks.rollbackLocalInstall).toHaveBeenCalledOnce();
+    expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
     expect(runtimeMocks.installCliLink).not.toHaveBeenCalled();
   });
 
@@ -2003,6 +2083,101 @@ describe("lifecycle commands accept --json", () => {
   });
 });
 
+// A Runtime service that refuses to serve an unmigrated home must be reported
+// as that, with the migration log and where to send it, not as a generic
+// "not ready within budget".
+describe("lifecycle commands report a migration block", () => {
+  async function blockedHome() {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "memhub-blocked-"));
+    await recordSdkMigrationBlock(
+      dataDir,
+      "sdk_migration_disk_space_insufficient",
+      "runtime-service",
+    );
+    return dataDir;
+  }
+  // darwin: kickstart "restarts" but never becomes ready. Elsewhere: no
+  // service, so the direct spawn fails. Both must surface the block.
+  const blockedControls = () => ({
+    restartManagedRuntime: vi.fn(async () => "restarted" as const),
+    waitForRuntimeReady: vi.fn(async () => false),
+    stopRuntime: vi.fn(async () => "stopped" as const),
+    ensureRuntime: vi.fn(async () => {
+      throw new Error("Timed out waiting for MemHub Runtime");
+    }),
+  });
+
+  it("restart --json prints the block code, log file and issues URL", async () => {
+    const dataDir = await blockedHome();
+    const output = captureStdout();
+    let code: number;
+    try {
+      code = await run(
+        ["restart", "--json"],
+        { ONE_MEMORY_DATA_DIR: dataDir },
+        blockedControls(),
+      );
+    } finally {
+      output.restore();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+    expect(code!).toBe(1);
+    const lines = output.value().trim().split("\n");
+    const document = JSON.parse(lines[lines.length - 1]!);
+    expect(document).toMatchObject({
+      command: "restart",
+      state: "blocked",
+      code: "sdk_migration_disk_space_insufficient",
+      log_file: path.join(dataDir, "logs", "sdk-migration.log"),
+      issues_url: "https://github.com/Tencent-Hunyuan/Hy-Memory/issues/new",
+    });
+    expect(output.value()).not.toContain("runtime_not_ready_within_budget");
+  });
+
+  it("restart in text mode names the log file and GitHub issues", async () => {
+    const dataDir = await blockedHome();
+    const output = captureStdout();
+    try {
+      expect(
+        await run(
+          ["restart"],
+          { ONE_MEMORY_DATA_DIR: dataDir },
+          blockedControls(),
+        ),
+      ).toBe(1);
+    } finally {
+      output.restore();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+    expect(output.value()).toContain("sdk_migration_disk_space_insufficient");
+    expect(output.value()).toContain(
+      path.join(dataDir, "logs", "sdk-migration.log"),
+    );
+    expect(output.value()).toContain(
+      "https://github.com/Tencent-Hunyuan/Hy-Memory/issues/new",
+    );
+  });
+
+  it("ui --json reports the block instead of runtime_not_running", async () => {
+    const dataDir = await blockedHome();
+    const output = captureStdout();
+    let code: number;
+    try {
+      code = await run(["ui", "--json"], { ONE_MEMORY_DATA_DIR: dataDir });
+    } finally {
+      output.restore();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+    expect(code!).not.toBe(0);
+    expect(JSON.parse(output.value())).toMatchObject({
+      command: "ui",
+      state: "blocked",
+      code: "sdk_migration_disk_space_insufficient",
+      log_file: path.join(dataDir, "logs", "sdk-migration.log"),
+    });
+  });
+});
+
 // The objective names `memhub host install <host>` (host as a positional). Both
 // that and the `--host <id>` flag form must reach the same command; naming both
 // at once is ambiguous and refused rather than guessed.
@@ -2112,7 +2287,7 @@ describe("install gates on Runtime readiness", () => {
     });
   }
 
-  it("fails and rolls back when the installed Runtime never becomes ready", async () => {
+  it("fails without rolling back when the installed Runtime never becomes ready", async () => {
     vi.clearAllMocks();
     stubInstallPlan();
     const streams = captureStreams();
@@ -2141,10 +2316,10 @@ describe("install gates on Runtime readiness", () => {
     }
     expect(code!).toBe(1);
     expect(streams.stderr()).toContain("install_runtime_not_ready");
-    expect(runtimeMocks.rollbackLocalInstall).toHaveBeenCalledOnce();
+    expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
     expect(
       lifecycleMocks.rollbackPreparedServiceInstall,
-    ).toHaveBeenCalledOnce();
+    ).not.toHaveBeenCalled();
   });
 
   it("takes CLI ownership after a successful install over an App-owned Runtime", async () => {
@@ -2189,7 +2364,7 @@ describe("install gates on Runtime readiness", () => {
     }
   });
 
-  it("restores App ownership before relaunching the old Runtime after install failure", async () => {
+  it("never hands the home back to the App Runtime after the migration ran", async () => {
     vi.clearAllMocks();
     stubInstallPlan();
     const root = await mkdtemp(path.join(tmpdir(), "memhub-cli-owner-"));
@@ -2199,14 +2374,6 @@ describe("install gates on Runtime readiness", () => {
       appBundle: "/Applications/MemHub.app",
       appExecutable: "/Applications/MemHub.app/Contents/MacOS/MemHub",
     });
-    lifecycleMocks.rollbackPreparedServiceInstall.mockImplementationOnce(
-      async (_prepared: unknown, rollback: () => Promise<void>) => {
-        await rollback();
-        await expect(readRuntimeServiceOwner(dataDir)).resolves.toMatchObject({
-          owner: "app",
-        });
-      },
-    );
     const streams = captureStreams();
     try {
       expect(
@@ -2229,13 +2396,112 @@ describe("install gates on Runtime readiness", () => {
           { waitForRuntimeReady: async () => false },
         ),
       ).toBe(1);
+      // The App Runtime may predate the SDK migration gate: CLI keeps it.
       await expect(readRuntimeServiceOwner(dataDir)).resolves.toMatchObject({
-        owner: "app",
+        owner: "cli",
       });
+      expect(
+        lifecycleMocks.rollbackPreparedServiceInstall,
+      ).not.toHaveBeenCalled();
     } finally {
       streams.restore();
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("keeps the install, not serving, when its migration is deferred", async () => {
+    vi.clearAllMocks();
+    stubInstallPlan();
+    runtimeMocks.runSdkMigration.mockResolvedValueOnce({
+      state: "deferred",
+      code: "sdk_migration_memory_unreadable",
+    });
+    const waitForRuntimeReady = vi.fn(async () => true);
+    const streams = captureStreams();
+    let code: number;
+    try {
+      code = await run(
+        [
+          "install",
+          "--source",
+          "/tmp/dist",
+          "--home",
+          "/tmp/home",
+          "--install-root",
+          "/tmp/install",
+          "--bin-dir",
+          "/tmp/bin",
+          "--data-dir",
+          "/tmp/data",
+          "--yes",
+        ],
+        {},
+        { waitForRuntimeReady },
+      );
+    } finally {
+      streams.restore();
+    }
+    expect(code!).toBe(1);
+    const failure = JSON.parse(streams.stderr());
+    expect(failure).toMatchObject({
+      command: "install",
+      code: "sdk_migration_memory_unreadable",
+      log_file: "/tmp/data/logs/sdk-migration.log",
+      issues_url: "https://github.com/Tencent-Hunyuan/Hy-Memory/issues/new",
+    });
+    expect(failure.message).toContain("/tmp/data/logs/sdk-migration.log");
+    expect(runtimeMocks.runSdkMigration).toHaveBeenCalledWith(
+      expect.objectContaining({ caller: "cli-install" }),
+    );
+    // The new (gated) service owns the data dir; the previous registration is
+    // never re-bootstrapped and nothing is rolled back.
+    expect(lifecycleMocks.applyPreparedServiceInstall).toHaveBeenCalledWith(
+      expect.objectContaining({ restorePreviousOnFailure: false }),
+    );
+    expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
+    expect(
+      lifecycleMocks.rollbackPreparedServiceInstall,
+    ).not.toHaveBeenCalled();
+    expect(waitForRuntimeReady).not.toHaveBeenCalled();
+  });
+
+  it("still rolls back an install that failed before its migration ran", async () => {
+    vi.clearAllMocks();
+    stubInstallPlan();
+    runtimeMocks.installCliLink.mockRejectedValueOnce(
+      new Error("cli_link_failed"),
+    );
+    const streams = captureStreams();
+    let code: number;
+    try {
+      code = await run(
+        [
+          "install",
+          "--source",
+          "/tmp/dist",
+          "--home",
+          "/tmp/home",
+          "--install-root",
+          "/tmp/install",
+          "--bin-dir",
+          "/tmp/bin",
+          "--data-dir",
+          "/tmp/data",
+          "--yes",
+        ],
+        {},
+        { waitForRuntimeReady: async () => true },
+      );
+    } finally {
+      streams.restore();
+    }
+    expect(code!).toBe(1);
+    expect(JSON.parse(streams.stderr())).toMatchObject({
+      command: "install",
+      code: "cli_link_failed",
+    });
+    expect(runtimeMocks.runSdkMigration).not.toHaveBeenCalled();
+    expect(runtimeMocks.rollbackLocalInstall).toHaveBeenCalledOnce();
   });
 
   it("succeeds when the installed Runtime becomes ready", async () => {

@@ -20,19 +20,9 @@ describe("RecallBroker /ask", () => {
     let readContext: string | string[] | undefined;
     let coreBody: unknown;
     const core = createServer(async (request, response) => {
-      if (
-        request.method === "GET" &&
-        request.url === "/api/v2/memory-authority"
-      ) {
-        response.setHeader("Content-Type", "application/json");
-        response.end(
-          JSON.stringify({ authority: "legacy", migration_id: null }),
-        );
-        return;
-      }
       authorization = request.headers.authorization;
       readContext = request.headers["x-one-memory-read-context"];
-      if (request.url !== "/api/v1/memories/ask") {
+      if (request.url !== "/api/v2/memories/ask") {
         response.statusCode = 404;
         response.end("not found");
         return;
@@ -44,6 +34,7 @@ describe("RecallBroker /ask", () => {
         response.setHeader("Content-Type", "application/json");
         response.end(
           JSON.stringify({
+            schema_version: 2,
             answer: "现有记忆不足以回答这个问题。",
             memories: [],
             mode: "empty",
@@ -88,23 +79,51 @@ describe("RecallBroker /ask", () => {
       workspace_path: "/tmp/project",
     });
     expect(response.data).toEqual({
+      schema_version: 2,
       answer: "现有记忆不足以回答这个问题。",
       memories: [],
       mode: "empty",
     });
   });
 
-  it("selects SDK Ask v2 after cutover without Governance fields", async () => {
+  it("rejects a legacy-shaped answer instead of passing it to the host", async () => {
+    const core = createServer(async (request, response) => {
+      for await (const _chunk of request) void _chunk;
+      response.setHeader("Content-Type", "application/json");
+      response.end(
+        JSON.stringify({ answer: "legacy", memories: [], mode: "empty" }),
+      );
+    });
+    const corePort = await listen(core, 0);
+    closers.push(() => close(core));
+    const root = await mkdtemp(path.join(os.tmpdir(), "om-ask-legacy-"));
+    const broker = new RecallBroker({
+      coreBaseUrl: `http://127.0.0.1:${corePort}`,
+      coreApiToken: "master-secret",
+      discoveryPath: path.join(root, "broker.json"),
+      instanceId: "ask-legacy",
+      preferredPort: 0,
+    });
+    await broker.start();
+    closers.push(() => broker.stop());
+
+    const response = await axios.post(
+      `http://127.0.0.1:${broker.port}/ask`,
+      { question: "我的偏好？" },
+      {
+        headers: { "X-One-Memory-Client": "cursor-mcp" },
+        validateStatus: () => true,
+      },
+    );
+
+    expect(response.status).toBe(502);
+  });
+
+  it("asks Core v2 directly, with no authority round trip or Governance fields", async () => {
     const calls: string[] = [];
     const core = createServer(async (request, response) => {
       calls.push(request.url ?? "");
       response.setHeader("Content-Type", "application/json");
-      if (request.url === "/api/v2/memory-authority") {
-        response.end(
-          JSON.stringify({ authority: "sdk", migration_id: "migration-1" }),
-        );
-        return;
-      }
       if (request.url === "/api/v2/memories/ask") {
         for await (const _chunk of request) void _chunk;
         response.end(
@@ -148,7 +167,7 @@ describe("RecallBroker /ask", () => {
       { headers: { "X-One-Memory-Client": "cursor-mcp" } },
     );
 
-    expect(calls).toEqual(["/api/v2/memory-authority", "/api/v2/memories/ask"]);
+    expect(calls).toEqual(["/api/v2/memories/ask"]);
     expect(response.data.schema_version).toBe(2);
     expect(JSON.stringify(response.data)).not.toMatch(
       /revision|evidence_ids|scopes/,

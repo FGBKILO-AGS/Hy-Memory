@@ -1,7 +1,7 @@
 import type {
-  AskMemoryResponse,
-  ConversationSearchResponse,
   RecallReceipt,
+  SdkAskMemoryResponse,
+  SdkContextSearchResponse,
 } from "@one-memory/contracts";
 import { describe, expect, it, vi } from "vitest";
 
@@ -37,7 +37,6 @@ const toolNames = [
   "MemHub_recall",
   "MemHub_ask",
   "MemHub_conversations",
-  "MemHub_matters",
 ] as const;
 
 const materials = [
@@ -149,7 +148,7 @@ describe.each(materials)("S1.3 INT-04/05: $name", ({ render }) => {
 
 describe("generated Skill and fallback material", () => {
   it("versions both Skill channels and preserves their distinct invocation paths", () => {
-    expect(SKILL_VERSION).toBe(17);
+    expect(SKILL_VERSION).toBe(18);
     for (const channel of ["mcp", "cli"] as const) {
       const skill = renderSkillContent(channel, runtime);
       expect(skill).toContain(`skill-version=${SKILL_VERSION}`);
@@ -159,8 +158,7 @@ describe("generated Skill and fallback material", () => {
     expect(mcp).toContain("you must call `MemHub_recall` before answering");
     expect(mcp).toContain("`MemHub_ask`");
     expect(mcp).toContain("`MemHub_conversations`");
-    expect(mcp).toContain("`no_matches`");
-    expect(mcp).toContain("`nothing_imported`");
+    expect(mcp).not.toContain("empty_reason");
 
     const cli = renderSkillContent("cli", runtime).replace(/\s+/g, " ");
     expect(cli).toContain("you must run it before answering");
@@ -313,12 +311,7 @@ describe("generated Skill and fallback material", () => {
       version: "0.0.0",
     });
     const listed = await request(session, "tools/list");
-    const titles = [
-      "MemHub recall",
-      "MemHub ask",
-      "MemHub conversation",
-      "MemHub matters",
-    ];
+    const titles = ["MemHub recall", "MemHub ask", "MemHub conversation"];
     expect(
       listed.result.tools
         .filter(
@@ -357,15 +350,20 @@ const emptyRecall: RecallReceipt = {
   used_characters: 0,
   truncated: false,
 };
-const emptyAsk: AskMemoryResponse = {
+const emptyAsk: SdkAskMemoryResponse = {
+  schema_version: 2,
   answer: "现有记忆不足以回答这个问题。",
   memories: [],
   mode: "empty",
 };
-const noMatches: ConversationSearchResponse = {
-  hits: [],
-  empty_reason: "no_matches",
-  imported_messages: 7,
+const noMatches: SdkContextSearchResponse = {
+  schema_version: 2,
+  request_id: "fixture-request",
+  state: "empty",
+  items: [],
+  used_characters: 0,
+  truncated: false,
+  total_ms: 4,
 };
 
 const emptyCalls = [
@@ -376,7 +374,6 @@ const emptyCalls = [
     args: { query: "fixture query" },
     payload: noMatches,
   },
-  { name: "om_matters", args: { query: "fixture query" }, payload: [] },
 ];
 
 describe.each(emptyCalls)(
@@ -390,13 +387,12 @@ describe.each(emptyCalls)(
         undefined,
         read,
         read,
-        read,
       );
       const response = await request(session, "tools/call", {
         name,
         arguments: args,
       });
-      const expected = name === "om_matters" ? { contexts: payload } : payload;
+      const expected = payload;
       expect(read).toHaveBeenCalledExactlyOnceWith(runtime.discoveryPath, args);
       expect(response.result).toEqual({
         content: [{ type: "text", text: JSON.stringify(expected) }],
@@ -414,7 +410,6 @@ describe.each(emptyCalls)(
         runtime.discoveryPath,
         read,
         undefined,
-        read,
         read,
         read,
       );
@@ -477,11 +472,27 @@ it.each(["grounded", "empty"] as const)(
   },
 );
 
-it("preserves an explicit nothing_imported reason without inferring it from no matches", async () => {
-  const payload: ConversationSearchResponse = {
-    hits: [],
-    empty_reason: "nothing_imported",
-    imported_messages: 0,
+it("passes raw conversation excerpts through as Core returned them", async () => {
+  const content = "我们把发布日改到周四。";
+  const payload: SdkContextSearchResponse = {
+    schema_version: 2,
+    request_id: "fixture-request",
+    state: "grounded",
+    items: [
+      {
+        kind: "raw",
+        raw_id: "raw-fixture-1",
+        content,
+        source: "cursor",
+        session_id: "session-fixture",
+        memory_at: "2026-09-13T00:00:00Z",
+        score: 0.8,
+        truncated: false,
+      },
+    ],
+    used_characters: [...content].length,
+    truncated: false,
+    total_ms: 4,
   };
   const read = vi.fn().mockResolvedValue(payload);
   const session = new McpSession(
