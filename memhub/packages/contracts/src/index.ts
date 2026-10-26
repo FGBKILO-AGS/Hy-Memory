@@ -65,6 +65,13 @@ export interface HealthResponse {
    */
   memory_backfill?: "running" | "done" | "failed";
   memory_backfill_error?: string | null;
+  /**
+   * Work an earlier run left unfinished (write queue, interrupted imports,
+   * live sync) is picked up after Core is ready. "running" is not degraded:
+   * readiness never waits for it. Absent from cores older than this field.
+   */
+  recovery?: "pending" | "running" | "done" | "failed";
+  recovery_failed_steps?: string[];
 }
 
 export type ImportStatus =
