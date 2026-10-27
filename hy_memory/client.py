@@ -88,6 +88,47 @@ _WORKING_EXPERIENCE_MIN_SCORE_DELTA = 0.10
 # （默认 999），这是防病态长链的安全阀，不是返回条数控制。
 _CODING_GET_MANY_MAX_IDS = 500
 
+# search(scene="all") 的 Reciprocal Rank Fusion 常数：item 在本路第 rank 名
+# （从 1 起）贡献 1 / (_SCENE_RRF_K + rank)。60 是 RRF 原论文（Cormack 2009）的
+# 惯用值：只看名次不看分数，chat 与 working/coding 的分数量纲不同也不会互相压制。
+_SCENE_RRF_K = 60
+
+# scene="all" 的三条路，也是同分时的先后顺序。
+_SCENE_LANES = ("chat", "working", "coding")
+
+
+def _epoch_seconds(value: Any, *, naive_is_utc: bool = False) -> Optional[int]:
+    """datetime / ISO 字符串 / epoch 数字 → 秒级 epoch；取不到返回 None。"""
+    stamp = _epoch_float(value, naive_is_utc=naive_is_utc)
+    return int(stamp) if stamp is not None else None
+
+
+def _epoch_float(value: Any, *, naive_is_utc: bool = False) -> Optional[float]:
+    """同 _epoch_seconds，但保留亚秒精度（排序用，避免同一秒内的先后被抹平）。
+
+    naive_is_utc：生产力库的时间戳用 utcnow() 写、不带时区，必须按 UTC 解读，
+    否则与 chat 侧（本地时间 naive，经 .timestamp() 已是正确 epoch）比较先后时
+    会差出一个时区偏移。
+    """
+    from datetime import timezone
+
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.rstrip("Z"))
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None and naive_is_utc:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.timestamp()
+
 
 _WRITE_DIAGNOSTIC_KEYS = (
     "agent_status",
@@ -1309,6 +1350,8 @@ class HyMemoryClient:
         variant: str = "working",
         include_sources: Optional[List[str]] = None,
         exclude_sources: Optional[List[str]] = None,
+        rerank: bool = True,
+        query_embedding: Optional[List[float]] = None,
     ) -> Dict[str, Any]:
         """
         Coding 召回路径（事实主导的双层召回）：
@@ -1344,6 +1387,9 @@ class HyMemoryClient:
         作用域把事实层筛空时，顺链那一路跟着断源，本次检索退化成只有经验直查的单
         层。这是可接受的——事实是"这个 repo 里发生过什么"，跨 workspace 拿它去带
         经验没有意义——但结果里看不出来，所以退化时打 warning。
+
+        rerank=False 时事实层跳过 BM25 词面融合重排（不传 query_text 给
+        store.search_facts），按稠密分排序。
 
         失败时 fail-safe：返回 success=True + 两层都空（不抛错）。
         """
@@ -1417,7 +1463,13 @@ class HyMemoryClient:
 
         try:
             _t_embed = time.perf_counter()
-            embedding, embed_meta = await self._embed_service.embed_with_meta(target_query)
+            if query_embedding:
+                # 调用方已算好（scene="all" 三路共用一次 embed）
+                embedding, embed_meta = list(query_embedding), {}
+            else:
+                embedding, embed_meta = await self._embed_service.embed_with_meta(
+                    target_query
+                )
             if _tracer is not None:
                 await _tracer.log_coding_embed(
                     query=target_query, dims=len(embedding or []),
@@ -1437,7 +1489,7 @@ class HyMemoryClient:
                 top=max(limit, 5),
                 # 词面通道 + 把下面那道闸门下移到重排之前：先砍掉过不了闸的候选再重排，
                 # 返回条数就恒等于纯稠密，词面只改选谁（理由见 store.search_facts）。
-                query_text=target_query,
+                query_text=(target_query if rerank else None),
                 min_score=fact_min_score,
                 include_sources=include_sources,
                 exclude_sources=exclude_sources,
@@ -1783,6 +1835,7 @@ class HyMemoryClient:
         layers: Optional[List[Any]] = None,
         embed_override: Optional[Dict[str, Any]] = None,
         query_embedding: Optional[List[float]] = None,
+        rerank: bool = True,
     ) -> Dict[str, Any]:
         """
         搜索记忆。
@@ -1812,6 +1865,18 @@ class HyMemoryClient:
                                 - "working"：强制走 coding（生产力）召回
                                 - "coding"：同上，额外返回版本演进链块
                                   （"chain_block" / "chain_used" 两个字段，见下方 Returns）
+                                - "all"：chat / working / coding 三路并发召回后用 RRF
+                                  融合成一个列表（见下方 Returns）。chat 路用
+                                  limit/min_score 等 chat 参数；working/coding 路用各自的
+                                  working_fact_min_score / working_experience_min_score。
+                                  融合只看每路**自己的名次**：score = 1/(60 + rank)，
+                                  rank 从 1 起、k=60 为常数（RRF 惯用值），所以不同量纲
+                                  的分数不会互相压制；同分时按 chat → working → coding
+                                  排。融合后截断到 limit。某一路失败或未启用（coding 关、
+                                  lite 模式）只是不贡献结果，记进 "errors"，不会让整次
+                                  search 失败；没写过的生产力场景直接跳过（不建空库）。
+                                  include_sources / exclude_sources 对三路都生效；
+                                  created_after / layers 只作用于 chat 路。
                                 （旧别名 "normal"/"productivity" 仍兼容）
             search_mode:        搜索执行模式：
                                 - "default"（默认）：query="..." 是 light search，直接
@@ -1825,7 +1890,13 @@ class HyMemoryClient:
             session_ids:        Session ID 列表（空列表 = 搜索所有 session）
             include_sources:    调用来源白名单；空列表 = 不限。
             exclude_sources:    调用来源黑名单；与白名单冲突时黑名单优先。
-            limit:              Normal 路的 topk 数量，默认 10
+            limit:              Normal 路的 topk 数量，默认 10。这也是 MMR 判定用的
+                                top-k：limit < 20（MMR_MAX_TOP_K，定义在
+                                pipelines/_retrieval/diversity.py）时 chat 路自动做 MMR
+                                多样性选择（权重仍取 MEMORY_HYBRID_V2_MMR_LAMBDA）；
+                                limit >= 20 时跳过 MMR（O(k²·pool) 的 Jaccard 贪心，
+                                大 k 下代价高、收益小）。重排池是 limit 的若干倍，但判定
+                                只看调用方给的 limit。
             min_score:          **chat 路专用**的最低分数阈值，默认 0.4。working 路不看
                                 这个值，两层各有自己的阈值（见下两项）。
             working_fact_min_score:
@@ -1854,6 +1925,11 @@ class HyMemoryClient:
             layers:             可选。pro/ultra 下只召回指定层级（字符串或
                                 MemoryLayer），在召回阶段生效。lite 下忽略该参数并
                                 强制只召回 L1_RAW。
+            rerank:             默认 True（原行为）。False 时本次调用跳过全部重排阶段：
+                                chat 路的本地 cross-encoder 重排（recall.local_rerank_enabled）
+                                与记忆关系图重排（graph_rerank / episode 扩展），working/
+                                coding 路事实层的 BM25 词面融合重排；结果按召回分排序。
+                                按次生效（随请求对象下传），并发 search 互不影响。
 
         Returns:
             chat 路径：{"request_id": "...", "memories": [...], "elapsed_ms": ...}
@@ -1865,6 +1941,20 @@ class HyMemoryClient:
                 "chain_used"  —— 已挂进 chain_block 的 facts 下标列表。
                                  facts **没有**被去重过（不悄悄少给）；需要
                                  "块 + 剩余 fact" 的拼法就按这个列表自行过滤。
+            scene="all"：{"request_id", "scene": "all",
+                          "memories": [统一条目...],
+                          "lanes": {"chat": n, "working": n, "coding": n},  # 各路参与融合的候选数
+                          "errors": {lane: "原因"},                          # 失败/未启用的路，全成功时为 {}
+                          "elapsed_ms"}
+                统一条目在各路原字段之上加/覆盖：
+                  "scene"      "chat" | "working" | "coding"
+                  "kind"       "chat" | "experience" | "fact"
+                  "memory_id"  chat 的 memory_id / experience_id / fact_id
+                  "content"    chat 正文；经验为 "task\nsolution"；事实为 statement
+                  "score"      RRF 融合分；"lane_score" 为该路原始分；"lane_rank" 为该路名次
+                  "source", "created_at", "updated_at"（秒级 epoch，取不到为 None）
+                chat 路内部名次：normal → schema → proactive 依次排；working/coding 路
+                内部名次：事实与经验各按原顺序交替（事实在前），两层谁也不压谁。
         """
         return self._search_loop_thread.run(self.async_search(
             query, queries=queries, scene=scene, search_mode=search_mode,
@@ -1880,6 +1970,7 @@ class HyMemoryClient:
             request_id=request_id, layers=layers,
             embed_override=embed_override,
             query_embedding=query_embedding,
+            rerank=rerank,
         ))
 
     def get(
@@ -1912,30 +2003,54 @@ class HyMemoryClient:
         self,
         memory_id: str,
         content: str,
+        *,
+        kind: Optional[MemoryKind] = None,
+        variant: Optional[MemoryVariant] = None,
+        task: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        更新记忆内容。
+        更新记忆内容。chat / working / coding 都支持，ID 解析与 get() 相同。
 
         Args:
-            memory_id: 记忆 ID
-            content:   新内容
+            memory_id: 记忆 ID（chat memory_id / experience_id / fact_id）
+            content:   新内容。chat → 正文；experience → solution（task 不变）；
+                       fact → statement。
+            kind:      可选 namespace（"chat" / "experience" / "fact"），消歧用。
+            variant:   可选生产力变体（"working" / "coding"），消歧用。
+            task:      可选，仅经验：同时替换 task（会重嵌检索 key）。
 
         Returns:
             {"success": True, "memory_id": "...", "request_id": "...", "elapsed_ms": ...}
+            生产力条目额外带 "kind" / "variant"。ID 同时命中多个 namespace 时抛
+            AmbiguousMemoryIdError。
         """
-        return self._loop_thread.run(self.async_update(memory_id, content))
+        return self._loop_thread.run(self.async_update(
+            memory_id, content, kind=kind, variant=variant, task=task,
+        ))
 
-    def delete(self, memory_id: str) -> Dict[str, Any]:
+    def delete(
+        self,
+        memory_id: str,
+        *,
+        kind: Optional[MemoryKind] = None,
+        variant: Optional[MemoryVariant] = None,
+    ) -> Dict[str, Any]:
         """
-        删除单条记忆。
+        删除单条记忆。chat / working / coding 都支持，ID 解析与 get() 相同。
 
         Args:
-            memory_id: 记忆 ID
+            memory_id: 记忆 ID（chat memory_id / experience_id / fact_id）
+            kind:      可选 namespace（"chat" / "experience" / "fact"），消歧用。
+            variant:   可选生产力变体（"working" / "coding"），消歧用。
 
         Returns:
             {"success": True, "deleted_count": 1, "request_id": "...", "elapsed_ms": ...}
+            生产力条目额外带 "kind" / "variant"。ID 同时命中多个 namespace 时抛
+            AmbiguousMemoryIdError。
         """
-        return self._loop_thread.run(self.async_delete(memory_id))
+        return self._loop_thread.run(
+            self.async_delete(memory_id, kind=kind, variant=variant)
+        )
 
     def delete_all(
         self,
@@ -2009,13 +2124,27 @@ class HyMemoryClient:
                       保持兼容，只返回 ACTIVE。可显式读取 SUPERSEDED / SHADOW /
                       NEGATED / CONFLICTED / ARCHIVED；物理删除的节点不会返回。
             with_evolution: 可选，为当前页条目附加 evolution_chain（默认关闭）。
-            scene:    可选，列哪一类记忆："chat" | "coding" | "working"。
-                      "coding"/"working" 列该类全部经验（workspace_id 可再收窄），
-                      按 updated_at 倒序，total 为真实总数。不传时保持原行为。
+            scene:    可选，列哪一类记忆："chat" | "coding" | "working" | "all"。
+                      "coding"/"working" 列该类全部经验（workspace_id 可再收窄，
+                      include_sources/exclude_sources 按 source 列过滤），
+                      按 updated_at 倒序，total 为过滤后的真实总数。
+                      "all" 把 chat（向量库节点，与 memory_stats 的 chat 同口径）
+                      与 working/coding 经验合并，按更新时间倒序（chat 取
+                      gmt_modified，缺省用 gmt_created；经验取 updated_at）分页，
+                      total 为三路之和。include_sources/exclude_sources/statuses
+                      作用于三路（经验只有 ACTIVE，statuses 不含 ACTIVE 时两路为空）；
+                      agent/session/layers 只作用于 chat，workspace_id/branch 只作用
+                      于经验。只支持 order="desc"。不传 scene 时保持原行为。
 
         Returns:
             chat 路径: {"vdb": {...}, "graph": {...} | 省略, "elapsed_ms": ...}
             coding 路径: {"scene": "productivity", "experiences": [...], ...}
+            scene="all": {"scene": "all", "memories": [...], "total",
+                          "totals": {"chat", "working", "coding"}, "errors": {...},
+                          "limit", "offset", "request_id", "elapsed_ms"}
+                每条带 "scene"、"kind"（chat | experience）、"memory_id"、"content"
+                （经验为 "task\nsolution"）、"source"、"status"、"created_at"、
+                "updated_at"（秒级 epoch），以及该路原有字段。
         """
         return self._loop_thread.run(
             self.async_list_memories(
@@ -3409,6 +3538,226 @@ class HyMemoryClient:
             # 无事件循环（极少见）：同步跳过，不影响主流程
             logger.debug("[search] no running loop for dedup; skipped")
 
+    @staticmethod
+    def _unify_productivity_item(
+        item: Dict[str, Any], *, kind: str, scene: str,
+    ) -> Dict[str, Any]:
+        """生产力经验/事实 → scene="all" 统一条目（保留原字段）。"""
+        if kind == "experience":
+            task = str(item.get("task") or "").strip()
+            solution = str(item.get("solution") or "").strip()
+            content = "\n".join(part for part in (task, solution) if part)
+            memory_id = item.get("experience_id")
+            created = _epoch_seconds(item.get("created_at"), naive_is_utc=True)
+            updated = _epoch_seconds(item.get("updated_at"), naive_is_utc=True)
+        else:
+            content = str(item.get("statement") or "")
+            memory_id = item.get("fact_id")
+            created = _epoch_seconds(item.get("created_at"), naive_is_utc=True)
+            # 事实没有修改时间列：写入后只会被 SUPERSEDE，不会原地改
+            updated = created
+        return {
+            **item,
+            "scene": scene,
+            "kind": kind,
+            "memory_id": memory_id,
+            "content": content,
+            "source": item.get("source") or "default",
+            "created_at": created,
+            "updated_at": updated if updated is not None else created,
+        }
+
+    @staticmethod
+    def _search_lane_items(lane: str, resp: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """某一路的 search 结果 → 按本路名次排好的统一条目列表。
+
+        chat：normal → schema → proactive（与 reader 的组装顺序一致）。
+        working/coding：事实与经验各按原顺序交替、事实在前。两层本就分开计数
+        （各自 ≤ limit），交替让融合后两层都有代表，谁也不压谁。
+        """
+        out: List[Dict[str, Any]] = []
+        if lane == "chat":
+            memories = resp.get("memories") or {}
+            if isinstance(memories, dict):
+                ordered = (
+                    list(memories.get("normal") or [])
+                    + list(memories.get("schema") or [])
+                    + list(memories.get("proactive") or [])
+                )
+            else:
+                ordered = list(memories)
+            for mem in ordered:
+                created = _epoch_seconds(mem.get("gmt_created"))
+                out.append({
+                    **mem,
+                    "scene": "chat",
+                    "kind": "chat",
+                    "lane_score": mem.get("score"),
+                    "source": mem.get("source") or "default",
+                    "created_at": created,
+                    "updated_at": _epoch_seconds(mem.get("gmt_modified")) or created,
+                })
+            return out
+
+        facts = [
+            HyMemoryClient._unify_productivity_item(f, kind="fact", scene=lane)
+            for f in (resp.get("facts") or [])
+        ]
+        exps = [
+            HyMemoryClient._unify_productivity_item(e, kind="experience", scene=lane)
+            for e in (resp.get("experiences") or [])
+        ]
+        for index in range(max(len(facts), len(exps))):
+            if index < len(facts):
+                out.append(facts[index])
+            if index < len(exps):
+                out.append(exps[index])
+        for item in out:
+            item["lane_score"] = item.get("score")
+        return out
+
+    @staticmethod
+    def _rrf_fuse_lanes(
+        lane_items: Dict[str, List[Dict[str, Any]]],
+        *,
+        limit: int,
+        k: int = _SCENE_RRF_K,
+    ) -> List[Dict[str, Any]]:
+        """按各路自己的名次做 RRF：score = 1 / (k + rank)，rank 从 1 起。
+
+        条目来自不同 namespace，不跨路合并同 id；同分按 _SCENE_LANES 顺序、再按
+        本路名次排，结果稳定。截断到 limit。
+        """
+        fused: List[Tuple[float, int, int, Dict[str, Any]]] = []
+        for lane_order, lane in enumerate(_SCENE_LANES):
+            for rank, item in enumerate(lane_items.get(lane) or [], start=1):
+                score = 1.0 / (k + rank)
+                fused.append((score, lane_order, rank, {
+                    **item,
+                    "score": round(score, 6),
+                    "lane_rank": rank,
+                }))
+        fused.sort(key=lambda entry: (-entry[0], entry[1], entry[2]))
+        return [entry[3] for entry in fused[:max(0, int(limit))]]
+
+    async def _search_all_scenes(
+        self,
+        query: Optional[str],
+        *,
+        queries: Optional[List[str]],
+        search_mode: str,
+        user_ids: List[str],
+        agent_ids: List[str],
+        session_ids: List[str],
+        include_sources: List[str],
+        exclude_sources: List[str],
+        limit: int,
+        min_score: float,
+        working_fact_min_score: Optional[float],
+        working_experience_min_score: Optional[float],
+        schema_min_score: float,
+        schema_limit: int,
+        intention_limit: int,
+        created_after: Optional[float],
+        reader: str,
+        workspace_id: Optional[str],
+        branch: Optional[str],
+        request_id: str,
+        layers: Optional[List[Any]],
+        query_embedding: Optional[List[float]],
+        rerank: bool,
+        target_query: str,
+        lite_mode: bool,
+        t0: float,
+    ) -> Dict[str, Any]:
+        """search(scene="all")：三路并发召回 + RRF 融合。字段见 search() docstring。
+
+        scene 是显式路由，不做 LLM 判类/改写：三路都用 queries[-1]（或 query）。
+        query 向量只算一次、三路共用。任一路异常只记进 errors，不让整次失败。
+        """
+        errors: Dict[str, str] = {}
+        coding_cfg = getattr(getattr(self, "_config", None), "coding", None)
+        coding_enabled = bool(coding_cfg is not None and coding_cfg.enable)
+
+        embedding = query_embedding
+        if not embedding:
+            try:
+                embedding = await self._embed_service.embed(target_query)
+            except Exception as e:
+                # 每一路自己再 embed 一次（也可能各自失败，届时分别记错）
+                logger.warning(f"[search-all] shared embed failed: {e}")
+                embedding = None
+
+        async def _chat_lane() -> Dict[str, Any]:
+            return await self._async_search_impl(
+                query, queries=queries, scene="chat", search_mode=search_mode,
+                user_ids=user_ids, agent_ids=agent_ids, session_ids=session_ids,
+                include_sources=include_sources, exclude_sources=exclude_sources,
+                limit=limit, min_score=min_score,
+                schema_min_score=schema_min_score, schema_limit=schema_limit,
+                intention_limit=intention_limit, created_after=created_after,
+                reader=reader, request_id=request_id, layers=layers,
+                query_embedding=embedding, rerank=rerank,
+            )
+
+        async def _productivity_lane(variant: str) -> Optional[Dict[str, Any]]:
+            # 没写过的场景直接跳过：不为一次检索建空库
+            store = await self._coding_store_for_exact_get(variant)
+            if store is None:
+                return None
+            return await self._search_coding(
+                target_query,
+                user_ids=user_ids, agent_ids=agent_ids, session_ids=session_ids,
+                workspace_id=workspace_id, branch=branch, limit=limit,
+                working_fact_min_score=working_fact_min_score,
+                working_experience_min_score=working_experience_min_score,
+                request_id=request_id, t0=t0, variant=variant,
+                include_sources=include_sources, exclude_sources=exclude_sources,
+                rerank=rerank, query_embedding=embedding,
+            )
+
+        lanes_to_run: Dict[str, Any] = {"chat": _chat_lane()}
+        for variant in ("working", "coding"):
+            if lite_mode:
+                errors[variant] = "disabled: lite mode is chat raw-only"
+            elif not coding_enabled:
+                errors[variant] = "disabled: productivity link disabled in config"
+            else:
+                lanes_to_run[variant] = _productivity_lane(variant)
+
+        names = list(lanes_to_run)
+        results = await asyncio.gather(
+            *lanes_to_run.values(), return_exceptions=True,
+        )
+        lane_items: Dict[str, List[Dict[str, Any]]] = {}
+        for name, result in zip(names, results):
+            if isinstance(result, BaseException):
+                if not isinstance(result, Exception):
+                    raise result
+                logger.warning(f"[search-all] lane {name} failed: {result}")
+                errors[name] = f"{type(result).__name__}: {result}"
+                continue
+            if result is None:
+                continue
+            lane_items[name] = self._search_lane_items(name, result)
+
+        memories = self._rrf_fuse_lanes(lane_items, limit=limit)
+        lanes = {lane: len(lane_items.get(lane) or []) for lane in _SCENE_LANES}
+        elapsed = round((time.perf_counter() - t0) * 1000, 2)
+        logger.info(
+            f"[search-all] lanes={lanes} returned={len(memories)} "
+            f"errors={sorted(errors)} rerank={rerank} elapsed_ms={elapsed}"
+        )
+        out: Dict[str, Any] = {
+            "request_id": request_id,
+            "scene": "all",
+            "memories": memories,
+            "lanes": lanes,
+            "errors": errors,
+            "elapsed_ms": elapsed,
+        }
+        return out
+
     @_ensure_search_loop
     async def async_search(
         self,
@@ -3437,6 +3786,7 @@ class HyMemoryClient:
         layers: Optional[List[Any]] = None,
         embed_override: Optional[Dict[str, Any]] = None,
         query_embedding: Optional[List[float]] = None,
+        rerank: bool = True,
     ) -> Dict[str, Any]:
         """搜索记忆（异步）。详见 search() docstring。
 
@@ -3465,6 +3815,7 @@ class HyMemoryClient:
                     reader=reader, workspace_id=workspace_id, branch=branch,
                     request_id=request_id, layers=layers,
                     query_embedding=query_embedding,
+                    rerank=rerank,
                 )
         return await self._async_search_impl(
             query, queries=queries, scene=scene, search_mode=search_mode,
@@ -3479,6 +3830,7 @@ class HyMemoryClient:
             reader=reader, workspace_id=workspace_id, branch=branch,
             request_id=request_id, layers=layers,
             query_embedding=query_embedding,
+            rerank=rerank,
         )
 
     async def _async_search_impl(
@@ -3507,6 +3859,7 @@ class HyMemoryClient:
         request_id: Optional[str] = None,
         layers: Optional[List[Any]] = None,
         query_embedding: Optional[List[float]] = None,
+        rerank: bool = True,
     ) -> Dict[str, Any]:
         """搜索记忆（异步）。详见 search() docstring。
 
@@ -3542,7 +3895,8 @@ class HyMemoryClient:
         #   "chat"         → "normal"（走 chat 召回）
         #   "productivity" / "normal" 作为旧别名保留，向后兼容。
         scene_norm: Optional[str] = None
-        if scene is not None:
+        scene_all = scene is not None and str(scene).strip().lower() == "all"
+        if scene is not None and not scene_all:
             sn = str(scene).strip().lower()
             _scene_map = {
                 "working": "productivity",
@@ -3553,7 +3907,7 @@ class HyMemoryClient:
             }
             if sn not in _scene_map:
                 raise ValueError(
-                    f"scene must be 'chat', 'working' or 'coding', got {scene!r}"
+                    f"scene must be 'chat', 'working', 'coding' or 'all', got {scene!r}"
                 )
             scene_norm = _scene_map[sn]
 
@@ -3587,6 +3941,25 @@ class HyMemoryClient:
             raise ValueError(
                 "Cannot specify multiple agent_ids and multiple session_ids simultaneously. "
                 "Use single agent_id with multiple session_ids, or multiple agent_ids without session_ids."
+            )
+
+        if scene_all:
+            return await self._search_all_scenes(
+                query, queries=queries, search_mode=search_mode,
+                user_ids=effective_user_ids,
+                agent_ids=effective_agent_ids,
+                session_ids=effective_session_ids,
+                include_sources=effective_include_sources,
+                exclude_sources=effective_exclude_sources,
+                limit=limit, min_score=min_score,
+                working_fact_min_score=working_fact_min_score,
+                working_experience_min_score=working_experience_min_score,
+                schema_min_score=schema_min_score, schema_limit=schema_limit,
+                intention_limit=intention_limit, created_after=created_after,
+                reader=reader, workspace_id=workspace_id, branch=branch,
+                request_id=request_id, layers=layers,
+                query_embedding=query_embedding, rerank=rerank,
+                target_query=target_query, lite_mode=lite_mode, t0=t0,
             )
 
         # ────────────────────────────────────────────────────────────
@@ -3857,6 +4230,7 @@ class HyMemoryClient:
                     variant=decided_variant,
                     include_sources=effective_include_sources,
                     exclude_sources=effective_exclude_sources,
+                    rerank=rerank,
                 )
 
         # ────────────────────────────────────────────────────────────
@@ -3924,6 +4298,7 @@ class HyMemoryClient:
                 if effective_search_layers else None
             ),
             query_embedding=query_embedding,
+            rerank=bool(rerank),
         )
 
         reader_impl = await self._registry.get_reader(reader_name=reader)
@@ -4121,6 +4496,92 @@ class HyMemoryClient:
             "elapsed_ms": elapsed_ms,
         }
 
+    @staticmethod
+    def _validate_memory_namespace(
+        kind: Optional[str], variant: Optional[str],
+    ) -> None:
+        if kind not in (None, "chat", "experience", "fact"):
+            raise ValueError(
+                "kind must be one of: chat, experience, fact"
+            )
+        if variant not in (None, "working", "coding"):
+            raise ValueError("variant must be one of: working, coding")
+        if kind == "chat" and variant is not None:
+            raise ValueError("variant is only valid for experience/fact lookups")
+
+    async def _resolve_memory_namespace(
+        self,
+        memory_id: str,
+        *,
+        kind: Optional[str],
+        variant: Optional[str],
+        chat_lookups: Dict[str, Any],
+    ) -> Tuple[List[Tuple[str, Any]], Dict[str, Any], Dict[str, Any]]:
+        """按 kind/variant 在 chat 与 working/coding 的经验/事实里精确查 ID。
+
+        get / update / delete 共用这一套解析：
+          - kind/variant 都不给：查 chat + 两个变体的经验和事实
+          - variant 给了：只查该变体（不查 chat）
+          - kind 给了：只查该类
+        没写过的变体不建空库（_coding_store_for_exact_get）。命中多于一个
+        namespace 时 fail closed，抛 AmbiguousMemoryIdError。
+
+        chat_lookups：{"chat:<name>": 零参协程函数}，按顺序取第一个非 None 作为
+        chat 命中（get 传 vdb + graph，update 只传 vdb）。
+
+        Returns:
+            (matches, by_name, stores) —— matches 是 [(namespace, item)]，
+            namespace 为 "chat" 或 "<variant>:<kind>"；by_name 是每次查询的原始
+            结果；stores 是参与查询的 {variant: CodingMemoryStore}。
+        """
+        query_chat = kind in (None, "chat") and variant is None
+        coding_kinds = (
+            ("experience", "fact") if kind is None else (kind,)
+        )
+        coding_variants = (variant,) if variant is not None else ("working", "coding")
+
+        stores: Dict[str, Any] = {}
+        if kind != "chat":
+            for candidate_variant in coding_variants:
+                store = await self._coding_store_for_exact_get(candidate_variant)
+                if store is not None:
+                    stores[candidate_variant] = store
+
+        tasks = []
+        task_names: List[str] = []
+        if query_chat:
+            for name, lookup in chat_lookups.items():
+                tasks.append(lookup())
+                task_names.append(name)
+        for candidate_variant, store in stores.items():
+            if "experience" in coding_kinds:
+                tasks.append(store.get_by_id(memory_id))
+                task_names.append(f"{candidate_variant}:experience")
+            if "fact" in coding_kinds:
+                tasks.append(store.get_fact(memory_id))
+                task_names.append(f"{candidate_variant}:fact")
+
+        values = await asyncio.gather(*tasks) if tasks else []
+        by_name = dict(zip(task_names, values))
+
+        matches: List[Tuple[str, Any]] = []
+        chat_node = next(
+            (by_name[name] for name in chat_lookups
+             if by_name.get(name) is not None),
+            None,
+        )
+        if chat_node is not None:
+            matches.append(("chat", chat_node))
+        for name, value in by_name.items():
+            if not name.startswith("chat:") and value is not None:
+                matches.append((name, value))
+
+        if len(matches) > 1:
+            raise AmbiguousMemoryIdError(
+                memory_id, [namespace for namespace, _ in matches]
+            )
+        return matches, by_name, stores
+
     @_ensure_internal_loop
     async def async_get(
         self,
@@ -4144,14 +4605,7 @@ class HyMemoryClient:
         Returns:
             统一 memory dict，或 None。
         """
-        if kind not in (None, "chat", "experience", "fact"):
-            raise ValueError(
-                "kind must be one of: chat, experience, fact"
-            )
-        if variant not in (None, "working", "coding"):
-            raise ValueError("variant must be one of: working, coding")
-        if kind == "chat" and variant is not None:
-            raise ValueError("variant is only valid for experience/fact lookups")
+        self._validate_memory_namespace(kind, variant)
 
         request_id = str(uuid.uuid4())
         set_request_id(request_id)
@@ -4174,49 +4628,12 @@ class HyMemoryClient:
                 logger.debug(f"[get] graph_store query failed: {e}")
                 return None
 
-        query_chat = kind in (None, "chat") and variant is None
-        coding_kinds = (
-            ("experience", "fact") if kind is None else (kind,)
+        matches, by_name, _stores = await self._resolve_memory_namespace(
+            memory_id, kind=kind, variant=variant,
+            chat_lookups={"chat:vdb": _get_vdb, "chat:graph": _get_graph},
         )
-        coding_variants = (variant,) if variant is not None else ("working", "coding")
-
-        stores = {}
-        if kind != "chat":
-            for candidate_variant in coding_variants:
-                store = await self._coding_store_for_exact_get(candidate_variant)
-                if store is not None:
-                    stores[candidate_variant] = store
-
-        tasks = []
-        task_names = []
-        if query_chat:
-            tasks.extend((_get_vdb(), _get_graph()))
-            task_names.extend(("chat:vdb", "chat:graph"))
-        for candidate_variant, store in stores.items():
-            if "experience" in coding_kinds:
-                tasks.append(store.get_by_id(memory_id))
-                task_names.append(f"{candidate_variant}:experience")
-            if "fact" in coding_kinds:
-                tasks.append(store.get_fact(memory_id))
-                task_names.append(f"{candidate_variant}:fact")
-
-        values = await asyncio.gather(*tasks) if tasks else []
-        by_name = dict(zip(task_names, values))
         vdb_node = by_name.get("chat:vdb")
         graph_node = by_name.get("chat:graph")
-
-        matches = []
-        chat_node = vdb_node if vdb_node is not None else graph_node
-        if chat_node is not None:
-            matches.append(("chat", chat_node))
-        for name, value in by_name.items():
-            if not name.startswith("chat:") and value is not None:
-                matches.append((name, value))
-
-        if len(matches) > 1:
-            raise AmbiguousMemoryIdError(
-                memory_id, [namespace for namespace, _ in matches]
-            )
 
         elapsed = round((time.perf_counter() - t0) * 1000, 2)
         _hit_namespace, _hit_node = matches[0] if matches else ("", None)
@@ -4321,14 +4738,139 @@ class HyMemoryClient:
         return None
 
     @_ensure_internal_loop
-    async def async_update(self, memory_id: str, content: str) -> Dict[str, Any]:
+    async def async_update(
+        self,
+        memory_id: str,
+        content: str,
+        *,
+        kind: Optional[MemoryKind] = None,
+        variant: Optional[MemoryVariant] = None,
+        task: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         更新记忆内容（异步）。
 
-        流程: get_by_id → 404 校验 → embed → 更新节点字段 → upsert → 记录历史
+        namespace 解析与 get() 相同（_resolve_memory_namespace）：kind/variant 都不
+        给时查 chat + working/coding 的经验与事实，命中多个 namespace 抛
+        AmbiguousMemoryIdError，用 kind/variant 消歧。chat 只认向量库里的节点
+        （与改动前一致）。
+
+        content 的映射：
+          - chat：替换正文并重嵌（原行为）
+          - experience：替换 solution（与 get() 返回的 content 同一字段）；task
+            不变，除非另传 task=。solution 不进向量，只改它时不重嵌；改了 task
+            则删旧 key 向量行、重嵌 task + search_keys。updated_at 刷新。
+          - fact：替换 statement，active 事实重嵌其向量行。
+        task= 只对经验有效，给 chat / fact 传会 ValueError。
 
         Returns:
-            {"success", "memory_id", "request_id", "elapsed_ms"}
+            {"success", "memory_id", "request_id", "elapsed_ms"}；生产力条目额外带
+            "kind" / "variant"。不存在时 success=False + error_message。
+        """
+        self._validate_memory_namespace(kind, variant)
+        if task is not None and kind in ("chat", "fact"):
+            raise ValueError("task is only valid when updating an experience")
+        matches, _, stores = await self._resolve_memory_namespace(
+            memory_id, kind=kind, variant=variant,
+            chat_lookups={
+                "chat:vdb": lambda: self._vector_store.get_by_id(memory_id),
+            },
+        )
+        namespace = matches[0][0] if matches else ""
+        if namespace and namespace != "chat":
+            hit_variant, hit_kind = namespace.split(":", 1)
+            if task is not None and hit_kind != "experience":
+                raise ValueError("task is only valid when updating an experience")
+            return await self._update_productivity(
+                stores[hit_variant], memory_id, content,
+                kind=hit_kind, variant=hit_variant, task=task,
+            )
+        if task is not None:
+            raise ValueError("task is only valid when updating an experience")
+        if not namespace and (kind not in (None, "chat") or variant is not None):
+            return self._productivity_not_found(
+                memory_id, kind=kind, variant=variant, op="update",
+            )
+        return await self._update_chat(memory_id, content)
+
+    @staticmethod
+    def _productivity_not_found(
+        memory_id: str, *, kind: Optional[str], variant: Optional[str], op: str,
+    ) -> Dict[str, Any]:
+        request_id = str(uuid.uuid4())
+        logger.warning(
+            f"[{op}] not found: memory_id={memory_id} kind={kind} variant={variant}"
+        )
+        out: Dict[str, Any] = {
+            "success": False,
+            "memory_id": memory_id,
+            "kind": kind,
+            "variant": variant,
+            "request_id": request_id,
+            "elapsed_ms": 0.0,
+            "error_message": f"memory_id '{memory_id}' not found",
+        }
+        if op == "delete":
+            out.update({"deleted_count": 0, "partial": False, "error_code": None})
+        return out
+
+    async def _update_productivity(
+        self,
+        store,
+        memory_id: str,
+        content: str,
+        *,
+        kind: str,
+        variant: str,
+        task: Optional[str],
+    ) -> Dict[str, Any]:
+        request_id = str(uuid.uuid4())
+        set_request_id(request_id)
+        t0 = time.perf_counter()
+        logger.info(
+            f"[update] memory_id={memory_id} namespace={variant}:{kind} "
+            f"new_content({len(content)} chars)"
+        )
+        if kind == "experience":
+            updated = await store.edit_experience(
+                memory_id, solution=content, task=task,
+            )
+        else:
+            updated = await store.edit_fact(memory_id, statement=content)
+        elapsed = round((time.perf_counter() - t0) * 1000, 2)
+        if updated is None:
+            # 解析之后、写入之前被并发删掉
+            return {
+                "success": False,
+                "memory_id": memory_id,
+                "kind": kind,
+                "variant": variant,
+                "request_id": request_id,
+                "elapsed_ms": elapsed,
+                "error_message": f"memory_id '{memory_id}' not found",
+            }
+        await self._maybe_store_op_log(
+            step="UPDATE",
+            request_id=request_id,
+            user_id=getattr(updated, "user_id", "") or "",
+            agent_id=getattr(updated, "agent_id", "") or "",
+            parsed={"memory_id": memory_id, "namespace": f"{variant}:{kind}"},
+            memory_ids=[memory_id],
+            elapsed_ms=elapsed,
+        )
+        return {
+            "success": True,
+            "memory_id": memory_id,
+            "kind": kind,
+            "variant": variant,
+            "request_id": request_id,
+            "elapsed_ms": elapsed,
+        }
+
+    async def _update_chat(self, memory_id: str, content: str) -> Dict[str, Any]:
+        """chat 记忆的更新（原 async_update 逻辑）。
+
+        流程: get_by_id → 404 校验 → embed → 更新节点字段 → upsert → 记录历史
         """
         request_id = str(uuid.uuid4())
         set_request_id(request_id)
@@ -4471,9 +5013,103 @@ class HyMemoryClient:
             logger.debug(f"[{step.lower()}] store op trace failed (non-fatal): {e}")
 
     @_ensure_internal_loop
-    async def async_delete(self, memory_id: str) -> Dict[str, Any]:
+    async def async_delete(
+        self,
+        memory_id: str,
+        *,
+        kind: Optional[MemoryKind] = None,
+        variant: Optional[MemoryVariant] = None,
+    ) -> Dict[str, Any]:
         """
         删除单条记忆（异步）。
+
+        namespace 解析与 get() 相同：kind/variant 都不给时查 chat（向量库 + 图库）
+        与 working/coding 的经验和事实，命中多个 namespace 抛
+        AmbiguousMemoryIdError。
+
+          - chat：原逻辑（见 _delete_chat）
+          - experience：删 SQLite 行 + 经验向量集合里它的全部 key 行
+          - fact：删 SQLite 行 + 事实向量集合里那一行；别处指向它的引用不清，
+            召回侧本就按存在性过滤死链
+
+        Returns:
+            {"success", "deleted_count", "request_id", "elapsed_ms", ...}；
+            生产力条目额外带 "kind" / "variant"。不存在时 success=False、
+            deleted_count=0。
+        """
+        self._validate_memory_namespace(kind, variant)
+
+        async def _get_graph():
+            if getattr(self, "_graph_store", None) is None:
+                return None
+            try:
+                return await self._graph_store.get_node(memory_id)
+            except Exception:
+                # 图库查不通交给 _delete_chat 报 delete_incomplete
+                return None
+
+        matches, _, stores = await self._resolve_memory_namespace(
+            memory_id, kind=kind, variant=variant,
+            chat_lookups={
+                "chat:vdb": lambda: self._vector_store.get_by_id(memory_id),
+                "chat:graph": _get_graph,
+            },
+        )
+        namespace = matches[0][0] if matches else ""
+        if namespace and namespace != "chat":
+            hit_variant, hit_kind = namespace.split(":", 1)
+            return await self._delete_productivity(
+                stores[hit_variant], memory_id, matches[0][1],
+                kind=hit_kind, variant=hit_variant,
+            )
+        if not namespace and (kind not in (None, "chat") or variant is not None):
+            return self._productivity_not_found(
+                memory_id, kind=kind, variant=variant, op="delete",
+            )
+        return await self._delete_chat(memory_id)
+
+    async def _delete_productivity(
+        self, store, memory_id: str, item, *, kind: str, variant: str,
+    ) -> Dict[str, Any]:
+        request_id = str(uuid.uuid4())
+        set_request_id(request_id)
+        t0 = time.perf_counter()
+        logger.info(f"[delete] memory_id={memory_id} namespace={variant}:{kind}")
+        user_id = getattr(item, "user_id", "") or ""
+        if kind == "experience":
+            deleted = await store.delete(memory_id, user_id=user_id)
+        else:
+            deleted = await store.delete_fact(memory_id, user_id=user_id or None)
+        elapsed = round((time.perf_counter() - t0) * 1000, 2)
+        await self._maybe_store_op_log(
+            step="DELETE",
+            request_id=request_id,
+            user_id=user_id,
+            agent_id=getattr(item, "agent_id", "") or "",
+            parsed={
+                "memory_id": memory_id,
+                "namespace": f"{variant}:{kind}",
+                "found": True,
+                "deleted_count": 1 if deleted else 0,
+            },
+            memory_ids=[memory_id],
+            elapsed_ms=elapsed,
+        )
+        return {
+            "success": bool(deleted),
+            "deleted_count": 1 if deleted else 0,
+            "memory_id": memory_id,
+            "kind": kind,
+            "variant": variant,
+            "partial": False,
+            "error_code": None,
+            "request_id": request_id,
+            "elapsed_ms": elapsed,
+        }
+
+    async def _delete_chat(self, memory_id: str) -> Dict[str, Any]:
+        """
+        删除单条 chat 记忆（原 async_delete 逻辑）。
 
         同时删除向量库和图数据库（如有）中的对应节点。
 
@@ -5210,6 +5846,8 @@ class HyMemoryClient:
         t0: float,
         statuses: Optional[List] = None,
         variant: Optional[str] = None,
+        include_sources: Optional[List[str]] = None,
+        exclude_sources: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """按 workspace_id（+可选 branch）纯过滤列出经验层完整详情。
 
@@ -5218,7 +5856,14 @@ class HyMemoryClient:
 
         variant 给定时读该变体自己的库（没写过的变体不建空库，直接返回空），
         workspace_id 为空表示该 user 的全部经验。未给定时沿用"最近一次用的那份"。
+
+        include_sources / exclude_sources 按 source 列在 SQL 里过滤（排除优先），
+        分页与 total 都在过滤之后计算。
         """
+        from .utils.source_filter import normalize_source_filters
+        include_sources, exclude_sources = normalize_source_filters(
+            include_sources, exclude_sources,
+        )
         empty = {
             "request_id": request_id,
             "scene": "productivity",
@@ -5249,9 +5894,13 @@ class HyMemoryClient:
             mems = await store.list_by_workspace(
                 user_id=user_id, workspace_id=workspace_id or "", branch=branch,
                 limit=limit, offset=offset,
+                include_sources=include_sources or None,
+                exclude_sources=exclude_sources or None,
             )
             total = (await store.stats(
                 user_id, workspace_id=workspace_id or None, branch=branch,
+                include_sources=include_sources or None,
+                exclude_sources=exclude_sources or None,
             ))["count"]
         except Exception as e:
             logger.warning(f"[list-coding] list_by_workspace failed: {e}")
@@ -5298,13 +5947,164 @@ class HyMemoryClient:
 
     @staticmethod
     def _list_scene(scene: Optional[str]) -> Optional[str]:
-        """list/stats 的 scene：None（原有路由）| chat | coding | working。"""
+        """list/stats 的 scene：None（原有路由）| chat | coding | working | all。"""
         if scene is None:
             return None
         value = str(scene).strip().lower()
-        if value not in ("chat", "coding", "working"):
-            raise ValueError(f"scene must be chat, coding or working, got {scene!r}")
+        if value not in ("chat", "coding", "working", "all"):
+            raise ValueError(
+                f"scene must be chat, coding, working or all, got {scene!r}"
+            )
         return value
+
+    @staticmethod
+    def _chat_list_item_unified(node) -> Dict[str, Any]:
+        """chat 节点 → list(scene="all") 统一条目（在原 list 条目上加字段）。"""
+        item = HyMemoryClient._memory_node_to_list_item(node)
+        created = item.get("gmt_created")
+        updated = _epoch_seconds(getattr(node, "gmt_modified", None))
+        item.update({
+            "scene": "chat",
+            "kind": "chat",
+            "source": item.get("source") or "default",
+            "created_at": created,
+            "updated_at": updated if updated is not None else created,
+        })
+        return item
+
+    async def _list_all_scenes(
+        self,
+        *,
+        user_id: str,
+        agent_id: Optional[str],
+        user_ids: Optional[List[str]],
+        agent_ids: Optional[List[str]],
+        session_ids: Optional[List[str]],
+        include_sources: Optional[List[str]],
+        exclude_sources: Optional[List[str]],
+        layers: Optional[List],
+        statuses: Optional[List],
+        workspace_id: Optional[str],
+        branch: Optional[str],
+        limit: int,
+        offset: int,
+        order: str,
+        request_id: str,
+        t0: float,
+    ) -> Dict[str, Any]:
+        """list_memories(scene="all")：chat + working + coding 按更新时间合并分页。
+
+        分页做法（k 路归并的前缀）：合并序的前 offset+limit 条，必然落在每一路
+        各自的前 offset+limit 条里。所以生产力两路只向 SQLite 要
+        ``ORDER BY updated_at DESC LIMIT offset+limit``（有 updated_at 索引），
+        total 用 COUNT 聚合；chat 路本来就是整表读回再排序（VDB 没有按时间的
+        有序分页），与 scene=None 的 chat 列表开销相同。三路合并后按
+        (updated_at desc, scene, memory_id) 排序再切 [offset, offset+limit)。
+        翻页越深，生产力两路取的前缀越长（O(offset+limit)），但从不整表扫描。
+        """
+        from .models.memory import MemoryStatus
+        from .utils.source_filter import normalize_source_filters
+
+        if str(order or "desc").strip().lower() != "desc":
+            raise ValueError("list_memories(scene='all') only supports order='desc'")
+        include, exclude = normalize_source_filters(include_sources, exclude_sources)
+        window = max(0, int(offset)) + max(0, int(limit))
+
+        nodes = await self._list_vdb_nodes(
+            user_id=user_id, agent_id=agent_id,
+            user_ids=user_ids, agent_ids=agent_ids,
+            session_ids=session_ids,
+            include_sources=include or None,
+            exclude_sources=exclude or None,
+            layers=layers, statuses=statuses,
+        )
+        # 排序键 (-更新时间(亚秒精度), 路序, 本路名次)：本路名次就是该路自己的
+        # 排序（生产力路 = SQL 的 updated_at DESC, experience_id ASC），这样合并序
+        # 在每一路内部与那一路的取数顺序一致，"只取每路前 offset+limit 条" 才严格成立。
+        lane_order = {lane: index for index, lane in enumerate(_SCENE_LANES)}
+        keyed: List[Tuple[Tuple[float, int, int], Dict[str, Any]]] = []
+
+        def _chat_ts(node) -> float:
+            for value in (
+                getattr(node, "gmt_modified", None),
+                getattr(node, "gmt_created", None),
+                getattr(node, "valid_from", None),
+            ):
+                stamp = _epoch_float(value)
+                if stamp is not None:
+                    return stamp
+            return float("-inf")
+
+        chat_sorted = sorted(
+            nodes, key=lambda n: (-_chat_ts(n), str(getattr(n, "node_id", "")))
+        )
+        for position, node in enumerate(chat_sorted):
+            keyed.append((
+                (-_chat_ts(node), lane_order["chat"], position),
+                self._chat_list_item_unified(node),
+            ))
+        totals: Dict[str, int] = {"chat": len(nodes), "working": 0, "coding": 0}
+        errors: Dict[str, str] = {}
+
+        include_productivity = not statuses or MemoryStatus.ACTIVE in statuses
+        productivity_user = user_id or (user_ids[0] if user_ids else "")
+        for variant in ("working", "coding"):
+            if not include_productivity:
+                continue
+            try:
+                store = await self._coding_store_for_exact_get(variant)
+                if store is None:
+                    continue
+                mems = await store.list_by_workspace(
+                    user_id=productivity_user,
+                    workspace_id=workspace_id or "", branch=branch,
+                    limit=window, offset=0,
+                    include_sources=include or None,
+                    exclude_sources=exclude or None,
+                )
+                totals[variant] = int((await store.stats(
+                    productivity_user,
+                    workspace_id=workspace_id or None, branch=branch,
+                    include_sources=include or None,
+                    exclude_sources=exclude or None,
+                ))["count"])
+            except Exception as e:
+                logger.warning(f"[list-all] {variant} lane failed: {e}")
+                errors[variant] = f"{type(e).__name__}: {e}"
+                continue
+            for position, d in enumerate(mems):
+                payload = d.to_dict()
+                payload["status"] = MemoryStatus.ACTIVE.value
+                stamp = _epoch_float(
+                    d.updated_at or d.created_at, naive_is_utc=True,
+                )
+                keyed.append((
+                    (-(stamp if stamp is not None else float("-inf")),
+                     lane_order[variant], position),
+                    self._unify_productivity_item(
+                        payload, kind="experience", scene=variant,
+                    ),
+                ))
+
+        keyed.sort(key=lambda entry: entry[0])
+        page = [item for _, item in keyed[offset: offset + limit]]
+        total = sum(totals.values())
+        elapsed = round((time.perf_counter() - t0) * 1000, 2)
+        logger.info(
+            f"[list-all] user={user_ids or user_id} totals={totals} "
+            f"returned={len(page)} offset={offset} limit={limit} elapsed={elapsed}ms"
+        )
+        return {
+            "request_id": request_id,
+            "scene": "all",
+            "memories": page,
+            "total": total,
+            "totals": totals,
+            "errors": errors,
+            "limit": limit,
+            "offset": offset,
+            "elapsed_ms": elapsed,
+        }
 
     @_ensure_internal_loop
     async def async_memory_stats(
@@ -5356,8 +6156,8 @@ class HyMemoryClient:
                     raw = await store.stats(user_id)
                     stats = {
                         "count": raw["count"],
-                        "latest_created_at": _epoch(raw["latest_created_at"]),
-                        "latest_updated_at": _epoch(raw["latest_updated_at"]),
+                        "latest_created_at": _epoch_seconds(raw["latest_created_at"], naive_is_utc=True),
+                        "latest_updated_at": _epoch_seconds(raw["latest_updated_at"], naive_is_utc=True),
                         "facts": raw["facts"],
                     }
             scenes[variant] = stats
@@ -5463,6 +6263,7 @@ class HyMemoryClient:
                 user_id=user_id, workspace_id=workspace_id, branch=branch,
                 limit=limit, offset=offset, request_id=request_id, t0=t0,
                 statuses=effective_statuses, variant=list_scene,
+                include_sources=include_sources, exclude_sources=exclude_sources,
             )
         # workspace_id 非空且未指定 scene → 走 coding memory 列表路径（原有行为）
         if workspace_id and list_scene is None:
@@ -5470,9 +6271,21 @@ class HyMemoryClient:
                 user_id=user_id, workspace_id=workspace_id, branch=branch,
                 limit=limit, offset=offset, request_id=request_id, t0=t0,
                 statuses=effective_statuses,
+                include_sources=include_sources, exclude_sources=exclude_sources,
             )
 
         effective_layers = self._normalize_layers(layers)
+        if list_scene == "all":
+            return await self._list_all_scenes(
+                user_id=user_id, agent_id=agent_id,
+                user_ids=user_ids, agent_ids=agent_ids,
+                session_ids=session_ids,
+                include_sources=include_sources, exclude_sources=exclude_sources,
+                layers=effective_layers, statuses=effective_statuses,
+                workspace_id=workspace_id, branch=branch,
+                limit=limit, offset=offset, order=order,
+                request_id=request_id, t0=t0,
+            )
 
         vdb = await self._list_vdb_bucket(
             user_id=user_id, agent_id=agent_id,

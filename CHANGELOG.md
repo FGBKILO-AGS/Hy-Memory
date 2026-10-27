@@ -4,6 +4,33 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- SDK: `search(..., rerank=False)` skips every reranking stage for that one
+  call (the local cross-encoder, the memory-graph rerank, and the BM25 rerank of
+  working/coding facts), so results come back in retrieval-score order. The
+  flag travels on the read request, so concurrent searches do not affect each
+  other. The default (`True`) keeps current behavior; `/api/v1/search` accepts
+  it too.
+- SDK: MMR diversity selection now runs only when the requested `limit` is
+  below 20 (`MMR_MAX_TOP_K`) and is skipped for larger limits, where its
+  quadratic token-overlap pass is slow and gains little. Previously it ran for
+  every limit. `MEMORY_HYBRID_V2_MMR_LAMBDA` still sets the weight.
+- SDK: `search(scene="all")` searches chat, working and coding at the same time
+  and merges them with Reciprocal Rank Fusion (k=60) over each scene's own
+  ranking, so no scene is crowded out by the other scenes' score scales. Each
+  result says which scene and kind it came from. A scene that fails or is turned
+  off is reported in `errors` and does not fail the search. Source filters apply
+  to all three.
+- SDK: `list_memories(scene="all")` lists chat, working and coding memories
+  together, newest update first, with `limit`/`offset` paging over the merged
+  order and `total` summing all three. `scene="coding"` and `"working"` now
+  honor `include_sources` / `exclude_sources`, and `total` counts only the
+  filtered memories.
+- SDK: `update()` and `delete()` now work on working/coding experiences and
+  facts, not just chat memories. They take the same optional `kind` / `variant`
+  as `get()`, and an ID found in more than one place raises
+  `AmbiguousMemoryIdError` instead of guessing. Updating an experience replaces
+  its solution and keeps its task, unless a new `task=` is also passed; updating
+  a fact replaces its statement. Deleting removes the stored row and its vectors.
 - SDK: `list_memories(scene="chat" | "coding" | "working")` lists one kind of
   memory. `coding` and `working` list that scene's whole store, newest update
   first (`workspace_id` still narrows it), and `total` is now the real count

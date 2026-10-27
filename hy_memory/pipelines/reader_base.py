@@ -58,6 +58,7 @@ from ._retrieval.ner import (
 )
 from ._retrieval.diversity import (
     near_dup_demote,
+    mmr_applies,
     mmr_select,
     social_boilerplate_demote,
     pool_df_demote,
@@ -1279,7 +1280,10 @@ class BaseReadPipeline(ReadPipeline):
             SAME_SERIES_TIMELINE_ON = bool(
                 getattr(self.config.recall, "same_series_timeline_enabled", False)
             )
-            LOCAL_RERANK_ON = bool(
+            # 按次的重排开关（search(rerank=False)）：关掉本地 cross-encoder 与图重排，
+            # 结果按召回分排序。只读请求对象，不碰共享状态，并发请求互不影响。
+            RERANK_ON = bool(getattr(request, "rerank", True))
+            LOCAL_RERANK_ON = RERANK_ON and bool(
                 getattr(self.config.recall, "local_rerank_enabled", False)
             )
             LOCAL_RERANK_POOL_FACTOR = max(1, int(
@@ -1431,6 +1435,9 @@ class BaseReadPipeline(ReadPipeline):
             MIN_SCORE = _resolve_normal_min_score(request.min_score)
 
             final_limit = request.limit if request.limit > 0 else 10
+            # MMR 只在调用方的 top-k（final_limit，即 search 的 limit）< MMR_MAX_TOP_K
+            # 时启用；池子（LOCAL_RERANK 下是 final_limit 的若干倍）不参与判定。
+            MMR_ON = mmr_applies(final_limit, MMR_LAMBDA)
             vdb_sem_limit = max(final_limit * 3, 30)
             vdb_kw_limit = max(final_limit * 5, 80)
             graph_limit = max(
@@ -2462,7 +2469,7 @@ class BaseReadPipeline(ReadPipeline):
             # 只把已选出的 top-N 换个顺序收益很小。
             relation_paths: List[Dict[str, Any]] = []
             _graph_stats: Dict[str, Any] = {}
-            if self._expansion_on():
+            if RERANK_ON and self._expansion_on():
                 _t_graph = datetime.now()
                 _pool_before = len(normal_results)
                 normal_results, relation_paths, _graph_stats = await self._apply_graph_rerank(
@@ -2538,7 +2545,7 @@ class BaseReadPipeline(ReadPipeline):
                     ))
                     if LOCAL_RERANK_ON else final_limit
                 )
-                if 0.0 < MMR_LAMBDA < 0.999 and len(normal_results) > _pre_rerank_limit:
+                if MMR_ON and len(normal_results) > _pre_rerank_limit:
                     normal_results = mmr_select(
                         normal_results,
                         _pre_rerank_limit,
@@ -2715,7 +2722,7 @@ class BaseReadPipeline(ReadPipeline):
                         reverse=True,
                     )
                     if (
-                        0.0 < MMR_LAMBDA < 0.999
+                        MMR_ON
                         and len(multi_seed_pool) > _pre_rerank_limit
                     ):
                         multi_seed_pool = mmr_select(
@@ -3544,6 +3551,8 @@ class BaseReadPipeline(ReadPipeline):
                 "episode_capsule_render_mode": EPISODE_CAPSULE_RENDER_MODE,
                 "same_series_timeline_enabled": SAME_SERIES_TIMELINE_ON,
                 "local_rerank_enabled": LOCAL_RERANK_ON,
+                "rerank": RERANK_ON,
+                "mmr_applied": MMR_ON,
                 "local_rerank_model": getattr(
                     self.config.recall,
                     "local_rerank_model",
