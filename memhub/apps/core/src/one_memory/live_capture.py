@@ -105,10 +105,17 @@ def capture_stdio(source_id: str, stdin: TextIO, output: TextIO) -> int:
 
 
 def sdk_migration_capture_fenced(data_dir: Path) -> bool:
-    """Ignore stale fences; only a live Desktop migration pauses hook writes."""
+    """Ignore stale fences; a live migration or a failed one pauses hook writes.
+
+    A failed upgrade migration leaves the fence `frozen` (no pid): the home was
+    put back as it was before the upgrade and takes no writes until the next
+    migration attempt, which replaces the fence and lifts it on success.
+    """
     marker = data_dir / SDK_MIGRATION_CAPTURE_FENCE
     try:
         document = json.loads(marker.read_text(encoding="utf-8"))
+        if isinstance(document, dict) and document.get("frozen") is True:
+            return True
         pid = int(document["pid"])
         if pid < 1:
             raise ValueError("invalid migration fence pid")

@@ -176,6 +176,7 @@ export {
 } from "./runtime-supervisor.js";
 export {
   type CoreCommand,
+  readInstalledRuntimeSource,
   runSdkMigration,
   type SdkMigrationCommandResult,
   type SdkMigrationOptions,
@@ -183,13 +184,18 @@ export {
 } from "./sdk-migration.js";
 export {
   clearSdkMigrationBlock,
+  freezeCapture,
   readSdkMigrationBlock,
   recordSdkMigrationBlock,
+  SDK_MIGRATION_CAPTURE_FENCE,
   SDK_MIGRATION_LOG_NAME,
   type SdkMigrationBlock,
+  type SdkMigrationBlockDetails,
   type SdkMigrationCaller,
   type SdkMigrationLogEntry,
+  type SdkMigrationSource,
   sdkMigrationLogPath,
+  thawCapture,
   writeSdkMigrationLog,
 } from "./sdk-migration-log.js";
 export {

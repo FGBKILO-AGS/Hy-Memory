@@ -249,6 +249,7 @@
 | `test_sdk_memory_qa.py` | `contract` | 覆盖 sdk ask propagates sdk search failure without legacy fallback、sdk ask revalidates memory before returning extract、sdk ask uses native sdk memory without governance fields 场景。 |
 | `test_sdk_migration_bundle.py` | `contract` | SDK-authority cutover requires a verified management + SDK data-plane bundle. |
 | `test_sdk_migration_log.py` | `integration` | `sdk-migration.log` explains an unfinished upgrade, and a legacy home is never served. |
+| `test_sdk_migration_restore.py` | `contract` | A failed upgrade migration puts the home back exactly as it found it. |
 | `test_sdk_verbatim_fallback.py` | `contract` | D98: the SDK's verbatim fallback must stay off. |
 | `test_search_without_profile.py` | `contract` | What 'semantic_search' should do once the profile that filled the store is gone. |
 | `test_secondary_source_adapters.py` | `contract` | 覆盖 pi and qwenwork keep tool and sidechain content out of the persons words、qwen code reads only the transcript beside its bookkeeping、qwen native parts preserve visible text not reasoning or tools 等 22 个场景。 |
@@ -306,4 +307,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 301 个测试文件。
+共 302 个测试文件。

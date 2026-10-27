@@ -301,16 +301,20 @@ def test_the_runner_names_the_step_and_sub_step_that_failed(tmp_path, monkeypatc
         for line in written
         if "step" in line.get("details", {})
     ]
-    assert steps[:6] == [
+    assert steps[:8] == [
         ("step.finished", "preflight.authority_read"),
         ("step.finished", "preflight.profile_read"),
         ("step.finished", "preflight.resumable_identity"),
         ("step.finished", "preflight.legacy_ids_scan"),
         ("step.finished", "preflight.model_profile_check"),
+        ("step.finished", "prepare.recover_abandoned_staging"),
         ("step.finished", "bundle.ensure"),
+        ("step.finished", "bundle.restore_point"),
     ]
     assert steps[-1] == ("step.failed", "prepare.legacy_work")
-    failed = written[-1]
+    # The failure put the home back; the restore says so after the failed step.
+    assert [line["event"] for line in written[-2:]] == ["restore.started", "restore.finished"]
+    failed = next(line for line in reversed(written) if line["event"] == "step.failed")
     assert failed["migration_id"].startswith("sdk-authority-v2-")
     assert failed["details"]["sub_step"] == "write_queue"
     assert failed["error"]["chain"][0]["type"] == "ValueError"

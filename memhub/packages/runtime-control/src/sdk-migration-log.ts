@@ -25,6 +25,8 @@ export type SdkMigrationCaller =
   | "desktop-background"
   | "cli-install"
   | "cli-upgrade"
+  | "cli-start"
+  | "cli-restart"
   | "runtime-service";
 
 export const SDK_MIGRATION_LOG_NAME = "sdk-migration.log";
@@ -128,6 +130,33 @@ export interface SdkMigrationBlock {
   code: string;
   caller: SdkMigrationCaller;
   at: string;
+  /**
+   * The home is frozen after a failed migration: the Runtime service marker
+   * is off, the service exits instead of idling and host capture is fenced.
+   * The next foreground migration (Desktop launch, `memhub install`,
+   * `upgrade`, `start`/`restart`) lifts it, and re-enables the service when it
+   * was enabled before the freeze.
+   */
+  frozen?: { service_was_enabled: boolean };
+  /** Core put the data back exactly as it was before the upgrade. */
+  data_restored?: boolean;
+  /** Why that restore did not happen, when Core tried and failed. */
+  restore_code?: string;
+  /** The Runtime the home was upgraded from, when it is known. */
+  source?: SdkMigrationSource;
+}
+
+/** Build and version of the Runtime an upgrade replaced, from its manifest. */
+export interface SdkMigrationSource {
+  version: string | null;
+  build_number: number | null;
+}
+
+export interface SdkMigrationBlockDetails {
+  frozen?: { service_was_enabled: boolean };
+  data_restored?: boolean;
+  restore_code?: string;
+  source?: SdkMigrationSource | null;
 }
 
 const BLOCK_NAME = "sdk-migration-blocked.json";
@@ -140,6 +169,7 @@ export async function recordSdkMigrationBlock(
   dataDir: string,
   code: string,
   caller: SdkMigrationCaller,
+  details: SdkMigrationBlockDetails = {},
 ): Promise<void> {
   try {
     await mkdir(dataDir, { recursive: true, mode: 0o700 });
@@ -147,7 +177,20 @@ export async function recordSdkMigrationBlock(
     const temporary = `${target}.${process.pid}.tmp`;
     await writeFile(
       temporary,
-      `${JSON.stringify({ schema_version: 1, code, caller, at: new Date().toISOString() })}\n`,
+      `${JSON.stringify({
+        schema_version: 1,
+        code,
+        caller,
+        at: new Date().toISOString(),
+        ...(details.frozen === undefined ? {} : { frozen: details.frozen }),
+        ...(details.data_restored === undefined
+          ? {}
+          : { data_restored: details.data_restored }),
+        ...(details.restore_code === undefined
+          ? {}
+          : { restore_code: details.restore_code }),
+        ...(details.source ? { source: details.source } : {}),
+      })}\n`,
       { encoding: "utf8", mode: 0o600 },
     );
     await chmod(temporary, 0o600);
@@ -161,6 +204,25 @@ export async function clearSdkMigrationBlock(dataDir: string): Promise<void> {
   await rm(blockPath(dataDir), { force: true }).catch(() => undefined);
 }
 
+const SAFE_CODE = /^[a-z][a-z0-9_]{0,95}$/;
+const SAFE_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
+
+function sourceFrom(value: unknown): SdkMigrationSource | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const { version, build_number } = value as Record<string, unknown>;
+  const safeVersion =
+    typeof version === "string" && SAFE_VERSION.test(version) ? version : null;
+  const safeBuild =
+    typeof build_number === "number" &&
+    Number.isSafeInteger(build_number) &&
+    build_number > 0
+      ? build_number
+      : null;
+  return safeVersion === null && safeBuild === null
+    ? undefined
+    : { version: safeVersion, build_number: safeBuild };
+}
+
 export async function readSdkMigrationBlock(
   dataDir: string,
 ): Promise<SdkMigrationBlock | null> {
@@ -170,14 +232,74 @@ export async function readSdkMigrationBlock(
     ) as Partial<SdkMigrationBlock>;
     if (
       typeof value.code !== "string" ||
-      !/^[a-z][a-z0-9_]{0,95}$/.test(value.code) ||
+      !SAFE_CODE.test(value.code) ||
       typeof value.caller !== "string" ||
       typeof value.at !== "string"
     ) {
       return null;
     }
-    return value as SdkMigrationBlock;
+    const block: SdkMigrationBlock = {
+      code: value.code,
+      caller: value.caller,
+      at: value.at,
+    };
+    if (
+      value.frozen &&
+      typeof value.frozen === "object" &&
+      typeof value.frozen.service_was_enabled === "boolean"
+    ) {
+      block.frozen = { service_was_enabled: value.frozen.service_was_enabled };
+    }
+    if (typeof value.data_restored === "boolean") {
+      block.data_restored = value.data_restored;
+    }
+    if (
+      typeof value.restore_code === "string" &&
+      SAFE_CODE.test(value.restore_code)
+    ) {
+      block.restore_code = value.restore_code;
+    }
+    const source = sourceFrom(value.source);
+    if (source !== undefined) block.source = source;
+    return block;
   } catch {
     return null;
+  }
+}
+
+/**
+ * `<dataDir>/.sdk-migration-capture-fence.json`, shared with Core: while it is
+ * live, host capture hooks (`one-memory capture <host>`) return without
+ * writing. Core holds it with its pid during `sdk-migrate`; a frozen home
+ * holds it without one until the next migration lifts it.
+ */
+export const SDK_MIGRATION_CAPTURE_FENCE = ".sdk-migration-capture-fence.json";
+
+export async function freezeCapture(dataDir: string): Promise<void> {
+  try {
+    const target = path.join(dataDir, SDK_MIGRATION_CAPTURE_FENCE);
+    const temporary = `${target}.${process.pid}.tmp`;
+    await writeFile(
+      temporary,
+      `${JSON.stringify({ schema_version: 1, frozen: true, reason: "sdk_migration_failed" })}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    await chmod(temporary, 0o600);
+    await rename(temporary, target);
+  } catch {
+    // Core leaves the same fence on its own failures.
+  }
+}
+
+/** Lift a frozen capture fence; a live one (a running migration) is kept. */
+export async function thawCapture(dataDir: string): Promise<void> {
+  const target = path.join(dataDir, SDK_MIGRATION_CAPTURE_FENCE);
+  try {
+    const value = JSON.parse(await readFile(target, "utf8")) as {
+      frozen?: unknown;
+    };
+    if (value.frozen === true) await rm(target, { force: true });
+  } catch {
+    // Absent or unreadable: Core treats an unreadable fence as stale.
   }
 }

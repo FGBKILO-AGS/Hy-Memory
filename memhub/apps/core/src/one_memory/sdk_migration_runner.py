@@ -18,6 +18,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -483,30 +484,50 @@ def _resumable_identity(database_path: Path) -> tuple[str, str]:
     return migration_id, f"{migration_id}-pre-cutover"
 
 
-@contextmanager
-def capture_fence(data_dir: Path) -> Iterator[None]:
-    """Host capture hooks return silently while this process is alive."""
+def _write_capture_fence(data_dir: Path, document: dict[str, object]) -> None:
     marker = data_dir / CAPTURE_FENCE
     temporary = marker.with_name(f"{marker.name}.{os.getpid()}.tmp")
-    temporary.write_text(
-        json.dumps({"schema_version": 1, "pid": os.getpid()}) + "\n",
-        encoding="utf-8",
-    )
+    temporary.write_text(json.dumps(document) + "\n", encoding="utf-8")
     os.chmod(temporary, 0o600)
     temporary.replace(marker)
+
+
+@contextmanager
+def capture_fence(data_dir: Path) -> Iterator[None]:
+    """Host capture hooks return silently while this process is alive.
+
+    A failed run leaves the fence frozen instead of lifting it: the home was
+    put back (or is half-migrated) and must not take new writes until the next
+    migration attempt replaces the fence with its own and succeeds.
+    """
+    marker = data_dir / CAPTURE_FENCE
+    _write_capture_fence(data_dir, {"schema_version": 1, "pid": os.getpid()})
     try:
         yield
-    finally:
+    except BaseException:
+        try:
+            _write_capture_fence(
+                data_dir, {"schema_version": 1, "frozen": True, "reason": "sdk_migration_failed"}
+            )
+        except OSError:
+            marker.unlink(missing_ok=True)
+        raise
+    else:
         marker.unlink(missing_ok=True)
-        temporary.unlink(missing_ok=True)
+    finally:
+        marker.with_name(f"{marker.name}.{os.getpid()}.tmp").unlink(missing_ok=True)
 
 
-def _ensure_bundle(*, data_dir: Path, bundle_id: str, runtime_build: str) -> dict[str, object]:
+def _ensure_bundle(
+    *, data_dir: Path, bundle_id: str, runtime_build: str
+) -> tuple[dict[str, object], bool]:
+    """The verified bundle, and whether this call created it."""
     from one_memory.sdk_migration_bundle import (
         MigrationBundleRejected,
         create_sdk_migration_bundle,
     )
 
+    created = True
     try:
         create_sdk_migration_bundle(
             data_dir=data_dir,
@@ -517,7 +538,67 @@ def _ensure_bundle(*, data_dir: Path, bundle_id: str, runtime_build: str) -> dic
     except MigrationBundleRejected as error:
         if error.code != "sdk_migration_bundle_exists":
             raise
-    return inspect_sdk_migration_bundle(data_dir=data_dir, bundle_id=bundle_id)
+        created = False
+    return inspect_sdk_migration_bundle(data_dir=data_dir, bundle_id=bundle_id), created
+
+
+def _restore_point_bundle(
+    *, data_dir: Path, migration_id: str, bundle_id: str, created: bool, runtime_build: str
+) -> str:
+    """The bundle that holds this home exactly as this run found it.
+
+    The cutover bundle qualifies when this run created it. One left by an
+    earlier run (an older build's blocked ledger row) may predate later writes,
+    so restoring it could drop them; a fresh restore-point bundle is taken.
+    """
+    if created:
+        return bundle_id
+    from one_memory.sdk_migration_bundle import create_sdk_migration_bundle
+
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    restore_id = f"{migration_id}-restore-point-{stamp}"
+    create_sdk_migration_bundle(
+        data_dir=data_dir,
+        bundle_id=restore_id,
+        runtime_build=runtime_build,
+        runtime_stopped=True,
+    )
+    inspect_sdk_migration_bundle(data_dir=data_dir, bundle_id=restore_id)
+    return restore_id
+
+
+def _recover_interrupted_attempt(data_dir: Path, database_path: Path, log: _StepLog) -> None:
+    """Roll back what a killed earlier run left, before anything reads the home."""
+    from one_memory.sdk_migration_restore import (
+        MigrationRestoreFailed,
+        clear_restore_point,
+        finish_interrupted_restore,
+        read_restore_point,
+        restore_pre_migration_state,
+    )
+
+    finish_interrupted_restore(data_dir)
+    point = read_restore_point(data_dir)
+    if point is None:
+        return
+    with log.step("preflight.interrupted_attempt") as step:
+        try:
+            authority = SdkDataPlaneMigrationStore(database_path).authority()
+        except Exception as error:
+            # Never restore over a home that may already be on SDK authority.
+            raise MigrationRestoreFailed("sdk_migration_restore_authority_unknown") from error
+        step["authority"] = authority.value
+        if authority is MemoryAuthority.SDK:
+            clear_restore_point(data_dir)
+            step["restored"] = False
+            return
+        restore_pre_migration_state(
+            data_dir,
+            bundle_id=point["bundle_id"],
+            migration_id=point["migration_id"],
+            reason="interrupted_attempt",
+        )
+        step["restored"] = True
 
 
 def _vacuum(database_path: Path) -> None:
@@ -537,14 +618,28 @@ def run_startup_migration(
     namespace: str,
     progress: Callable[[str], None] = lambda _step: None,
     open_client: Callable[[ModelProfileSnapshot], AbstractContextManager[Any]] | None = None,
+    restore_report: dict[str, object] | None = None,
 ) -> StartupMigrationResult:
     """Bring one stopped home to SDK authority. Safe to repeat after any failure.
 
     The caller must stop Runtime and keep its service from restarting.
     `open_client` yields a public SDK client configured as the Runtime will be;
     tests replace it.
+
+    A failure before SDK authority is committed puts the home back exactly as
+    this run found it (`sdk_migration_restore`), so the next run, possibly of a
+    fixed release, starts from the original data. The original exception is
+    re-raised either way; `restore_report` learns what the restore did
+    (`state`: `restored`, `failed` with its own `code`, or `skipped`).
     """
+    from one_memory.sdk_migration_restore import read_restore_point, restore_pending
+
     database_path = data_dir / "one-memory.sqlite3"
+    log = _StepLog(data_dir)
+    # Before anything reads the home: a run killed part-way is rolled back.
+    if restore_pending(data_dir) or read_restore_point(data_dir) is not None:
+        with capture_fence(data_dir):
+            _recover_interrupted_attempt(data_dir, database_path, log)
     if not database_path.is_file():
         return StartupMigrationResult(state="not_required")
 
@@ -553,7 +648,6 @@ def run_startup_migration(
             return open_client(profile)
         return runtime_sdk_client(database_path, data_dir, profile)
 
-    log = _StepLog(data_dir)
     store = SdkDataPlaneMigrationStore(database_path)
     with log.step("preflight.authority_read") as step:
         authority, authority_migration = store.authority_state()
@@ -613,6 +707,12 @@ def run_startup_migration(
     from one_memory.database_access import close_main_databases
     from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
     from one_memory.memory_server.migrations import MIGRATIONS
+    from one_memory.sdk_migration_restore import (
+        clear_restore_point,
+        discard_failed_state,
+        prune_restored_bundles,
+        record_restore_point,
+    )
 
     with log.step("preflight.resumable_identity") as step:
         migration_id, bundle_id = _resumable_identity(database_path)
@@ -630,66 +730,105 @@ def run_startup_migration(
         raise DataPlaneMigrationError("sdk_migration_model_profile_required")
     log.check("preflight.model_profile_check", None)
     with capture_fence(data_dir):
-        progress("bundle")
-        with log.step("bundle.ensure") as step:
-            manifest = _ensure_bundle(
-                data_dir=data_dir,
-                bundle_id=bundle_id,
-                runtime_build=runtime_build,
-            )
-            step["bundle_id"] = bundle_id
-        progress("prepare")
-        with log.step("prepare.schema_migrate") as step:
-            asyncio.run(migrate(SqliteMigrationStore(database_path), MIGRATIONS))
-            close_main_databases()
-            step["schema_version"] = MIGRATIONS[-1].version
+        # Builds through 19 left a staged SDK copy beside the original store.
+        # Settling it before the bundle means the bundle holds the original
+        # store, and a restore never brings the staged copy back.
         with log.step("prepare.recover_abandoned_staging"):
             recover_abandoned_staging(
                 data_dir=data_dir,
                 database_path=database_path,
                 namespace=namespace,
             )
-        with log.step("prepare.ledger_start"):
-            store.start(
-                migration_id=migration_id,
-                source_runtime_build=str(manifest.get("runtime_build") or ""),
-                target_sdk_version=sdk_version,
-                source_schema_version=MIGRATIONS[-1].version,
-                namespace_fingerprint=hashlib.sha256(namespace.encode()).hexdigest(),
-                backend_fingerprint=hashlib.sha256(b"chroma:kuzu:sqlite").hexdigest(),
-                backup_bundle_id=bundle_id,
+        progress("bundle")
+        with log.step("bundle.ensure") as step:
+            manifest, created = _ensure_bundle(
+                data_dir=data_dir,
+                bundle_id=bundle_id,
+                runtime_build=runtime_build,
             )
-        with log.step("prepare.legacy_work") as step:
-            preparation = prepare_legacy_work_for_cutover(database_path, step)
-            step.update(preparation.as_document())
-        reattached = ()
-        readback = None
-        if profile is not None:
-            progress("vectors")
-            with log.step("vectors.reattach") as step:
-                reattached = reattach_legacy_vectors(data_dir, profile)
-                step["collections"] = len(reattached)
-        if not legacy.empty:
-            assert profile is not None
-            progress("verify")
-            with log.step("verify.readback") as step:
-                with client_for(profile) as client:
-                    readback = verify_readback(client, legacy)
-                step.update(readback.as_document())
-                if not readback.passed:
-                    store.set_phase(migration_id, phase="readback_failed", state="blocked")
-                    raise MemoryReadbackFailed(readback)
-        with log.step("prepare.mark_prepared"):
-            store.set_phase(migration_id, phase=PREPARED_PHASE, state="ready")
-        progress("cutover")
-        with log.step("cutover.commit"):
-            commit_sdk_cutover(
+            step["bundle_id"] = bundle_id
+            step["created"] = created
+        with log.step("bundle.restore_point") as step:
+            restore_bundle = _restore_point_bundle(
+                data_dir=data_dir,
+                migration_id=migration_id,
+                bundle_id=bundle_id,
+                created=created,
+                runtime_build=runtime_build,
+            )
+            record_restore_point(data_dir, migration_id=migration_id, bundle_id=restore_bundle)
+            step["bundle_id"] = restore_bundle
+            step["pruned"] = prune_restored_bundles(data_dir, keep={bundle_id, restore_bundle})
+        # From here until SDK authority is committed, a failure puts the
+        # restore point back. Only `cutover.commit` can fail after its own
+        # commit; the database decides then.
+        cutover_started = False
+        try:
+            progress("prepare")
+            with log.step("prepare.schema_migrate") as step:
+                asyncio.run(migrate(SqliteMigrationStore(database_path), MIGRATIONS))
+                close_main_databases()
+                step["schema_version"] = MIGRATIONS[-1].version
+            with log.step("prepare.ledger_start"):
+                store.start(
+                    migration_id=migration_id,
+                    source_runtime_build=str(manifest.get("runtime_build") or ""),
+                    target_sdk_version=sdk_version,
+                    source_schema_version=MIGRATIONS[-1].version,
+                    namespace_fingerprint=hashlib.sha256(namespace.encode()).hexdigest(),
+                    backend_fingerprint=hashlib.sha256(b"chroma:kuzu:sqlite").hexdigest(),
+                    backup_bundle_id=bundle_id,
+                )
+            with log.step("prepare.legacy_work") as step:
+                preparation = prepare_legacy_work_for_cutover(database_path, step)
+                step.update(preparation.as_document())
+            reattached = ()
+            readback = None
+            if profile is not None:
+                progress("vectors")
+                with log.step("vectors.reattach") as step:
+                    reattached = reattach_legacy_vectors(data_dir, profile)
+                    step["collections"] = len(reattached)
+            if not legacy.empty:
+                assert profile is not None
+                progress("verify")
+                with log.step("verify.readback") as step:
+                    with client_for(profile) as client:
+                        readback = verify_readback(client, legacy)
+                    step.update(readback.as_document())
+                    if not readback.passed:
+                        store.set_phase(migration_id, phase="readback_failed", state="blocked")
+                        raise MemoryReadbackFailed(readback)
+            with log.step("prepare.mark_prepared"):
+                store.set_phase(migration_id, phase=PREPARED_PHASE, state="ready")
+            progress("cutover")
+            cutover_started = True
+            with log.step("cutover.commit"):
+                commit_sdk_cutover(
+                    data_dir=data_dir,
+                    database_path=database_path,
+                    migration_id=migration_id,
+                    bundle_id=bundle_id,
+                    sdk_version=sdk_version,
+                )
+        except Exception:
+            _restore_after_failure(
                 data_dir=data_dir,
                 database_path=database_path,
                 migration_id=migration_id,
-                bundle_id=bundle_id,
-                sdk_version=sdk_version,
+                bundle_id=restore_bundle,
+                cutover_started=cutover_started,
+                report=restore_report,
             )
+            raise
+        # SDK authority is committed: from here on the home is never restored.
+        clear_restore_point(data_dir)
+        if restore_bundle != bundle_id:
+            shutil.rmtree(
+                data_dir.resolve() / "backups" / f"{restore_bundle}.sdk-bundle",
+                ignore_errors=True,
+            )
+        discard_failed_state(data_dir)
         progress("cleanup")
         with log.step("cleanup.drop_legacy_tables") as step:
             dropped = resume_legacy_cleanup(data_dir=data_dir, database_path=database_path)
@@ -706,3 +845,52 @@ def run_startup_migration(
         reattached=reattached,
         readback=readback,
     )
+
+
+def _restore_after_failure(
+    *,
+    data_dir: Path,
+    database_path: Path,
+    migration_id: str,
+    bundle_id: str,
+    cutover_started: bool,
+    report: dict[str, object] | None,
+) -> None:
+    """Put the restore point back after a pre-cutover failure. Never raises.
+
+    The caller re-raises the migration's own error: the restore is secondary,
+    so its outcome only goes to the log and to `report`.
+    """
+    from one_memory.sdk_migration_log import write_migration_log
+    from one_memory.sdk_migration_restore import restore_pre_migration_state
+
+    report = {} if report is None else report
+    if cutover_started:
+        try:
+            committed = SdkDataPlaneMigrationStore(database_path).authority() is MemoryAuthority.SDK
+        except Exception:  # noqa: BLE001 - never restore over an unknown authority
+            committed = True
+        if committed:
+            write_migration_log(
+                data_dir,
+                writer="core-sdk-migrate",
+                event="restore.skipped",
+                outcome="succeeded",
+                migration_id=migration_id,
+                details={"reason": "authority_committed_or_unknown"},
+            )
+            report["state"] = "skipped"
+            return
+    try:
+        restore_pre_migration_state(
+            data_dir,
+            bundle_id=bundle_id,
+            migration_id=migration_id,
+            reason="migration_failed",
+        )
+    except Exception as error:  # noqa: BLE001 - the migration's own failure is raised
+        code = getattr(error, "code", None)
+        report["state"] = "failed"
+        report["code"] = code if isinstance(code, str) else "sdk_migration_restore_failed"
+        return
+    report["state"] = "restored"
