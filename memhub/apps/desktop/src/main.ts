@@ -25,11 +25,14 @@ import {
   installUserService,
   RecallBrokerSupervisor,
   RuntimeSupervisor,
+  readInstalledRuntimeSource,
   readPublishedCorePort,
   readRuntimeServiceOwner,
+  readSdkMigrationBlock,
   removeRuntimeServiceOwner,
   runtimeInstallLayout,
   runtimeServiceEnableMarkerPath,
+  type SdkMigrationSource,
   stopRuntimeProcess,
   waitForRuntimeProcess,
   writeRuntimeServiceOwner,
@@ -1075,6 +1078,9 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
   );
   installPackagedWebProtocol();
 
+  // The Runtime this launch replaced, when it moved `current`: the migration
+  // log (and so the issue a person files) names the version upgraded from.
+  let upgradeSource: SdkMigrationSource | null = null;
   const migrateAtStartup = async (core: {
     command: string;
     args: string[];
@@ -1084,6 +1090,7 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       dataDir,
       core,
       caller: "desktop",
+      sourceRuntime: upgradeSource,
       runtimeBuild:
         packagedBuildNumber === undefined
           ? typeof app.getVersion === "function"
@@ -1200,6 +1207,12 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
         }
         if (installed !== null) {
           runtimeChanged = !installed.reused_current;
+          if (runtimeChanged) {
+            upgradeSource = await readInstalledRuntimeSource(
+              installRoot,
+              installed.previous_current_target,
+            );
+          }
           await installBundledCliIfNeeded({
             home: app.getPath("home"),
             installRoot,
@@ -1217,6 +1230,12 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
           command: stable?.captureCommand ?? layout.coreCommand,
           args: [],
         });
+      } else if (desktopBackgroundLaunch) {
+        // A login launch does not migrate, and the service exits on a home a
+        // failed migration froze: say so now instead of waiting for a
+        // Runtime that will not come. Opening MemHub retries the migration.
+        const frozen = await readSdkMigrationBlock(dataDir);
+        if (frozen?.frozen !== undefined) throw new Error(frozen.code);
       }
       const alreadyRunning = runtimeChanged
         ? false
@@ -1706,6 +1725,23 @@ if (desktopVersion !== null) {
             showMessageBoxSync: (options) => dialog.showMessageBoxSync(options),
             showItemInFolder: (target) => shell.showItemInFolder(target),
             openExternal: (url) => shell.openExternal(url),
+          },
+          environment: {
+            appVersion:
+              typeof app.getVersion === "function" ? app.getVersion() : null,
+            buildNumber: packagedBuildNumber ?? null,
+            osName:
+              process.platform === "darwin"
+                ? "macOS"
+                : process.platform === "win32"
+                  ? "Windows"
+                  : "Linux",
+            osVersion:
+              typeof process.getSystemVersion === "function"
+                ? process.getSystemVersion()
+                : null,
+            arch: process.arch,
+            home: app.getPath("home"),
           },
         })
       )

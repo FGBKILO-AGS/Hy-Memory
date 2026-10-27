@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   claimRuntimeServiceForApp,
+  clearSdkMigrationBlock,
   readRuntimeServiceOwner,
   recordSdkMigrationBlock,
   resolveRuntimeCliConfig,
@@ -921,6 +922,38 @@ describe("public One Memory CLI", () => {
       link_path: "/tmp/bin/one-memory",
       target_path: "/tmp/install/current/bin/one-memory",
     };
+
+    it("says the data was restored when a failed migration put it back", async () => {
+      vi.clearAllMocks();
+      runtimeMocks.planCliLink.mockResolvedValueOnce(presentCliLink);
+      runtimeMocks.runSdkMigration.mockResolvedValueOnce({
+        state: "deferred",
+        code: "sdk_migration_memory_unreadable",
+        dataRestored: true,
+      } as never);
+      const streams = captureStreams();
+      let code: number;
+      try {
+        code = await run(
+          upgradeArguments,
+          {},
+          { waitForRuntimeReady: async () => true },
+        );
+      } finally {
+        streams.restore();
+      }
+      expect(code!).toBe(1);
+      const failure = JSON.parse(streams.stderr());
+      expect(failure).toMatchObject({
+        code: "sdk_migration_memory_unreadable",
+        data_restored: true,
+        log_file: "/tmp/custom data/logs/sdk-migration.log",
+      });
+      expect(failure.message).toContain("记忆数据已恢复到升级前的状态。");
+      expect(failure.message).toContain(
+        "/tmp/custom data/logs/sdk-migration.log",
+      );
+    });
 
     it("migrates the home with the new Core before restarting the Runtime", async () => {
       vi.clearAllMocks();
@@ -2132,6 +2165,94 @@ describe("lifecycle commands report a migration block", () => {
       issues_url: "https://github.com/Tencent-Hunyuan/Hy-Memory/issues/new",
     });
     expect(output.value()).not.toContain("runtime_not_ready_within_budget");
+  });
+
+  it("restart on a frozen home retries the migration in the foreground first", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "memhub-frozen-"));
+    await recordSdkMigrationBlock(
+      dataDir,
+      "sdk_migration_memory_unreadable",
+      "desktop",
+      { frozen: { service_was_enabled: true }, data_restored: true },
+    );
+    const controls = {
+      ...blockedControls(),
+      migrateSdkData: vi.fn(async () => ({
+        state: "deferred" as const,
+        code: "sdk_migration_memory_unreadable",
+        dataRestored: true,
+      })),
+    };
+    const output = captureStdout();
+    let code: number;
+    try {
+      code = await run(
+        ["restart", "--json"],
+        { ONE_MEMORY_DATA_DIR: dataDir },
+        controls,
+      );
+    } finally {
+      output.restore();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+    expect(code!).toBe(1);
+    expect(controls.migrateSdkData).toHaveBeenCalledWith(
+      expect.objectContaining({ dataDir, caller: "cli-restart" }),
+    );
+    // Still frozen: the service is not started to retry on its own.
+    expect(controls.restartManagedRuntime).not.toHaveBeenCalled();
+    expect(controls.ensureRuntime).not.toHaveBeenCalled();
+    expect(JSON.parse(output.value())).toMatchObject({
+      command: "restart",
+      state: "blocked",
+      code: "sdk_migration_memory_unreadable",
+      data_restored: true,
+    });
+  });
+
+  it("restart on a frozen home restarts the Runtime once the retry succeeds", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "memhub-frozen-"));
+    await recordSdkMigrationBlock(
+      dataDir,
+      "sdk_migration_memory_unreadable",
+      "desktop",
+      { frozen: { service_was_enabled: false } },
+    );
+    const order: string[] = [];
+    const migrateSdkData = vi.fn(async () => {
+      order.push("migrate");
+      await clearSdkMigrationBlock(dataDir);
+      return { state: "cutover" as const };
+    });
+    const output = captureStreams();
+    let code: number;
+    try {
+      code = await run(
+        ["restart", "--json"],
+        { ONE_MEMORY_DATA_DIR: dataDir },
+        {
+          migrateSdkData,
+          waitForRuntimeReady: vi.fn(async () => true),
+          restartManagedRuntime: vi.fn(async () => {
+            order.push("restart");
+            return "restarted" as const;
+          }),
+          stopRuntime: vi.fn(async () => "stopped" as const),
+          ensureRuntime: vi.fn(async () => {
+            order.push("restart");
+            return { pid: 1 } as never;
+          }),
+        },
+      );
+    } finally {
+      output.restore();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+    expect(code!).toBe(0);
+    expect(migrateSdkData).toHaveBeenCalledWith(
+      expect.objectContaining({ caller: "cli-restart" }),
+    );
+    expect(order).toEqual(["migrate", "restart"]);
   });
 
   it("restart in text mode names the log file and GitHub issues", async () => {

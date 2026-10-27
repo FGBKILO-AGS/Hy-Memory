@@ -32,6 +32,7 @@ import {
   processIsAlive,
   type ResolvedRuntimeRelease,
   RuntimeDiscoveryError,
+  readInstalledRuntimeSource,
   readSdkMigrationBlock,
   removeRuntimeServiceOwner,
   resolveRuntimeCliConfig,
@@ -43,6 +44,7 @@ import {
   runSdkMigration,
   runtimeInstallLayout,
   type SdkMigrationResult,
+  type SdkMigrationSource,
   sdkMigrationLogPath,
   stopRuntimeProcess,
 } from "@one-memory/runtime-control";
@@ -1166,6 +1168,41 @@ async function runCommand(
     // declared command, and lifecycle is exactly where scripts need it.
     if (arguments_.length !== (asJson ? 2 : 1)) return usage();
     const config = resolveRuntimeCliConfig(environment, process.argv[1]);
+    // A failed upgrade migration froze this home: its service exits without
+    // migrating. `start`/`restart` is an explicit retry, run here in the
+    // foreground; success lifts the freeze and turns the service back on.
+    const frozen = await readSdkMigrationBlock(config.dataDir).catch(
+      () => null,
+    );
+    if (frozen?.frozen !== undefined) {
+      const migration = await (
+        controls.migrateSdkData ?? migrateSdkDataBeforeStart
+      )({
+        coreCommand: config.coreCommand,
+        dataDir: config.dataDir,
+        runtimeBuild:
+          config.buildIdentity?.buildNumber ??
+          config.buildIdentity?.version ??
+          "unknown",
+        asJson,
+        caller: command === "restart" ? "cli-restart" : "cli-start",
+      });
+      if (migration.state === "deferred") {
+        const failure = sdkMigrationFailure(
+          command,
+          migration.code ?? "sdk_migration_incomplete",
+          config.dataDir,
+          "blocked",
+          migration.dataRestored === true,
+        );
+        process.stdout.write(
+          asJson
+            ? `${JSON.stringify({ ...failure, state: "blocked" })}\n`
+            : `${failure.message}\n`,
+        );
+        return EXIT_FAILED;
+      }
+    }
     const enableSnapshot = await setManagedServiceEnabled(config.dataDir, true);
     const restoreEnableState = () =>
       restoreManagedServiceEnabled(config.dataDir, enableSnapshot);
@@ -3125,6 +3162,7 @@ async function runCommand(
     // `null` until the migration is handed this home; "failed" if it threw.
     let migrationState: SdkMigrationResult["state"] | "failed" | null = null;
     let deferredCode: string | null = null;
+    let deferredRestored = false;
     let previousOwner:
       | Awaited<ReturnType<typeof claimCliServiceOwnership>>
       | undefined;
@@ -3146,6 +3184,10 @@ async function runCommand(
         runtimeBuild: String(plan.build_number ?? plan.version),
         asJson: true,
         caller: "cli-install",
+        sourceRuntime: await readInstalledRuntimeSource(
+          plan.install_root,
+          receipt.previous_current_target,
+        ),
       });
       migrationState = migration.state;
       // A deferred migration keeps this install: the new Runtime service is
@@ -3154,6 +3196,7 @@ async function runCommand(
       // Runtime, which has no gate and would serve the legacy data.
       if (migration.state === "deferred") {
         deferredCode = migration.code ?? "sdk_migration_incomplete";
+        deferredRestored = migration.dataRestored === true;
       }
       migrated =
         migration.state === "cutover" || migration.state === "complete";
@@ -3233,7 +3276,13 @@ async function runCommand(
         process.stderr.write(
           `${JSON.stringify(
             deferredCode !== null
-              ? sdkMigrationFailure("install", deferredCode, layout.dataDir)
+              ? sdkMigrationFailure(
+                  "install",
+                  deferredCode,
+                  layout.dataDir,
+                  "upgrade",
+                  deferredRestored,
+                )
               : migrated
                 ? notReadyAfterMigration("install")
                 : migrationState === "failed"
@@ -3672,6 +3721,10 @@ async function runCommand(
         runtimeBuild: String(plan.build_number ?? plan.version),
         asJson,
         caller: "cli-upgrade",
+        sourceRuntime: await readInstalledRuntimeSource(
+          plan.install_root,
+          receipt.previous_current_target,
+        ),
       });
       migrationState = migration.state;
       if (migration.state === "deferred") {
@@ -3680,7 +3733,7 @@ async function runCommand(
         // rolling back would restart the old Runtime, which has no such gate.
         await keepUpgradedRuntimeOffLegacyHome();
         process.stderr.write(
-          `${JSON.stringify(sdkMigrationFailure("upgrade", migration.code ?? "sdk_migration_incomplete", parsed.dataDir ?? layout.dataDir), null, 2)}\n`,
+          `${JSON.stringify(sdkMigrationFailure("upgrade", migration.code ?? "sdk_migration_incomplete", parsed.dataDir ?? layout.dataDir, "upgrade", migration.dataRestored === true), null, 2)}\n`,
         );
         return EXIT_FAILED;
       }
@@ -4135,13 +4188,17 @@ async function migrateSdkDataBeforeStart(options: {
   dataDir: string;
   runtimeBuild: string;
   asJson: boolean;
-  caller?: "cli-install" | "cli-upgrade";
+  caller?: "cli-install" | "cli-upgrade" | "cli-start" | "cli-restart";
+  sourceRuntime?: SdkMigrationSource | null;
 }): Promise<SdkMigrationResult> {
   return runSdkMigration({
     dataDir: options.dataDir,
     core: { command: options.coreCommand },
     runtimeBuild: options.runtimeBuild,
     ...(options.caller === undefined ? {} : { caller: options.caller }),
+    ...(options.sourceRuntime === undefined
+      ? {}
+      : { sourceRuntime: options.sourceRuntime }),
     onProgress: (step) => {
       process.stderr.write(
         options.asJson
@@ -4220,8 +4277,12 @@ function sdkMigrationFailure(
   code: string,
   dataDir: string,
   context: "upgrade" | "blocked" = "upgrade",
+  dataRestored = false,
 ) {
   const logFile = sdkMigrationLogPath(dataDir);
+  // Core put the home back exactly as it was before the upgrade, so the next
+  // (fixed) version migrates from the original data.
+  const restored = dataRestored ? "记忆数据已恢复到升级前的状态。" : "";
   const reason =
     SDK_MIGRATION_FAILURES[code] ??
     "记忆数据迁移没有完成。可以运行 memhub restart 重试。";
@@ -4235,9 +4296,10 @@ function sdkMigrationFailure(
     command,
     status: "error",
     code,
-    message: `${lead}原有记忆数据不会丢失。迁移日志：${logFile}。请在 GitHub 提交反馈并附上这个日志文件：${MIGRATION_ISSUES_URL}`,
+    message: `${lead}原有记忆数据不会丢失。${restored}迁移日志：${logFile}。请在 GitHub 提交反馈并附上这个日志文件：${MIGRATION_ISSUES_URL}`,
     log_file: logFile,
     issues_url: MIGRATION_ISSUES_URL,
+    ...(dataRestored ? { data_restored: true } : {}),
   };
 }
 
@@ -4260,7 +4322,13 @@ async function runtimeMigrationBlock(
 ): Promise<ReturnType<typeof sdkMigrationFailure> | null> {
   const block = await readSdkMigrationBlock(dataDir).catch(() => null);
   if (block === null) return null;
-  return sdkMigrationFailure(command, block.code, dataDir, "blocked");
+  return sdkMigrationFailure(
+    command,
+    block.code,
+    dataDir,
+    "blocked",
+    block.data_restored === true,
+  );
 }
 
 async function waitForRuntimeReady(
@@ -4279,8 +4347,14 @@ async function waitForRuntimeReady(
     // The service deferred its migration during this wait and will not spawn
     // Core: stop waiting. An older note may predate a retry still running, so
     // only a note written after the wait began ends it early.
+    // A frozen home: its service exits without migrating, so nothing will
+    // come up until a foreground migration lifts the freeze.
     const blocked = await readSdkMigrationBlock(dataDir).catch(() => null);
-    if (blocked !== null && Date.parse(blocked.at) >= started) return false;
+    if (
+      blocked !== null &&
+      (blocked.frozen !== undefined || Date.parse(blocked.at) >= started)
+    )
+      return false;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   return false;

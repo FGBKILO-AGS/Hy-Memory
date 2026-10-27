@@ -841,12 +841,17 @@ export async function gateServeOnSdkMigration(
  * Run the migration gate until the home is on SDK authority, or the service is
  * asked to stop. Core is never spawned while this has not returned "serve".
  *
- * A deferred migration leaves the service alive but idle (no Core), instead of
- * exiting: an exit would have launchd/systemd re-run the failed migration
- * every few seconds. The refusal goes to the migration log and the Runtime
- * diagnostics, the block note tells `status`/`doctor` and Desktop why. When a
- * migration elsewhere (Desktop, `memhub upgrade`) succeeds it clears the
- * note, and the gate runs again here.
+ * A failed migration freezes the home (see `runSdkMigration`): the service
+ * then exits instead of idling, and its enable marker is off so launchd and
+ * systemd do not start it again to retry on their own. A service started on a
+ * frozen home (a Desktop login launch, `memhub install` re-registering it)
+ * exits the same way without migrating; the next foreground attempt (Desktop
+ * launch, `memhub install`/`upgrade`/`start`/`restart`) retries and lifts the
+ * freeze. The refusal goes to the migration log and the Runtime diagnostics,
+ * the block note tells `status`/`doctor` and Desktop why.
+ *
+ * When the freeze could not be recorded, the service falls back to staying
+ * alive but idle (no Core) until another migrator clears the block note.
  */
 export async function holdUntilSdkMigrated(
   config: Pick<RuntimeCliConfig, "dataDir" | "coreCommand" | "buildIdentity">,
@@ -860,18 +865,15 @@ export async function holdUntilSdkMigrated(
   void options.stopped.then(() => {
     stop = true;
   });
-  for (;;) {
-    if (stop) return "stop";
-    const migration = await gateServeOnSdkMigration(config, options.migrate);
-    if (migration.state !== "deferred") return "serve";
-    const code = migration.code ?? "sdk_migration_incomplete";
+  const runtimeBuild =
+    config.buildIdentity?.buildNumber ?? config.buildIdentity?.version;
+  const refuse = async (code: string, frozen: boolean) => {
     await writeSdkMigrationLog(config.dataDir, {
       writer: "runtime-service",
-      event: "service.core_refused",
+      event: frozen ? "service.frozen_exit" : "service.core_refused",
       outcome: "refused",
       code,
-      runtimeBuild:
-        config.buildIdentity?.buildNumber ?? config.buildIdentity?.version,
+      runtimeBuild,
     });
     await new DiagnosticLogger({
       dataDir: config.dataDir,
@@ -887,6 +889,28 @@ export async function holdUntilSdkMigrated(
       })
       .catch(() => undefined);
     process.stderr.write(`sdk_migration_required: ${code}\n`);
+  };
+  const frozenHome = async (): Promise<string | null> => {
+    const block = await readSdkMigrationBlock(config.dataDir);
+    if (block?.frozen === undefined) return null;
+    // Whoever started this service turned the marker on; a frozen home keeps
+    // it off so the exit below is not followed by a relaunch.
+    await disableRuntimeService(config.dataDir).catch(() => undefined);
+    return block.code;
+  };
+  const frozenAtStart = await frozenHome();
+  if (frozenAtStart !== null) {
+    await refuse(frozenAtStart, true);
+    return "stop";
+  }
+  for (;;) {
+    if (stop) return "stop";
+    const migration = await gateServeOnSdkMigration(config, options.migrate);
+    if (migration.state !== "deferred") return "serve";
+    const code = migration.code ?? "sdk_migration_incomplete";
+    const frozen = (await frozenHome()) !== null;
+    await refuse(code, frozen);
+    if (frozen) return "stop";
     // Wait for a stop, or for another migrator to clear the block note.
     for (;;) {
       const outcome = await Promise.race([

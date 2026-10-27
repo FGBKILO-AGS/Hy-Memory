@@ -26,6 +26,10 @@ import {
   sdkMigrationLogPath,
   writeSdkMigrationLog,
 } from "./sdk-migration-log.js";
+import {
+  enableRuntimeService,
+  runtimeServiceEnabled,
+} from "./service-ownership.js";
 
 const core = { command: "/core/one-memory", args: [] };
 const noFence = async <T>(
@@ -44,6 +48,87 @@ async function lines(dataDir: string): Promise<Record<string, unknown>[]> {
     .split("\n")
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
+
+describe("a frozen home's Runtime service", () => {
+  const config = (dataDir: string) => ({
+    dataDir,
+    coreCommand: "/runtime/core/one-memory",
+    buildIdentity: { buildNumber: "22" },
+  });
+
+  it("exits without migrating and keeps its marker off when started on a frozen home", async () => {
+    const dataDir = await home();
+    await enableRuntimeService(dataDir);
+    await recordSdkMigrationBlock(
+      dataDir,
+      "sdk_migration_memory_unreadable",
+      "desktop",
+      { frozen: { service_was_enabled: true } },
+    );
+    const migrate = vi.fn();
+
+    await expect(
+      holdUntilSdkMigrated(config(dataDir), {
+        stopped: new Promise(() => undefined),
+        migrate,
+      }),
+    ).resolves.toBe("stop");
+
+    expect(migrate).not.toHaveBeenCalled();
+    expect(await runtimeServiceEnabled(dataDir)).toBe(false);
+    expect(
+      (await lines(dataDir)).find(
+        (line) => line.event === "service.frozen_exit",
+      ),
+    ).toMatchObject({
+      writer: "runtime-service",
+      outcome: "refused",
+      code: "sdk_migration_memory_unreadable",
+    });
+  });
+
+  it("exits instead of idling when its own migration fails and freezes the home", async () => {
+    const dataDir = await home();
+    await enableRuntimeService(dataDir);
+    const migrate = vi.fn(async (options: SdkMigrationOptions) =>
+      runSdkMigration({
+        ...options,
+        execute: vi.fn(async (_core, args: string[]) =>
+          args[0] === "sdk-migration-status"
+            ? {
+                exitCode: 0,
+                document: { authority: "legacy", state: "required" },
+              }
+            : {
+                exitCode: 1,
+                document: {
+                  state: "failed",
+                  code: "sdk_migration_memory_unreadable",
+                  data_restored: true,
+                },
+              },
+        ),
+      }),
+    );
+
+    await expect(
+      holdUntilSdkMigrated(config(dataDir), {
+        stopped: new Promise(() => undefined),
+        migrate,
+        pollIntervalMs: 5,
+      }),
+    ).resolves.toBe("stop");
+
+    expect(migrate).toHaveBeenCalledTimes(1);
+    // launchd/systemd will not start it again to retry on its own.
+    expect(await runtimeServiceEnabled(dataDir)).toBe(false);
+    expect(await readSdkMigrationBlock(dataDir)).toMatchObject({
+      caller: "runtime-service",
+      frozen: { service_was_enabled: true },
+      data_restored: true,
+    });
+  });
+});
 
 describe("sdk-migration.log", () => {
   it("records every orchestrator decision of a deferred migration, content-free", async () => {

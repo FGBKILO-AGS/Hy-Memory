@@ -314,6 +314,10 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
         details={
             "runtime_build": runtime_build,
             "confirmed": confirmed,
+            # The Runtime the upgrade replaced, as the orchestrator read it
+            # from that Runtime's install manifest; never guessed.
+            "source_version": _migration_source("ONE_MEMORY_MIGRATION_SOURCE_VERSION"),
+            "source_build": _migration_source("ONE_MEMORY_MIGRATION_SOURCE_BUILD"),
             **authority_snapshot(database_path),
         },
     )
@@ -386,6 +390,7 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
             stream.write(f"{step_names.get(step, step)}\n")
         stream.flush()
 
+    restore: dict[str, object] = {}
     try:
         with _migration_lock(settings.data_dir):
             result = run_startup_migration(
@@ -394,6 +399,7 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
                 sdk_version=HY_MEMORY_VERSION,
                 namespace=HY_MEMORY_NAMESPACE,
                 progress=progress,
+                restore_report=restore,
             )
     except Exception as error:
         from one_memory.sdk_migration_verify import MemoryReadbackFailed
@@ -402,6 +408,10 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
         failed: dict[str, object] = {"schema_version": 1, "state": "failed", "code": code}
         if isinstance(error, MemoryReadbackFailed):
             failed["readback"] = error.report.as_document()
+        # The migration's own code stays the result; the restore is secondary.
+        failed["data_restored"] = restore.get("state") == "restored"
+        if restore.get("state") == "failed":
+            failed["restore_code"] = restore.get("code")
         write_migration_log(
             settings.data_dir,
             writer="core-sdk-migrate",
@@ -417,10 +427,13 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
                 "code_is_fallback": code == "sdk_migration_preflight_failed"
                 and not _names_code(error, code),
                 **({"readback": failed["readback"]} if "readback" in failed else {}),
+                "restore": restore.get("state", "not_attempted"),
+                **({"restore_code": restore["code"]} if "code" in restore else {}),
                 **authority_snapshot(database_path),
             },
         )
-        _write_restore(stream, as_json, failed, f"迁移未完成：{code}")
+        restored_text = "；数据已恢复到升级前的状态" if failed["data_restored"] else ""
+        _write_restore(stream, as_json, failed, f"迁移未完成：{code}{restored_text}")
         return 1
     document = result.as_document()
     write_migration_log(
@@ -444,6 +457,14 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
     }
     _write_restore(stream, as_json, document, messages[result.state])
     return 0
+
+
+_SAFE_SOURCE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+\-]{0,63}$")
+
+
+def _migration_source(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    return value if _SAFE_SOURCE.fullmatch(value) else "unknown"
 
 
 @contextlib.contextmanager
@@ -545,8 +566,18 @@ def _sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
     as_json = "--json" in options
     settings = load_settings()
     database_path = settings.data_dir / "one-memory.sqlite3"
-    if not database_path.is_file():
+    from one_memory.sdk_migration_restore import restore_pending
+
+    if restore_pending(settings.data_dir):
+        # A restore was killed between its renames; the database may be
+        # elsewhere. Only `sdk-migrate` may finish it.
         document: dict[str, object] = {
+            "schema_version": 1,
+            "authority": "legacy",
+            "state": "required",
+        }
+    elif not database_path.is_file():
+        document = {
             "schema_version": 1,
             "authority": "sdk",
             "state": "not_required",
@@ -619,8 +650,22 @@ def _refuse_unmigrated_home(data_dir: Path) -> None:
     """
     from one_memory.sdk_data_plane_migration import MemoryAuthority, SdkDataPlaneMigrationStore
     from one_memory.sdk_migration_log import authority_snapshot, write_migration_log
+    from one_memory.sdk_migration_restore import restore_pending
 
     database_path = data_dir / "one-memory.sqlite3"
+    if restore_pending(data_dir):
+        # A killed restore may have moved the database aside: serving now
+        # would create an empty home over the user's data.
+        write_migration_log(
+            data_dir,
+            writer="core-startup",
+            event="core.refused_legacy",
+            outcome="refused",
+            code="sdk_migration_required",
+            details={"stage": "serve_entry", "restore_pending": True},
+        )
+        print("sdk_migration_required", file=sys.stderr, flush=True)
+        raise SystemExit(SDK_MIGRATION_REQUIRED_EXIT)
     if not database_path.is_file():
         return
     try:
