@@ -679,7 +679,18 @@ export function MemoryMap(props: Props) {
             }}
             onChange={(e) => {
               if (library) {
-                setSearchDraft(e.target.value);
+                const next = e.target.value;
+                setSearchDraft(next);
+                // An empty search box means "no keyword filter". Keeping the
+                // last submitted query active after the reader removed its
+                // text made the source picker look empty even when that app
+                // had memories.
+                if (!next && library.query.trim()) {
+                  setFilterNotice("");
+                  clear();
+                  library.onQuery("");
+                  library.resetPage();
+                }
                 return;
               }
               setFilterNotice("");
