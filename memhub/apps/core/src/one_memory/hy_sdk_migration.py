@@ -326,13 +326,9 @@ def _repair_vector(
     directory = data_dir / "hy-memory" / HY_MEMORY_NAMESPACE / "vector"
     if not (directory / "chroma.sqlite3").is_file():
         return 0
-    import chromadb
-    from chromadb.config import Settings
+    from one_memory.sdk_vector_reattach import open_offline_chroma
 
-    client = chromadb.PersistentClient(
-        path=str(directory),
-        settings=Settings(anonymized_telemetry=False),
-    )
+    client = open_offline_chroma(directory)
     # The SDK client is not open yet (startup has not created its handle), so
     # this is the only writer; release the store before the SDK takes it.
     try:
