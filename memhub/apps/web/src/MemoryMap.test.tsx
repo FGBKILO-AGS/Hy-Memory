@@ -223,6 +223,35 @@ it("searches only when 搜索 is pressed, not on every keystroke", async () => {
   expect(resetPage).toHaveBeenCalled();
 });
 
+it("clearing a submitted keyword immediately shows every memory from the selected source", async () => {
+  const onQuery = vi.fn();
+  const onSource = vi.fn();
+  const resetPage = vi.fn();
+  render(
+    <Host
+      simplified
+      libraryView={{
+        ...pagedView({ items: [], total: 0, offset: 0, limit: 100 }),
+        query: "github",
+        source: "workbuddy",
+        onQuery,
+        onSource,
+        resetPage,
+      }}
+    />,
+  );
+
+  const input = screen.getByRole<HTMLInputElement>("textbox", {
+    name: "筛选地图记忆",
+  });
+  expect(input.value).toBe("github");
+  await userEvent.clear(input);
+
+  expect(onQuery).toHaveBeenCalledExactlyOnceWith("");
+  expect(resetPage).toHaveBeenCalledOnce();
+  expect(onSource).not.toHaveBeenCalled();
+});
+
 it("OBS-15: switching memory shows a read in progress instead of the previous memory", async () => {
   const user = userEvent.setup();
   // The read is deliberately never answered: what matters is what is on
