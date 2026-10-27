@@ -56,10 +56,7 @@ export function LanguageSelector({ compact = false }: { compact?: boolean }) {
         </select>
       </div>
       {!compact && (
-        <p
-          id={`${id}-description`}
-          className="r6-language-setting-description"
-        >
+        <p id={`${id}-description`} className="r6-language-setting-description">
           {t("languageDescription")}
         </p>
       )}
