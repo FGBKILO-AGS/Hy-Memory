@@ -83,13 +83,6 @@ function stamped(value: string, locale: GuiLocale, t: Translate, suffix = "") {
   return `${parts.today ? t("apps.today") : ""}${parts.clock}${suffix}`;
 }
 
-function memoryAction(action: string | undefined, t: Translate) {
-  if (action === "create") return t("apps.newMemory");
-  if (action === "correct" || action === "restore")
-    return t("apps.updatedMemory");
-  return t("apps.saved");
-}
-
 type ActivityChoice = "call" | "update";
 
 function sourceMatchesHost(sourceId: string, hostId: string | null) {
@@ -665,6 +658,11 @@ export function ApplicationsHome({
         : latest.source
           ? [latest.source]
           : [];
+  const latestSourceNames = latestSourceIds.map(
+    (id) =>
+      imports.sources.find((source) => source.source_id === id)?.display_name ??
+      id,
+  );
   const time = latestClock?.clock ?? (latest ? t("apps.unknownTime") : null);
   const checked = visible ? clockParts(visible.observed_at, locale) : null;
   // A failed read leaves the last health in place on purpose: clearing it would
@@ -960,17 +958,16 @@ export function ApplicationsHome({
                       : activity === "call" && recentCall
                         ? `${stamped(recentCall.occurred_at, locale, t)} · ${callRowDetail(recentCall, locale)}${callState === "incomplete" ? t("apps.incompleteCalls") : ""}`
                         : activity === "memory" && latest
-                          ? "revision" in latest
-                            ? `${time} · ${memoryAction(latest.action, t)} · ${latestSourceIds.map((id) => imports.sources.find((s) => s.source_id === id)?.display_name ?? id).join(", ")} · ${t("apps.revision", { count: new Intl.NumberFormat(locale).format(latest.revision) })}`
-                            : `${time} · SDK ${latest.layer} · ${latestSourceIds.map((id) => imports.sources.find((s) => s.source_id === id)?.display_name ?? id).join("、")}`
+                          ? [time, latestSourceNames.join(", ")]
+                              .filter(Boolean)
+                              .join(" · ")
                           : activity === "importing"
                             ? t("apps.savingConversations")
                             : t("apps.waitingMemories")}
                   </small>
                 </section>
                 {(activity === "unavailable" ||
-                  (activity === "call" && CALL_HISTORY_ENTRY_VISIBLE) ||
-                  activity === "memory") && (
+                  (activity === "call" && CALL_HISTORY_ENTRY_VISIBLE)) && (
                   <button
                     type="button"
                     className="r6-home-activity-link"

@@ -199,7 +199,7 @@ it("localizes failure and empty states without leaking errors", async () => {
   ).toBeTruthy();
   expect(document.body.textContent).not.toContain("synthetic_private_error");
 });
-it("shows latest recorded call separately from newly generated memory and opens its history", async () => {
+it("shows latest recorded call separately without exposing recent-update detail entries", async () => {
   history.mockResolvedValue({
     available: true,
     recording_error: false,
@@ -236,9 +236,8 @@ it("shows latest recorded call separately from newly generated memory and opens 
   expect(screen.getByText(/今天 .+ · 查询成功/)).toBeTruthy();
   fireEvent.click(screen.getByRole("tab", { name: "最近更新" }));
   expect(screen.getByText("实际治理记忆")).toBeTruthy();
-  const memoryActions = screen.getAllByRole("button", { name: "查看记忆" });
-  fireEvent.click(memoryActions[memoryActions.length - 1]);
-  expect(onMemories).toHaveBeenCalledWith("m1");
+  expect(screen.queryByRole("button", { name: "查看记忆" })).toBeNull();
+  expect(onMemories).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("tab", { name: "最近调用" }));
   expect(history).toHaveBeenCalledWith({ limit: 20, offset: 0 });
   if (CALL_HISTORY_ENTRY_VISIBLE) {
@@ -834,9 +833,37 @@ it.each([null, "", "not-a-date"])(
       />,
     );
     await screen.findByText("实际治理记忆");
-    expect(screen.getByText(/时间未知.*版本 2/)).toBeTruthy();
+    expect(screen.getByText("时间未知 · App 0")).toBeTruthy();
   },
 );
+
+it("shows only time and source for an SDK recent update", async () => {
+  summary.mockResolvedValue({
+    memory_count: 1,
+    latest: {
+      memory_id: "sdk-memory-1",
+      content: "SDK 原生记忆",
+      layer: "l2_fact",
+      source: "app-0",
+      gmt_created: 1_761_000_000,
+    },
+    observed_at: "2026-09-20T09:00:00Z",
+  });
+
+  render(
+    <ApplicationsHome
+      imports={imports}
+      onManage={() => {}}
+      onMemories={() => {}}
+      onSettings={() => {}}
+    />,
+  );
+
+  await screen.findByText("SDK 原生记忆");
+  expect(screen.getByText(/^\d{2}:\d{2} · App 0$/)).toBeTruthy();
+  expect(document.body.textContent).not.toContain("SDK l2_fact");
+  expect(screen.queryByRole("button", { name: "查看记忆" })).toBeNull();
+});
 
 it("does not treat an available adapter as an installed application", async () => {
   render(
