@@ -119,14 +119,10 @@ def test_post_cutover_metadata_repair_restores_source_and_original_times(store):
             ),
         )
 
-    import chromadb
-    from chromadb.config import Settings as ChromaSettings
+    from one_memory.sdk_vector_reattach import open_offline_chroma
 
     vector = data_dir / "hy-memory" / "governed-v2" / "vector"
-    collection = chromadb.PersistentClient(
-        path=str(vector),
-        settings=ChromaSettings(anonymized_telemetry=False),
-    ).get_or_create_collection("memory")
+    collection = open_offline_chroma(vector).get_or_create_collection("memory")
     collection.add(
         ids=["sdk-1"],
         documents=["remember"],
@@ -230,13 +226,10 @@ def test_metadata_repair_reaches_memories_the_cutover_backfilled_under_legacy_id
                 "INSERT INTO evidence VALUES ('e7','workbuddy','2026-09-01T00:00:00+00:00',NULL)"
             )
 
-    import chromadb
-    from chromadb.config import Settings as ChromaSettings
+    from one_memory.sdk_vector_reattach import open_offline_chroma
 
     vector = data_dir / "hy-memory" / "governed-v2" / "vector"
-    client = chromadb.PersistentClient(
-        path=str(vector), settings=ChromaSettings(anonymized_telemetry=False)
-    )
+    client = open_offline_chroma(vector)
     collection = client.get_or_create_collection("memory")
     imported = int(datetime(2026, 10, 20, tzinfo=UTC).timestamp())
     collection.add(
@@ -256,9 +249,7 @@ def test_metadata_repair_reaches_memories_the_cutover_backfilled_under_legacy_id
         now=datetime(2026, 10, 25, tzinfo=UTC),
     )
 
-    client = chromadb.PersistentClient(
-        path=str(vector), settings=ChromaSettings(anonymized_telemetry=False)
-    )
+    client = open_offline_chroma(vector)
     rows = client.get_collection("memory").get(ids=["legacy-7", "unlinked"], include=["metadatas"])
     client.close()
     metadata = dict(zip(rows["ids"], rows["metadatas"], strict=True))
@@ -546,13 +537,9 @@ def test_finished_jobs_without_input_do_not_stop_the_migration(store):
 
 
 def _chroma(home: Path):
-    import chromadb
-    from chromadb.config import Settings as ChromaSettings
+    from one_memory.sdk_vector_reattach import open_offline_chroma
 
-    return chromadb.PersistentClient(
-        path=str(home / "hy-memory" / "governed-v2" / "vector"),
-        settings=ChromaSettings(anonymized_telemetry=False),
-    )
+    return open_offline_chroma(home / "hy-memory" / "governed-v2" / "vector")
 
 
 def _fill(client, name: str, ids: list[str], *, text: str = "old") -> None:
@@ -597,6 +584,38 @@ def test_legacy_vectors_are_renamed_and_newer_writes_are_kept(tmp_path) -> None:
     chat = client.get_collection(f"{current}_4").get(ids=["both"], include=["documents"])
     assert chat["documents"] == ["newer both"]
     assert reattach_legacy_vectors(tmp_path, profile) == ()
+
+
+def test_the_readback_can_open_the_store_right_after_reattach(tmp_path, monkeypatch) -> None:
+    """The 1.0.4 upgrade failed its first launch at `verify.readback`.
+
+    Reattach opened Chroma with `anonymized_telemetry=False` and never closed
+    it. The SDK then opened the same directory in the same process with
+    default settings, and Chroma refused: "An instance of Chroma already
+    exists ... with different settings". The second launch only passed because
+    nothing was left to reattach.
+    """
+    import chromadb
+
+    from one_memory.hy_sdk_runtime import builtin_retrieval_snapshot, vector_collection_bases
+    from one_memory.sdk_vector_reattach import reattach_legacy_vectors
+
+    profile = builtin_retrieval_snapshot()
+    current, legacy = vector_collection_bases(profile)
+    seeded = _chroma(tmp_path)
+    _fill(seeded, f"{legacy[0]}_4", ["a", "b"])
+    seeded.close()
+    # The migration process has not configured the SDK environment yet.
+    monkeypatch.delenv("ANONYMIZED_TELEMETRY", raising=False)
+
+    assert len(reattach_legacy_vectors(tmp_path, profile)) == 1
+
+    # What the SDK does next, in the same process: no settings of its own.
+    sdk = chromadb.PersistentClient(path=str(tmp_path / "hy-memory" / "governed-v2" / "vector"))
+    try:
+        assert sdk.get_collection(f"{current}_4").count() == 2
+    finally:
+        sdk.close()
 
 
 def _confirmed(store, *memory_ids: str, kind: str = "chat") -> None:

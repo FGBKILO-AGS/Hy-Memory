@@ -710,6 +710,42 @@ class CodingMemoryStore:
             cur = self._conn.execute(sql, params)
             return [_row_to_memory(r) for r in cur.fetchall()]
 
+    async def stats(
+        self,
+        user_id: str,
+        workspace_id: Optional[str] = None,
+        branch: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """经验数、最新创建/修改时间、active 事实数。纯聚合，不读正文。
+
+        作用域与 list_by_workspace 相同：workspace_id 为空表示该 user 全部。
+        """
+        return await _run_in_pool(self._stats_sync, user_id, workspace_id, branch)
+
+    def _stats_sync(
+        self, user_id: str, workspace_id: Optional[str], branch: Optional[str],
+    ) -> Dict[str, Any]:
+        scope_sql, scope_params = _scope_where(workspace_id, branch)
+        with self._lock:
+            assert self._conn is not None
+            row = self._conn.execute(
+                f"SELECT COUNT(*) AS n, MAX(created_at) AS created, "
+                f"MAX(updated_at) AS updated FROM coding_memory_meta "
+                f"WHERE user_id = ? AND {scope_sql}",
+                [user_id] + scope_params,
+            ).fetchone()
+            facts = self._conn.execute(
+                f"SELECT COUNT(*) AS n FROM working_fact "
+                f"WHERE user_id = ? AND status = 'active' AND {scope_sql}",
+                [user_id] + scope_params,
+            ).fetchone()
+        return {
+            "count": int(row["n"] or 0),
+            "latest_created_at": _parse_dt(row["created"]) if row["created"] else None,
+            "latest_updated_at": _parse_dt(row["updated"]) if row["updated"] else None,
+            "facts": int(facts["n"] or 0),
+        }
+
     # ------------------------------------------------------------
     # 召回
     # ------------------------------------------------------------

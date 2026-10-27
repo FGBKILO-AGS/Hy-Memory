@@ -1980,6 +1980,7 @@ class HyMemoryClient:
         layers: Optional[List[Any]] = None,
         statuses: Optional[List[Any]] = None,
         with_evolution: bool = False,
+        scene: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         列出用户的记忆（同步）。
@@ -2008,6 +2009,9 @@ class HyMemoryClient:
                       保持兼容，只返回 ACTIVE。可显式读取 SUPERSEDED / SHADOW /
                       NEGATED / CONFLICTED / ARCHIVED；物理删除的节点不会返回。
             with_evolution: 可选，为当前页条目附加 evolution_chain（默认关闭）。
+            scene:    可选，列哪一类记忆："chat" | "coding" | "working"。
+                      "coding"/"working" 列该类全部经验（workspace_id 可再收窄），
+                      按 updated_at 倒序，total 为真实总数。不传时保持原行为。
 
         Returns:
             chat 路径: {"vdb": {...}, "graph": {...} | 省略, "elapsed_ms": ...}
@@ -2023,7 +2027,34 @@ class HyMemoryClient:
                 limit=limit, offset=offset, order=order,
                 workspace_id=workspace_id, branch=branch,
                 layers=layers, statuses=statuses, with_evolution=with_evolution,
+                scene=scene,
             )
+        )
+
+    def memory_stats(
+        self,
+        *,
+        user_id: str = "",
+        statuses: Optional[List[Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        每类记忆的数量与最新时间（同步）。纯聚合，不返回正文。
+
+        Returns:
+            {
+              "total": chat + coding + working 的条数,
+              "scenes": {
+                "chat":    {"count", "latest_created_at", "latest_updated_at"},
+                "coding":  {"count", "latest_created_at", "latest_updated_at", "facts"},
+                "working": {同 coding},
+              },
+              "request_id", "elapsed_ms",
+            }
+            时间均为秒级 epoch，没有记忆时为 None。chat 不含 L1_RAW；
+            coding/working 的 count 是经验条数，facts 是 active 事实数（不计入 total）。
+        """
+        return self._loop_thread.run(
+            self.async_memory_stats(user_id=user_id, statuses=statuses)
         )
 
     def get_user_basic_info(
@@ -4917,14 +4948,11 @@ class HyMemoryClient:
         nodes.sort(key=_sort_key, reverse=reverse)
         return nodes
 
-    async def _list_vdb_bucket(
+    async def _list_vdb_nodes(
         self,
         *,
         user_id: str,
         agent_id: Optional[str],
-        limit: int,
-        offset: int,
-        order: str,
         user_ids: Optional[List[str]] = None,
         agent_ids: Optional[List[str]] = None,
         session_ids: Optional[List[str]] = None,
@@ -4932,8 +4960,8 @@ class HyMemoryClient:
         exclude_sources: Optional[List[str]] = None,
         layers: Optional[List] = None,
         statuses: Optional[List] = None,
-        with_evolution: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> List:
+        """chat 路径的全部节点（已过滤、未排序）。list 与 stats 共用同一套口径。"""
         from .models.memory import MemoryLayer, MemoryStatus
         from .pipelines._retrieval.user_level_l0 import collapse_user_level_l0_hits
 
@@ -4995,6 +5023,33 @@ class HyMemoryClient:
                 node for node in all_nodes if node.source not in blocked_sources
             ]
 
+        return all_nodes
+
+    async def _list_vdb_bucket(
+        self,
+        *,
+        user_id: str,
+        agent_id: Optional[str],
+        limit: int,
+        offset: int,
+        order: str,
+        user_ids: Optional[List[str]] = None,
+        agent_ids: Optional[List[str]] = None,
+        session_ids: Optional[List[str]] = None,
+        include_sources: Optional[List[str]] = None,
+        exclude_sources: Optional[List[str]] = None,
+        layers: Optional[List] = None,
+        statuses: Optional[List] = None,
+        with_evolution: bool = False,
+    ) -> Dict[str, Any]:
+        all_nodes = await self._list_vdb_nodes(
+            user_id=user_id, agent_id=agent_id,
+            user_ids=user_ids, agent_ids=agent_ids,
+            session_ids=session_ids,
+            include_sources=include_sources,
+            exclude_sources=exclude_sources,
+            layers=layers, statuses=statuses,
+        )
         all_nodes = self._sort_memory_nodes(all_nodes, order=order)
         total = len(all_nodes)
         page_nodes = all_nodes[offset: offset + limit]
@@ -5154,11 +5209,15 @@ class HyMemoryClient:
         request_id: str,
         t0: float,
         statuses: Optional[List] = None,
+        variant: Optional[str] = None,
     ) -> Dict[str, Any]:
         """按 workspace_id（+可选 branch）纯过滤列出经验层完整详情。
 
         枚举而非召回，所以只有经验层、不带事实层。无 query、无语义排序，按
         updated_at 倒序。fail-safe：失败返回空列表。
+
+        variant 给定时读该变体自己的库（没写过的变体不建空库，直接返回空），
+        workspace_id 为空表示该 user 的全部经验。未给定时沿用"最近一次用的那份"。
         """
         empty = {
             "request_id": request_id,
@@ -5169,20 +5228,31 @@ class HyMemoryClient:
             "offset": offset,
             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
         }
+        if variant is not None:
+            empty["variant"] = variant
         from .models.memory import MemoryStatus
         if statuses and MemoryStatus.ACTIVE not in statuses:
             return empty
         try:
-            await self._get_coding_writer()  # 副作用：lazy init store
+            if variant is None:
+                await self._get_coding_writer()  # 副作用：lazy init store
+                store = self._coding_store
+            else:
+                store = await self._coding_store_for_exact_get(variant)
         except Exception as e:
             logger.warning(f"[list-coding] init failed: {e}")
             return empty
+        if store is None:
+            return empty
 
         try:
-            mems = await self._coding_store.list_by_workspace(
-                user_id=user_id, workspace_id=workspace_id, branch=branch,
+            mems = await store.list_by_workspace(
+                user_id=user_id, workspace_id=workspace_id or "", branch=branch,
                 limit=limit, offset=offset,
             )
+            total = (await store.stats(
+                user_id, workspace_id=workspace_id or None, branch=branch,
+            ))["count"]
         except Exception as e:
             logger.warning(f"[list-coding] list_by_workspace failed: {e}")
             return empty
@@ -5201,6 +5271,7 @@ class HyMemoryClient:
                 "source_fact_ids": list(d.source_fact_ids),
                 "confidence": d.confidence,
                 "status": MemoryStatus.ACTIVE.value,
+                "created_at": d.created_at.isoformat() if d.created_at else None,
                 "updated_at": d.updated_at.isoformat() if d.updated_at else None,
                 "source": d.source,
             }
@@ -5211,13 +5282,97 @@ class HyMemoryClient:
             f"[list-coding] user={user_id} workspace_id={workspace_id!r} "
             f"branch={branch!r} returned={len(out_memories)} elapsed={elapsed}ms"
         )
-        return {
+        out: Dict[str, Any] = {
             "request_id": request_id,
             "scene": "productivity",
             "experiences": out_memories,
-            "total": len(out_memories),
+            # 真实总数，不是本页条数：分页靠它判断是否还有下一页
+            "total": total,
             "limit": limit,
             "offset": offset,
+            "elapsed_ms": elapsed,
+        }
+        if variant is not None:
+            out["variant"] = variant
+        return out
+
+    @staticmethod
+    def _list_scene(scene: Optional[str]) -> Optional[str]:
+        """list/stats 的 scene：None（原有路由）| chat | coding | working。"""
+        if scene is None:
+            return None
+        value = str(scene).strip().lower()
+        if value not in ("chat", "coding", "working"):
+            raise ValueError(f"scene must be chat, coding or working, got {scene!r}")
+        return value
+
+    @_ensure_internal_loop
+    async def async_memory_stats(
+        self,
+        *,
+        user_id: str = "",
+        statuses: Optional[List[Any]] = None,
+    ) -> Dict[str, Any]:
+        """每类记忆的数量与最新时间（异步）。字段见同步版 memory_stats。"""
+        from .models.memory import MemoryStatus
+
+        request_id = str(uuid.uuid4())
+        set_request_id(request_id)
+        t0 = time.perf_counter()
+        effective_statuses = self._normalize_statuses(statuses)
+
+        def _epoch(value: Optional[datetime]) -> Optional[int]:
+            return int(value.timestamp()) if isinstance(value, datetime) else None
+
+        nodes = await self._list_vdb_nodes(
+            user_id=user_id, agent_id=None, statuses=effective_statuses,
+        )
+        created = [
+            stamp for stamp in (
+                _epoch(n.gmt_created) or _epoch(getattr(n, "valid_from", None))
+                for n in nodes
+            ) if stamp is not None
+        ]
+        updated = [
+            stamp for stamp in (_epoch(getattr(n, "gmt_modified", None)) for n in nodes)
+            if stamp is not None
+        ]
+        scenes: Dict[str, Dict[str, Any]] = {
+            "chat": {
+                "count": len(nodes),
+                "latest_created_at": max(created) if created else None,
+                "latest_updated_at": max(updated or created) if (updated or created) else None,
+            }
+        }
+        # 经验层没有生命周期字段，只算 ACTIVE；没写过的变体不建空库。
+        include_productivity = (
+            not effective_statuses or MemoryStatus.ACTIVE in effective_statuses
+        )
+        for variant in ("coding", "working"):
+            stats = {"count": 0, "latest_created_at": None, "latest_updated_at": None, "facts": 0}
+            if include_productivity:
+                store = await self._coding_store_for_exact_get(variant)
+                if store is not None:
+                    raw = await store.stats(user_id)
+                    stats = {
+                        "count": raw["count"],
+                        "latest_created_at": _epoch(raw["latest_created_at"]),
+                        "latest_updated_at": _epoch(raw["latest_updated_at"]),
+                        "facts": raw["facts"],
+                    }
+            scenes[variant] = stats
+
+        elapsed = round((time.perf_counter() - t0) * 1000, 2)
+        total = sum(int(item["count"]) for item in scenes.values())
+        logger.info(
+            f"[stats] user={user_id} total={total} "
+            + " ".join(f"{name}={item['count']}" for name, item in scenes.items())
+            + f" elapsed={elapsed}ms"
+        )
+        return {
+            "total": total,
+            "scenes": scenes,
+            "request_id": request_id,
             "elapsed_ms": elapsed,
         }
 
@@ -5240,6 +5395,7 @@ class HyMemoryClient:
         layers: Optional[List[Any]] = None,
         statuses: Optional[List[Any]] = None,
         with_evolution: bool = False,
+        scene: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         列出用户的记忆（异步）。
@@ -5299,9 +5455,17 @@ class HyMemoryClient:
         set_request_id(request_id)
         t0 = time.perf_counter()
         effective_statuses = self._normalize_statuses(statuses)
+        list_scene = self._list_scene(scene)
 
-        # workspace_id 非空 → 走 coding memory 列表路径
-        if workspace_id:
+        # scene 显式指定 coding/working → 列该类全部经验（workspace_id 可再收窄）
+        if list_scene in ("coding", "working"):
+            return await self._list_coding(
+                user_id=user_id, workspace_id=workspace_id, branch=branch,
+                limit=limit, offset=offset, request_id=request_id, t0=t0,
+                statuses=effective_statuses, variant=list_scene,
+            )
+        # workspace_id 非空且未指定 scene → 走 coding memory 列表路径（原有行为）
+        if workspace_id and list_scene is None:
             return await self._list_coding(
                 user_id=user_id, workspace_id=workspace_id, branch=branch,
                 limit=limit, offset=offset, request_id=request_id, t0=t0,

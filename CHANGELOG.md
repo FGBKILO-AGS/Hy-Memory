@@ -4,6 +4,17 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- SDK: `list_memories(scene="chat" | "coding" | "working")` lists one kind of
+  memory. `coding` and `working` list that scene's whole store, newest update
+  first (`workspace_id` still narrows it), and `total` is now the real count
+  rather than the page size. The new `memory_stats()` returns the count and the
+  latest created/updated time for each scene and their total, without reading
+  any memory text. Previously coding and working memories could not be listed
+  or counted without a workspace, so a library of 45 memories listed 22.
+- The SDK migration no longer fails its first run on a home with legacy
+  vectors: reattaching them left a Chroma instance open with its own settings,
+  and the readback that followed could not open the same store
+  ("An instance of Chroma already exists ... with different settings").
 - The SDK memory page now reads its list, count, source and time labels and
   graph from one page response for one source filter, so rows, totals and the
   map no longer disagree. Memories with no recorded source are shown and
