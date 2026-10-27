@@ -186,18 +186,17 @@ it("OBS-19: Enter in the memory filter submits it; submitting it again re-reads"
     />,
   );
   await act(async () => {});
-  await userEvent.click(screen.getByRole("button", { name: "刷新地图记忆" }));
-  expect(onRetry).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("button", { name: "刷新地图记忆" })).toBeNull();
   // Typing alone does not search; Enter submits the words.
   const input = screen.getByRole("textbox", { name: "筛选地图记忆" });
   await userEvent.type(input, "第一");
   expect(onQuery).not.toHaveBeenCalled();
   await userEvent.type(input, "{Enter}");
   expect(onQuery).toHaveBeenCalledWith("第一");
-  // Submitting the words already applied re-reads, like the refresh button.
+  // Submitting the currently applied query re-reads without a separate row.
   await userEvent.clear(input);
   await userEvent.type(input, "{Enter}");
-  expect(onRetry).toHaveBeenCalledTimes(2);
+  expect(onRetry).toHaveBeenCalledOnce();
 });
 
 it("searches only when 搜索 is pressed, not on every keystroke", async () => {
@@ -510,6 +509,12 @@ it("D96: lists a memory by when its conversation happened, not when it was gener
       /共 519 条，第 2 \/ 6 页/,
     ),
   ).toBeTruthy();
+  expect(screen.getAllByText(/共 519 条/)).toHaveLength(1);
+  expect(
+    screen
+      .getByRole("navigation", { name: "地图记忆分页" })
+      .classList.contains("map-pagination"),
+  ).toBe(true);
 });
 
 it("names the SDK's no-source bucket 未识别来源, apart from a source under review", () => {

@@ -16,7 +16,6 @@ import {
   ChevronRight,
   FileText,
   Network,
-  RefreshCw,
   Search,
   X,
 } from "lucide-react";
@@ -696,43 +695,17 @@ export function MemoryMap(props: Props) {
             </button>
           ) : null}
         </form>
-        {library && (
-          <div className="map-list-heading" aria-live="polite">
-            <span>
-              {library.stale
-                ? library.page && library.page.total > 0
-                  ? text(
-                      "共 {count} 条 · 正在核对来源…",
-                      { count: plain(library.page.total) },
-                      library.page.total,
-                    )
-                  : text("正在核对来源…")
-                : library.failed
-                  ? text("读取失败")
-                  : library.loading && library.page?.total === 0
-                    ? text("正在读取…")
-                    : library.page
-                      ? `${text(
-                          "共 {count} 条",
-                          { count: plain(library.page.total) },
-                          library.page.total,
-                        )}${refreshing ? text(" · 正在核对…") : ""}`
-                      : text("正在读取…")}
-            </span>
-            {!library.stale && (
-              <button
-                type="button"
-                className="quiet map-tool"
-                aria-label={text("刷新地图记忆")}
-                title={text("刷新地图记忆")}
-                disabled={library.loading || hidden}
-                onClick={library.onRetry}
-              >
-                <RefreshCw size={16} aria-hidden="true" />
-              </button>
-            )}
-          </div>
-        )}
+        {library && (library.loading || library.stale || library.failed) ? (
+          <p className="map-list-status" aria-live="polite">
+            {library.failed
+              ? text("读取失败")
+              : library.stale
+                ? text("正在核对来源…")
+                : refreshing && library.page?.total !== 0
+                  ? text("正在核对…")
+                  : text("正在读取…")}
+          </p>
+        ) : null}
         {!props.simplified && (
           <div className="map-groups">
             <button
@@ -873,7 +846,7 @@ export function MemoryMap(props: Props) {
           !library.loading &&
           !library.failed &&
           !library.stale && (
-            <nav aria-label={text("地图记忆分页")} className="map-list-heading">
+            <nav aria-label={text("地图记忆分页")} className="map-pagination">
               <button
                 type="button"
                 className="quiet map-tool"
