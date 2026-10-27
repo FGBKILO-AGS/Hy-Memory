@@ -257,10 +257,16 @@ describe("CLI-22 shared output contract", () => {
       }
       expect(general.stdout()).toContain("确认约定");
       for (const [command, usage] of [
-        ["backup", "memhub backup restore --source <path> [--yes]"],
+        [
+          "backup",
+          "memhub backup restore --source <path> [--yes --confirm <path>]",
+        ],
         ["memories", "memhub memories delete <memory-id>"],
         ["models", "memhub models remove <profile-id> [--yes]"],
-        ["delete-data", "memhub delete-data [--data-dir <path>] [--yes]"],
+        [
+          "delete-data",
+          "memhub delete-data [--data-dir <path>] [--yes --confirm <path>]",
+        ],
         ["graph-width", "[--yes]"],
       ] as const) {
         const streams = captureStreams();
@@ -270,7 +276,10 @@ describe("CLI-22 shared output contract", () => {
           streams.restore();
         }
         expect(streams.stdout()).toContain(usage);
-        expect(streams.stdout()).not.toContain("--confirm <path>");
+        // Only the two commands with no way back repeat the target path.
+        if (command !== "backup" && command !== "delete-data") {
+          expect(streams.stdout()).not.toContain("--confirm <path>");
+        }
       }
     });
 

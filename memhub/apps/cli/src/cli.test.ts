@@ -1,4 +1,11 @@
-import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -2793,11 +2800,67 @@ describe("backup restore drives the Core managed-restore contract", () => {
       state: "preview",
       target: "/tmp/x",
       applied: false,
-      next_step: "memhub backup restore --source /tmp/x --yes",
+      next_step: "memhub backup restore --source /tmp/x --yes --confirm /tmp/x",
     });
   });
 
-  it("restores with --yes alone (no second path confirmation)", async () => {
+  it("deletes data only when --confirm repeats the data directory", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "memhub-delete-home-"));
+    const dataDir = path.join(home, ".one-memory");
+    await mkdir(path.join(dataDir, "logs"), { recursive: true });
+    const deleteData = async (...extra: string[]) => {
+      const output = captureStdout();
+      try {
+        const code = await run(
+          ["delete-data", "--data-dir", dataDir, ...extra, "--json"],
+          { HOME: home },
+        );
+        return { code, document: JSON.parse(output.value()) };
+      } finally {
+        output.restore();
+      }
+    };
+    try {
+      const refused = await deleteData("--yes");
+      expect(refused.code).toBe(4);
+      expect(refused.document).toMatchObject({
+        state: "blocked",
+        code: "data_deletion_confirmation_required",
+      });
+      expect(await readdir(dataDir)).toEqual(["logs"]);
+
+      const deleted = await deleteData("--yes", "--confirm", dataDir);
+      expect(deleted.code).toBe(0);
+      expect(await readdir(dataDir).catch(() => [])).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses --yes without repeating the backup path", async () => {
+    const maintenance = vi.fn();
+    const output = captureStdout();
+    let code: number;
+    try {
+      code = await run(
+        ["backup", "restore", "--source", "/tmp/x", "--yes", "--json"],
+        {},
+        { runMaintenanceRestore: maintenance },
+      );
+    } finally {
+      output.restore();
+    }
+    expect(code!).toBe(4);
+    expect(maintenance).not.toHaveBeenCalled();
+    expect(JSON.parse(output.value())).toMatchObject({
+      state: "rejected",
+      code: "backup_restore_confirmation_required",
+      next_step:
+        "恢复需要再写一遍备份路径：memhub backup restore --source /tmp/x --yes --confirm /tmp/x",
+    });
+  });
+
+  it("restores with --yes and the repeated backup path", async () => {
     const maintenance = vi.fn(async () => ({
       state: "restored" as const,
       result: {
@@ -2811,7 +2874,16 @@ describe("backup restore drives the Core managed-restore contract", () => {
     let code: number;
     try {
       code = await run(
-        ["backup", "restore", "--source", "/tmp/x", "--yes", "--json"],
+        [
+          "backup",
+          "restore",
+          "--source",
+          "/tmp/x",
+          "--yes",
+          "--confirm",
+          "/tmp/x",
+          "--json",
+        ],
         {},
         { runMaintenanceRestore: maintenance },
       );

@@ -115,7 +115,7 @@ node apps/cli/dist/one-memory.cjs write status <request_id> --json
 ```bash
 node apps/cli/dist/one-memory.cjs backup create --target <数据目录>/backups/<文件名> --json
 node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups/<文件名>        # 预览
-node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups/<文件名> --yes  # 执行
+node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups/<文件名> --yes --confirm <数据目录>/backups/<文件名>  # 执行
 ```
 
 备份只包含主库（来源、写入队列、配置），**不包含记忆本身**（`hy-memory/`）。目标必须在
@@ -145,7 +145,8 @@ node apps/cli/dist/one-memory.cjs sync resume --source codex
 
 只有不可逆操作需要 `--yes`：`memories delete`、`models remove`、`delete-data`、
 `backup restore`、`graph-width --decision rebuild_with_new`。不加时只说明将要做什么，不做任何
-改动（exit 0）。install / upgrade / uninstall / service-install / service-uninstall 不加 `--yes`
+改动（exit 0）。`delete-data` 和 `backup restore` 还要用 `--confirm <路径>` 再写一遍目标（数据目录 /
+备份文件），只加 `--yes` 会被拒绝。install / upgrade / uninstall / service-install / service-uninstall 不加 `--yes`
 时只出计划。其它写命令直接执行。
 
 ## 12. 卸载（保留数据）

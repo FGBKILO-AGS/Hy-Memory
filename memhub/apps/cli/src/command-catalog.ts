@@ -555,14 +555,24 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "delete-data",
     summary:
-      "删除 MemHub 数据目录（记忆、来源、配置），不可逆。这是唯一会删除数据的命令；uninstall 不会。需要 Runtime 已停止；不加 --yes 时只预览要删除的目录。",
-    usage: "memhub delete-data [--data-dir <path>] [--yes] [--json]",
+      "删除 MemHub 数据目录（记忆、来源、配置），不可逆。这是唯一会删除数据的命令；uninstall 不会。需要 Runtime 已停止；不加参数时只预览要删除的目录；删除需要 --yes 并用 --confirm 再写一遍同一个目录。",
+    usage:
+      "memhub delete-data [--data-dir <path>] [--yes --confirm <path>] [--json]",
     options: [
       {
         flag: "--data-dir <path>",
         summary: "要删除的数据目录绝对路径；默认当前使用的数据目录。",
       },
-      DESTRUCTIVE_CONFIRM_OPTION,
+      {
+        ...DESTRUCTIVE_CONFIRM_OPTION,
+        summary:
+          "删除时必须加，且要同时给出 --confirm <path>；不加时只预览，exit 0。",
+      },
+      {
+        flag: "--confirm <path>",
+        summary:
+          "删除时必须加：再写一遍要删除的数据目录，与预览中的目录完全一致才执行。",
+      },
       JSON_OPTION,
     ],
     exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_PLAN_BLOCKED],
@@ -663,10 +673,10 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "backup",
     summary:
-      "备份与恢复主库（来源、写入队列、配置）。注意：不包含记忆本身——SDK 记忆库 hy-memory/ 不在备份里，restore 也不会替换它。create 的目标要放在 <数据目录>/backups/ 下才能被 restore 使用；restore 覆盖现有主库，需 Runtime 已停止并加 --yes。",
+      "备份与恢复主库（来源、写入队列、配置）。注意：不包含记忆本身——SDK 记忆库 hy-memory/ 不在备份里，restore 也不会替换它。create 的目标要放在 <数据目录>/backups/ 下才能被 restore 使用；restore 覆盖现有主库，需 Runtime 已停止，并加 --yes 与 --confirm <同一个备份路径>。",
     usage:
       "memhub backup create --target <path> [--json]\n" +
-      "            memhub backup restore --source <path> [--yes] [--json]",
+      "            memhub backup restore --source <path> [--yes --confirm <path>] [--json]",
     options: [
       {
         flag: "--target <path>",
@@ -679,7 +689,13 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       },
       {
         ...DESTRUCTIVE_CONFIRM_OPTION,
-        summary: "restore 必须加；create 不需要。",
+        summary:
+          "restore 必须加，且要同时给出 --confirm <path>；create 不需要。",
+      },
+      {
+        flag: "--confirm <path>",
+        summary:
+          "restore 必须加：再写一遍 --source 的备份路径，完全一致才执行。",
       },
       JSON_OPTION,
     ],

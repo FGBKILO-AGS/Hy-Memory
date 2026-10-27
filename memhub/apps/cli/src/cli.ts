@@ -2996,7 +2996,7 @@ async function runCommand(
             apply: false,
             ...(plan.state === "preview"
               ? {
-                  next_step: `确认要永久删除这个数据目录后运行：${PRODUCT} delete-data --data-dir ${dataDir} --yes`,
+                  next_step: `确认要永久删除这个数据目录后运行（--confirm 必须再写一遍同一个目录）：${PRODUCT} delete-data --data-dir ${dataDir} --yes --confirm ${dataDir}`,
                 }
               : {}),
           },
@@ -3012,12 +3012,27 @@ async function runCommand(
       );
       return EXIT_PLAN_BLOCKED;
     }
-    try {
-      // A legacy `--confirm <path>` must still name this exact directory.
-      const receipt = await applyDataDeletion(
-        plan,
-        parsed.confirmPath ?? plan.data_dir,
+    if (parsed.confirmPath === undefined) {
+      // Deleting every memory is the one action with no way back: `--yes`
+      // alone is not enough, the directory has to be typed a second time.
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            ...plan,
+            state: "blocked",
+            apply: false,
+            code: "data_deletion_confirmation_required",
+            next_step: `删除需要再写一遍数据目录：${PRODUCT} delete-data --data-dir ${plan.data_dir} --yes --confirm ${plan.data_dir}`,
+          },
+          null,
+          2,
+        )}\n`,
       );
+      return EXIT_PLAN_BLOCKED;
+    }
+    try {
+      // `--confirm <path>` must name this exact directory.
+      const receipt = await applyDataDeletion(plan, parsed.confirmPath);
       await removeInstallReceipt(
         defaultInstallReceiptPath(environment.HOME ?? os.homedir()),
       );
@@ -3469,7 +3484,7 @@ async function applyBackupRestore(
   if (!restoreConfirmationMatches(parsed.source, parsed.confirmPath)) {
     return refuse(
       "backup_restore_confirmation_mismatch",
-      `--confirm 必须与 --source 相同；也可以去掉 --confirm：${PRODUCT} backup restore --source ${parsed.source} --yes`,
+      `--confirm 必须与 --source 相同：${PRODUCT} backup restore --source ${parsed.source} --yes --confirm ${parsed.source}`,
     );
   }
   if (!parsed.confirmed) {
@@ -3478,8 +3493,17 @@ async function applyBackupRestore(
       target: parsed.source,
       effect:
         "用这份受管备份覆盖当前主库（来源、写入队列、配置）；先自动做一份保护性备份。SDK 记忆库 hy-memory/ 不会被替换。需要 Runtime 已停止",
-      retry: `${PRODUCT} backup restore --source ${parsed.source} --yes`,
+      retry: `${PRODUCT} backup restore --source ${parsed.source} --yes --confirm ${parsed.source}`,
     });
+  }
+  if (parsed.confirmPath === undefined) {
+    // Restoring overwrites the live database: the backup has to be named a
+    // second time, the same rule as delete-data.
+    return refuse(
+      "backup_restore_confirmation_required",
+      `恢复需要再写一遍备份路径：${PRODUCT} backup restore --source ${parsed.source} --yes --confirm ${parsed.source}`,
+      EXIT_PLAN_BLOCKED,
+    );
   }
   const config = resolveRuntimeCliConfig(environment, process.argv[1]);
   const status = await inspectRuntimeStatus({
@@ -6449,8 +6473,8 @@ function serviceDataDirectory(
   return value;
 }
 
-/** Parse `delete-data`: preview by default; `--yes` alone still only previews
- * unless `--confirm <path>` repeats the exact directory. */
+/** Parse `delete-data`: preview by default; deleting needs `--yes` AND
+ * `--confirm <path>` repeating the exact directory (`--yes` alone is refused). */
 function parseDataDeletionCommand(
   arguments_: readonly string[],
 ): { dataDir?: string; confirmed: boolean; confirmPath?: string } | null {
