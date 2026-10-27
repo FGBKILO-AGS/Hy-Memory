@@ -57,6 +57,7 @@ from ._retrieval.ner import (
     memory_matches_time_hints,
 )
 from ._retrieval.diversity import (
+    near_dup_applies,
     near_dup_demote,
     mmr_applies,
     mmr_select,
@@ -1438,6 +1439,8 @@ class BaseReadPipeline(ReadPipeline):
             # MMR 只在调用方的 top-k（final_limit，即 search 的 limit）< MMR_MAX_TOP_K
             # 时启用；池子（LOCAL_RERANK 下是 final_limit 的若干倍）不参与判定。
             MMR_ON = mmr_applies(final_limit, MMR_LAMBDA)
+            # 近重复降权同样是候选两两比较，用同一个 top-k 门槛。
+            NEAR_DUP_ON = near_dup_applies(final_limit)
             vdb_sem_limit = max(final_limit * 3, 30)
             vdb_kw_limit = max(final_limit * 5, 80)
             graph_limit = max(
@@ -2532,7 +2535,7 @@ class BaseReadPipeline(ReadPipeline):
                         df_thr=POOL_DF_THR,
                         penalty=POOL_DF_PENALTY,
                     )
-                if NEAR_DUP_THR > 0 and NEAR_DUP_PENALTY > 0:
+                if NEAR_DUP_ON and NEAR_DUP_THR > 0 and NEAR_DUP_PENALTY > 0:
                     normal_results = near_dup_demote(
                         normal_results,
                         jaccard_thr=NEAR_DUP_THR,
@@ -3553,6 +3556,7 @@ class BaseReadPipeline(ReadPipeline):
                 "local_rerank_enabled": LOCAL_RERANK_ON,
                 "rerank": RERANK_ON,
                 "mmr_applied": MMR_ON,
+                "near_dup_applied": NEAR_DUP_ON,
                 "local_rerank_model": getattr(
                     self.config.recall,
                     "local_rerank_model",

@@ -171,6 +171,17 @@ def mmr_applies(top_k: int, lambda_: float) -> bool:
     return 0.0 < float(lambda_) < 0.999 and int(top_k) < MMR_MAX_TOP_K
 
 
+def near_dup_applies(top_k: int) -> bool:
+    """本次检索是否走近重复降权：与 MMR 同一个 top-k 门槛。
+
+    near_dup_demote 让每个候选和此前所有"非重复"候选两两算 Jaccard，候选
+    互不相似时是 O(pool^2)；池子随 limit 放大（约 max(3*limit, 30) + 关键词
+    命中），limit 达到 MMR_MAX_TOP_K 时代价同样陡增。大 k 的调用方（如记忆
+    面板翻页）要的是全部相关项，相似项也应照常出现，降权没有收益。
+    """
+    return int(top_k) < MMR_MAX_TOP_K
+
+
 def mmr_select(
     hits: Sequence[Dict[str, Any]],
     limit: int,

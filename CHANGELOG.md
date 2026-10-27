@@ -14,6 +14,9 @@ Hy Memory and MemHub are versioned and released independently.
   below 20 (`MMR_MAX_TOP_K`) and is skipped for larger limits, where its
   quadratic token-overlap pass is slow and gains little. Previously it ran for
   every limit. `MEMORY_HYBRID_V2_MMR_LAMBDA` still sets the weight.
+  Near-duplicate demotion follows the same gate: it compares each candidate
+  with every earlier non-duplicate, which is quadratic in a pool that grows
+  with `limit`, and large result pages should show similar items anyway.
 - SDK: `search(scene="all")` searches chat, working and coding at the same time
   and merges them with Reciprocal Rank Fusion (k=60) over each scene's own
   ranking, so no scene is crowded out by the other scenes' score scales. Each
