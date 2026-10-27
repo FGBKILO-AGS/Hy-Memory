@@ -15,7 +15,11 @@ import pytest
 from hy_memory.config import MemoryConfig
 from hy_memory.models.memory import MemoryLayer, MemoryNode, MemoryStatus
 from hy_memory.pipelines import reader_base
-from hy_memory.pipelines._retrieval.diversity import MMR_MAX_TOP_K, mmr_applies
+from hy_memory.pipelines._retrieval.diversity import (
+    MMR_MAX_TOP_K,
+    mmr_applies,
+    near_dup_applies,
+)
 from hy_memory.pipelines.base import ReadRequest
 
 DIMS = 32
@@ -124,6 +128,53 @@ def test_mmr_skipped_when_limit_reaches_threshold(config, mmr_spy):
 
     asyncio.run(_run())
     assert mmr_spy == []
+
+
+@pytest.fixture
+def near_dup_spy(monkeypatch):
+    calls = []
+    real = reader_base.near_dup_demote
+
+    def _spy(hits, **kw):
+        calls.append(len(hits))
+        return real(hits, **kw)
+
+    monkeypatch.setattr(reader_base, "near_dup_demote", _spy)
+    return calls
+
+
+def test_near_dup_shares_the_mmr_threshold():
+    # Pairwise Jaccard against every kept candidate: quadratic in the pool,
+    # which grows with limit. Same gate as MMR.
+    assert near_dup_applies(MMR_MAX_TOP_K - 1)
+    assert not near_dup_applies(MMR_MAX_TOP_K)
+
+
+def test_near_dup_runs_when_limit_below_threshold(config, near_dup_spy):
+    async def _run():
+        reader, store = await _reader_with(config, 12)
+        try:
+            resp = await reader.read(_request(5))
+            assert resp.extra["config"]["near_dup_applied"] is True
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+    assert len(near_dup_spy) == 1
+
+
+def test_near_dup_skipped_when_limit_reaches_threshold(config, near_dup_spy):
+    async def _run():
+        reader, store = await _reader_with(config, MMR_MAX_TOP_K + 6)
+        try:
+            resp = await reader.read(_request(MMR_MAX_TOP_K))
+            assert resp.success
+            assert resp.extra["config"]["near_dup_applied"] is False
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+    assert near_dup_spy == []
 
 
 class _FakeReranker:
