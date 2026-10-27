@@ -13,8 +13,16 @@ export function LanguageSelector({ compact = false }: { compact?: boolean }) {
         compact ? "r6-language-selector--compact" : "r6-language-setting"
       }
     >
-      {!compact && <h2 id={`${id}-title`}>{t("languageTitle")}</h2>}
-      <div className={compact ? "r6-language-selector-row" : "r6-setting-row"}>
+      {!compact && (
+        <h2 id={`${id}-title`} className="r6-language-setting-title">
+          {t("languageTitle")}
+        </h2>
+      )}
+      <div
+        className={
+          compact ? "r6-language-selector-row" : "r6-language-setting-row"
+        }
+      >
         <label id={`${id}-label`} htmlFor={`${id}-select`} hidden={compact}>
           {t(compact ? "languageTitle" : "languageLabel")}
         </label>
@@ -36,18 +44,25 @@ export function LanguageSelector({ compact = false }: { compact?: boolean }) {
           }}
         >
           <option value="system">{t("languageSystem")}</option>
-          <option value="zh-CN" lang={compact ? "zh-CN" : undefined}>
+          <option value="zh-CN" lang="zh-CN">
             {compact ? "简体中文" : t("languageChinese")}
           </option>
-          <option value="en" lang={compact ? "en" : undefined}>
+          <option value="en" lang="en">
             {compact ? "English" : t("languageEnglish")}
           </option>
-          <option value="es" lang={compact ? "es" : undefined}>
+          <option value="es" lang="es">
             {compact ? "Español" : t("languageSpanish")}
           </option>
         </select>
       </div>
-      {!compact && <p id={`${id}-description`}>{t("languageDescription")}</p>}
+      {!compact && (
+        <p
+          id={`${id}-description`}
+          className="r6-language-setting-description"
+        >
+          {t("languageDescription")}
+        </p>
+      )}
       {error && (
         <p role="alert" className="r6-settings-error">
           {t(error)}
