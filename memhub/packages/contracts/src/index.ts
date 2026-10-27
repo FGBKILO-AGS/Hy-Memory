@@ -480,6 +480,14 @@ export interface MemoryLibraryPage {
   /** Set on a search whose relevance window was full: matches were looked for
    * only among this many most relevant memories, so `total` may undercount. */
   search_window?: number | null;
+  /** SDK keyword search: the server-side result window to page with. */
+  window_id?: string | null;
+  /** SDK keyword search: the window passed in had expired, so this is page 1
+   * of a fresh search. */
+  window_reset?: boolean;
+  /** SDK pages: which scene each returned memory is from, and the namespace
+   * to name when opening, editing or deleting it. */
+  sdk_memory_refs?: Record<string, SdkMemoryRef>;
 }
 
 export interface MemoryLibraryQuery {
@@ -533,6 +541,11 @@ export interface MemoryDetail {
   source_id?: string | null;
   sdk_memory_at?: string | null;
   sdk_created_at?: string | null;
+  /** SDK memories: the namespace to name on edit/delete. */
+  sdk_ref?: SdkMemoryRef;
+  /** SDK experiences: the task and solution, edited apart. */
+  sdk_task?: string | null;
+  sdk_solution?: string | null;
   // Null for a memory nobody has rewritten: there is no index to be behind,
   // and the interface should not explain a state the user never caused.
   index_sync: MemoryIndexSync | null;
@@ -545,6 +558,20 @@ export type SdkMemoryStatus =
   | "negated"
   | "conflicted"
   | "archived";
+
+/** Which part of the library a memory lives in. */
+export type SdkMemoryScene = "chat" | "working" | "coding";
+/** What the memory is: a chat memory, a working/coding experience or fact. */
+export type SdkMemoryKind = "chat" | "experience" | "fact";
+/** The productivity namespace of an experience or fact. */
+export type SdkMemoryVariant = "working" | "coding";
+
+/** Enough to address one memory again: get/update/delete pass kind+variant. */
+export interface SdkMemoryRef {
+  scene: SdkMemoryScene;
+  kind: SdkMemoryKind;
+  variant: SdkMemoryVariant | null;
+}
 
 export interface SdkMemoryRecord {
   memory_id: string;
@@ -563,6 +590,16 @@ export interface SdkMemoryRecord {
   source: string | null;
   memory_at: number | null;
   gmt_created: number | null;
+  /** Absent only from pre-2.0.6 Core responses, which were all chat. */
+  scene?: SdkMemoryScene;
+  kind?: SdkMemoryKind;
+  variant?: SdkMemoryVariant | null;
+  /** Experiences: the task and the solution; `content` is both, joined. */
+  task?: string | null;
+  solution?: string | null;
+  /** Epoch seconds. */
+  created_at?: number | null;
+  updated_at?: number | null;
 }
 
 export interface SdkMemoryPage {
@@ -571,6 +608,14 @@ export interface SdkMemoryPage {
   limit: number;
   offset: number;
   search_window?: number | null;
+  /** Keyword search: pass back with the next offset to page the same
+   * results. Null on a plain listing. */
+  window_id?: string | null;
+  /** Keyword search: the window_id sent had expired or did not match, the
+   * search ran again and this page is page 1 (offset 0) of the new window. */
+  window_reset?: boolean;
+  /** Plain listing: memories per scene under the same filters. */
+  totals?: Partial<Record<SdkMemoryScene, number>> | null;
 }
 
 export interface SdkUserProfileResponse {

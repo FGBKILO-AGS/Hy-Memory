@@ -129,6 +129,7 @@
 | `test_intake_dedupe.py` | `contract` | A4-07: hook and scan share one identity, so order cannot duplicate. |
 | `test_internal_preset.py` | `contract` | The optional model preset a configured build carries. |
 | `test_jsonl_snapshot_tail.py` | `contract` | Bounded EOF handling on synthetic files only, never original host history. |
+| `test_library_search_window.py` | `unit` | The library search window store and the unified record/keyword parsing. |
 | `test_live_capture.py` | `integration` | Visible hook text lands in Evidence before the transcript file is flushed. |
 | `test_live_sync.py` | `contract` | 覆盖 live sync preempts a reader batch before it emits work、live sync cuts in front of a running history import、live sync does not resume a history import the user paused 等 24 个场景。 |
 | `test_live_sync_file_incremental.py` | `contract` | 覆盖 unchanged file metadata avoids a job and content read、changed file content is read once by the import job、workbuddy first live poll baselines history then imports only append 等 6 个场景。 |
@@ -156,6 +157,7 @@
 | `test_memory_content_import.py` | `integration` | 覆盖 existing memory preview keeps unknown author and exact original、invalid existing memory records never leave a partial upload、memory content requires explicit mode and rejects vendor guessing 等 5 个场景。 |
 | `test_memory_evidence_freshness.py` | `contract` | 新鲜度拆除后：读路径恒为 current；证据修订 / 畸形 proof / segment ref 不再藏记忆或 503。 |
 | `test_memory_freshness_integration_review.py` | `integration` | Independent synthetic read-path review; no lifespan, model or user database. |
+| `test_memory_library_all_scenes.py` | `integration` | The v2 memory library across chat, working and coding memories. |
 | `test_memory_notes.py` | `integration` | 覆盖 empty library can save a note without a matter or configured model、note requires authentication explicit scope and nonempty content、saved note evidence returns raw and consent reference from same record 等 6 个场景。 |
 | `test_memory_qa.py` | `contract` | 覆盖 search terms keep meaningful single chinese character、streamed answer emits recall then incremental grounded text、governance change during generation stops the old answer 等 14 个场景。 |
 | `test_memory_qa_api.py` | `integration` | 覆盖 ask stream endpoint emits recall deltas and final、ask stream endpoint requires the local token 场景。 |
@@ -304,4 +306,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 299 个测试文件。
+共 301 个测试文件。

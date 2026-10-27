@@ -1680,6 +1680,8 @@ const baseEnglishMessages = {
   "memory:重试": "Retry",
   "memory:删除": "Delete",
   "memory:对话": "Conversation",
+  "memory:工作": "Work",
+  "memory:编码": "Coding",
   "memory:保存修改": "Save changes",
   "memory:对应记忆": "Related memory",
   "memory:查看记忆": "View memories",

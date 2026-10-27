@@ -697,6 +697,66 @@ describe("CLI-21 memory reads", () => {
     expect(report.memories[1].content.length).toBeLessThan(400);
   });
 
+  it("lists working and coding memories with their scene and kind", async () => {
+    transport.get.mockResolvedValue({
+      status: 200,
+      data: {
+        total: 2,
+        offset: 0,
+        limit: 20,
+        totals: { chat: 1, working: 1, coding: 0 },
+        window_id: null,
+        window_reset: false,
+        memories: [
+          memory("m1", "对话记忆"),
+          {
+            ...memory("e1", "修复测试\n固定随机种子"),
+            layer: "experience",
+            agent_id: "",
+            owner: null,
+            source_raw_ids: [],
+            scene: "working",
+            kind: "experience",
+            variant: "working",
+            task: "修复测试",
+            solution: "固定随机种子",
+            created_at: 1_790_000_000,
+            updated_at: 1_790_000_100,
+          },
+        ],
+      },
+    });
+    const streams = captureStreams();
+    try {
+      expect(await run(["memories", "list", "--json"], {})).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    const report = JSON.parse(streams.stdout());
+    expect(report.page).toMatchObject({ state: "ok", total: 2, returned: 2 });
+    expect(report.memories[0]).toMatchObject({
+      memory_id: "m1",
+      scene: "chat",
+      kind: "chat",
+      variant: null,
+    });
+    expect(report.memories[1]).toMatchObject({
+      memory_id: "e1",
+      scene: "working",
+      kind: "experience",
+      variant: "working",
+      layer: "experience",
+    });
+
+    const text = captureStreams();
+    try {
+      expect(await run(["memories", "list"], {})).toBe(0);
+    } finally {
+      text.restore();
+    }
+    expect(text.stdout()).toContain("- e1  [working] active/experience");
+  });
+
   it("passes the requested filters through as query parameters", async () => {
     await run(
       [

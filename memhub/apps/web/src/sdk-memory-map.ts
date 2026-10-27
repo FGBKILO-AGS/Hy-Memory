@@ -5,9 +5,45 @@ import type {
   MemoryLibraryPage,
   SdkMemoryPage,
   SdkMemoryRecord,
+  SdkMemoryRef,
 } from "@one-memory/contracts";
 
-function kindOf(layer: string): MemoryKind {
+/** The SDK memory panel's page size (the API still accepts 1..500). */
+export const SDK_MEMORY_PAGE_SIZE = 20;
+
+/** Scene, kind and namespace of an SDK memory. Records from a Core before
+ * the all-scene library carry none of these and were all chat. */
+export function sdkMemoryRef(record: SdkMemoryRecord): SdkMemoryRef {
+  const kind = record.kind ?? "chat";
+  if (kind === "chat") return { scene: "chat", kind, variant: null };
+  const variant =
+    record.variant ?? (record.scene === "coding" ? "coding" : "working");
+  return { scene: variant, kind, variant };
+}
+
+/** What get/update/delete name for a memory: nothing for chat, so a chat
+ * memory is addressed exactly as before; kind+variant for the rest. */
+export function sdkNamespace(
+  ref: SdkMemoryRef | undefined,
+):
+  | { kind: SdkMemoryRef["kind"]; variant: SdkMemoryRef["variant"] }
+  | undefined {
+  return ref && ref.kind !== "chat"
+    ? { kind: ref.kind, variant: ref.variant }
+    : undefined;
+}
+
+/** The text an edit replaces: an experience's solution, otherwise content. */
+export function sdkEditableText(record: SdkMemoryRecord): string {
+  return record.kind === "experience" && typeof record.solution === "string"
+    ? record.solution
+    : record.content;
+}
+
+function kindOf(record: SdkMemoryRecord): MemoryKind {
+  const scene = sdkMemoryRef(record).scene;
+  if (scene !== "chat") return scene;
+  const layer = record.layer;
   if (layer === "l6_schema") return "schema";
   if (layer === "l7_intention") return "intention";
   if (layer.startsWith("coding")) return "coding";
@@ -52,11 +88,14 @@ function sourceOf(record: SdkMemoryRecord): string {
  * stay where the design put it instead of sending the reader to another view.
  */
 export function sdkMapMemory(record: SdkMemoryRecord): GovernedMemory {
-  const created = stamp(record.gmt_created ?? record.memory_at);
+  const created = stamp(
+    record.gmt_created ?? record.created_at ?? record.memory_at,
+  );
+  const updated = stamp(record.updated_at) || created;
   return {
     memory_id: record.memory_id,
     user_id: record.user_id,
-    kind: kindOf(record.layer),
+    kind: kindOf(record),
     status:
       record.status === "active"
         ? "confirmed"
@@ -75,7 +114,7 @@ export function sdkMapMemory(record: SdkMemoryRecord): GovernedMemory {
     // renders this placeholder.
     revision: 0,
     created_at: created,
-    updated_at: created,
+    updated_at: updated,
     deleted_at: null,
   };
 }
@@ -96,7 +135,11 @@ export function sdkDetail(record: SdkMemoryRecord): MemoryDetail {
     sdk_status: record.status,
     source_id: sourceOf(record),
     sdk_memory_at: stamp(plausible(record.memory_at)) || null,
-    sdk_created_at: stamp(record.gmt_created) || null,
+    sdk_created_at: stamp(record.gmt_created ?? record.created_at) || null,
+    sdk_ref: sdkMemoryRef(record),
+    sdk_task: record.kind === "experience" ? (record.task ?? null) : null,
+    sdk_solution:
+      record.kind === "experience" ? (record.solution ?? null) : null,
   };
 }
 
@@ -114,8 +157,13 @@ export function sdkLibraryPage(page: SdkMemoryPage): MemoryLibraryPage {
     { at: string; basis: "conversation" | "import" }
   > = {};
   const sourceIds: Record<string, string[]> = {};
+  const refs: Record<string, SdkMemoryRef> = {};
   for (const record of page.memories) {
     sourceIds[record.memory_id] = [sourceOf(record)];
+    refs[record.memory_id] = sdkMemoryRef(record);
+    // An experience or fact has no conversation time; the list shows when it
+    // was last updated instead of calling its creation an import.
+    if (refs[record.memory_id].kind !== "chat") continue;
     const conversation = plausible(record.memory_at);
     const at = conversation ?? plausible(record.gmt_created);
     if (at === null) continue;
@@ -132,5 +180,8 @@ export function sdkLibraryPage(page: SdkMemoryPage): MemoryLibraryPage {
     source_ids_by_memory: sourceIds,
     source_time_by_memory: sourceTime,
     search_window: page.search_window ?? null,
+    window_id: page.window_id ?? null,
+    window_reset: page.window_reset ?? false,
+    sdk_memory_refs: refs,
   };
 }

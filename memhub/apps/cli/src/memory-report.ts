@@ -152,7 +152,7 @@ export function renderMemoryPageText(document: MemoryPageDocument): string {
   ];
   for (const memory of document.memories) {
     lines.push(
-      `- ${memory.memory_id}  ${memory.status}/${memory.layer}  source=${memory.source ?? "未知"}`,
+      `- ${memory.memory_id}  [${memory.scene}] ${memory.status}/${memory.layer}  source=${memory.source ?? "未知"}`,
       `  ${memory.content}${memory.content_truncated ? ` …（共 ${memory.content_characters} 字）` : ""}`,
     );
   }
@@ -171,6 +171,7 @@ export function renderMemoryDetailText(document: MemoryDetailDocument): string {
   }
   const lines = [
     `记忆 ${memory.memory_id}`,
+    `场景：${memory.scene}  类型：${memory.kind}${memory.variant ? `（${memory.variant}）` : ""}`,
     `状态：${memory.status}  层：${memory.layer}  来源：${memory.source ?? "未知"}`,
     `owner：${memory.owner ?? "未知"}  latest：${memory.is_latest}`,
     `raw IDs：${(memory.source_raw_ids as string[]).join(",") || "无"}`,
@@ -188,6 +189,10 @@ function describeMemory(memory: SdkMemoryRecord): Record<string, unknown> {
   const budgeted = budget(memory.content ?? "");
   return {
     memory_id: memory.memory_id,
+    // Pre-2.0.6 Core listed chat memories only and named no scene.
+    scene: memory.scene ?? "chat",
+    kind: memory.kind ?? "chat",
+    variant: memory.variant ?? null,
     status: memory.status,
     layer: memory.layer,
     is_latest: memory.is_latest,
@@ -231,8 +236,9 @@ function sdkMemory(value: unknown): SdkMemoryRecord | null {
     !strings(value.superseded_by) ||
     !strings(value.tags) ||
     !strings(value.source_raw_ids) ||
-    !text(value.user_id) ||
-    !text(value.agent_id)
+    // Working/coding memories may carry an empty user or agent id.
+    typeof value.user_id !== "string" ||
+    typeof value.agent_id !== "string"
   )
     return null;
   return value as unknown as SdkMemoryRecord;

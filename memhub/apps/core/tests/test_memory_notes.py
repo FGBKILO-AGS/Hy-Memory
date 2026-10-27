@@ -313,6 +313,16 @@ def test_sdk_memory_library_uses_sdk_search_and_skips_empty_rows_without_mutatio
                 include_sources = kwargs.get("include_sources") or []
                 if include_sources:
                     rows = [row for row in rows if row["source"] in include_sources]
+                if kwargs.get("scene") == "all":
+                    return {
+                        "scene": "all",
+                        "memories": [{**row, "scene": "chat", "kind": "chat"} for row in rows],
+                        "total": len(rows),
+                        "totals": {"chat": len(rows), "working": 0, "coding": 0},
+                        "errors": {},
+                        "limit": kwargs["limit"],
+                        "offset": kwargs["offset"],
+                    }
                 return {
                     "vdb": {
                         "memories": rows,
@@ -325,25 +335,28 @@ def test_sdk_memory_library_uses_sdk_search_and_skips_empty_rows_without_mutatio
             def search(self, query, **kwargs):
                 search_calls.append((query, kwargs))
                 return {
-                    "memories": {
-                        "schema": [],
-                        "proactive": [],
-                        "normal": [
-                            {
-                                "memory_id": "release",
-                                "content": "Release plan",
-                                "score": 0.9,
-                            },
-                            {
-                                "memory_id": "retired",
-                                "content": "Release plan, first draft",
-                                "score": 0.8,
-                            },
-                        ],
-                    }
+                    "scene": "all",
+                    "memories": [
+                        {
+                            "memory_id": "release",
+                            "content": "Release plan",
+                            "score": 0.9,
+                            "scene": "chat",
+                            "kind": "chat",
+                        },
+                        {
+                            "memory_id": "retired",
+                            "content": "Release plan, first draft",
+                            "score": 0.8,
+                            "scene": "chat",
+                            "kind": "chat",
+                        },
+                    ],
+                    "lanes": {"chat": 2, "working": 0, "coding": 0},
+                    "errors": {},
                 }
 
-            def get(self, memory_id):
+            def get(self, memory_id, **_namespace):
                 return records.get(memory_id)
 
             def delete(self, memory_id):
@@ -375,7 +388,9 @@ def test_sdk_memory_library_uses_sdk_search_and_skips_empty_rows_without_mutatio
                 assert [item["memory_id"] for item in body["memories"]] == ["release"]
                 assert search_calls[0][0] == "release"
                 assert search_calls[0][1]["include_sources"] == ["cursor"]
-                assert search_calls[0][1]["limit"] == 20
+                assert search_calls[0][1]["limit"] == 200
+                assert search_calls[0][1]["scene"] == "all"
+                assert search_calls[0][1]["rerank"] is False
                 assert search_calls[0][1]["intention_limit"] == 0
                 assert search_calls[0][1]["min_score"] == 0.0
                 assert list_calls == []
@@ -397,6 +412,7 @@ def test_sdk_memory_library_uses_sdk_search_and_skips_empty_rows_without_mutatio
                 assert listed.json()["total"] == 1
                 assert deleted == []
                 assert list_calls[0]["limit"] == 100
+                assert list_calls[0]["scene"] == "all"
                 assert "sdk_memory_invalid_rows_skipped count=1" in caplog.messages
 
                 graph = await client.get("/api/v2/memories/graph")

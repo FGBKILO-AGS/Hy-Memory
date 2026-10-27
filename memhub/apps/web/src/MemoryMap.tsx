@@ -7,6 +7,7 @@ import type {
   MemoryLibraryPage,
   MemoryProcessingSummary,
   SdkAskMemory,
+  SdkMemoryScene,
   SourceResponse,
 } from "@one-memory/contracts";
 import type { GuiLocale } from "@one-memory/i18n";
@@ -150,6 +151,13 @@ function sourceStamp(
     );
   return dayStamp(fallback, locale);
 }
+
+/** The list's type badge for an SDK memory's scene. */
+const SCENE_LABELS: Record<SdkMemoryScene, string> = {
+  chat: "对话",
+  working: "工作",
+  coding: "编码",
+};
 
 export function MemoryMap(props: Props) {
   const { locale, text, count, plain } = useMemoryLanguage();
@@ -787,6 +795,18 @@ export function MemoryMap(props: Props) {
               >
                 <span className={`map-state ${m.status}`} aria-hidden="true" />
                 <span className="map-memory-content">{m.content}</span>
+                {library?.page?.sdk_memory_refs?.[m.memory_id] ? (
+                  <span
+                    className="map-memory-scene"
+                    data-scene={library.page.sdk_memory_refs[m.memory_id].scene}
+                  >
+                    {text(
+                      SCENE_LABELS[
+                        library.page.sdk_memory_refs[m.memory_id].scene
+                      ],
+                    )}
+                  </span>
+                ) : null}
                 {m.tags.length ? (
                   <span className="map-memory-tags wb-tags">
                     {m.tags.map((tag) => (
@@ -894,8 +914,7 @@ export function MemoryMap(props: Props) {
                 aria-label={text("下一页记忆")}
                 title={text("下一页记忆")}
                 disabled={
-                  library.page.offset + library.page.items.length >=
-                  library.page.total
+                  library.page.offset + library.page.limit >= library.page.total
                 }
                 onClick={() => {
                   clear();
