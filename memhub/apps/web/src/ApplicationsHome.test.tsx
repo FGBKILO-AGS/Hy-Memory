@@ -199,7 +199,7 @@ it("localizes failure and empty states without leaking errors", async () => {
   ).toBeTruthy();
   expect(document.body.textContent).not.toContain("synthetic_private_error");
 });
-it("shows latest recorded call separately from newly generated memory and opens its history", async () => {
+it("shows latest recorded call separately without exposing recent-update detail entries", async () => {
   history.mockResolvedValue({
     available: true,
     recording_error: false,
@@ -233,12 +233,11 @@ it("shows latest recorded call separately from newly generated memory and opens 
   await screen.findByText("Codex 查到 3 条相关内容");
   expect(document.querySelector(".r6-home-call-direction")).toBeTruthy();
   expect(screen.queryByText("实际治理记忆")).toBeNull();
-  expect(screen.getByText(/今天 .+ · 查询成功/)).toBeTruthy();
+  expect(screen.getByText(/Codex · 今天 .+ · 查询成功/)).toBeTruthy();
   fireEvent.click(screen.getByRole("tab", { name: "最近更新" }));
   expect(screen.getByText("实际治理记忆")).toBeTruthy();
-  const memoryActions = screen.getAllByRole("button", { name: "查看记忆" });
-  fireEvent.click(memoryActions[memoryActions.length - 1]);
-  expect(onMemories).toHaveBeenCalledWith("m1");
+  expect(screen.queryByRole("button", { name: "查看记忆" })).toBeNull();
+  expect(onMemories).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("tab", { name: "最近调用" }));
   expect(history).toHaveBeenCalledWith({ limit: 20, offset: 0 });
   if (CALL_HISTORY_ENTRY_VISIBLE) {
@@ -247,10 +246,55 @@ it("shows latest recorded call separately from newly generated memory and opens 
   } else {
     // D96: the recent call still shows on the home page; only the way into
     // the call-history page is hidden.
-    expect(screen.getByText(/今天 .+ · 查询成功/)).toBeTruthy();
+    expect(screen.getByText(/Codex · 今天 .+ · 查询成功/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "查看记录" })).toBeNull();
     expect(onCalls).not.toHaveBeenCalled();
   }
+});
+it("skips direct diagnostics and shows the latest attributed application call", async () => {
+  history.mockResolvedValue({
+    available: true,
+    recording_error: false,
+    items: [
+      {
+        event_id: "direct-diagnostic",
+        host_id: null,
+        state: "grounded",
+        occurred_at: new Date().toISOString(),
+        memory_count: 1,
+        raw_count: 0,
+        references: [],
+      },
+      {
+        event_id: "workbuddy-call",
+        host_id: "workbuddy",
+        state: "grounded",
+        occurred_at: new Date(Date.now() - 60_000).toISOString(),
+        memory_count: 5,
+        raw_count: 0,
+        references: [],
+      },
+    ],
+  });
+  render(
+    <ApplicationsHome
+      imports={imports}
+      onManage={() => {}}
+      onMemories={() => {}}
+      onSettings={() => {}}
+      onCalls={() => {}}
+    />,
+  );
+
+  fireEvent.click(await screen.findByRole("tab", { name: "最近调用" }));
+  expect(await screen.findByText("WorkBuddy 查到 5 条相关内容")).toBeTruthy();
+  expect(screen.queryByText(/直接调用/)).toBeNull();
+  expect(screen.getByText(/WorkBuddy · 今天 .+ · 查询成功/)).toBeTruthy();
+  const direction = document.querySelector(".r6-home-call-direction");
+  expect(direction?.querySelector("img")?.getAttribute("src")).toContain(
+    "/r6/workbuddy.png",
+  );
+  expect(direction?.querySelector(".r6-app-initial")).toBeNull();
 });
 it("shows only the host for memory hits whose references have no source", async () => {
   history.mockResolvedValue({
@@ -834,9 +878,37 @@ it.each([null, "", "not-a-date"])(
       />,
     );
     await screen.findByText("实际治理记忆");
-    expect(screen.getByText(/时间未知.*版本 2/)).toBeTruthy();
+    expect(screen.getByText("时间未知 · App 0")).toBeTruthy();
   },
 );
+
+it("shows only time and source for an SDK recent update", async () => {
+  summary.mockResolvedValue({
+    memory_count: 1,
+    latest: {
+      memory_id: "sdk-memory-1",
+      content: "SDK 原生记忆",
+      layer: "l2_fact",
+      source: "app-0",
+      gmt_created: 1_761_000_000,
+    },
+    observed_at: "2026-09-20T09:00:00Z",
+  });
+
+  render(
+    <ApplicationsHome
+      imports={imports}
+      onManage={() => {}}
+      onMemories={() => {}}
+      onSettings={() => {}}
+    />,
+  );
+
+  await screen.findByText("SDK 原生记忆");
+  expect(screen.getByText(/^\d{2}:\d{2} · App 0$/)).toBeTruthy();
+  expect(document.body.textContent).not.toContain("SDK l2_fact");
+  expect(screen.queryByRole("button", { name: "查看记忆" })).toBeNull();
+});
 
 it("does not treat an available adapter as an installed application", async () => {
   render(

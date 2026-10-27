@@ -26,7 +26,7 @@ it("opens a Spanish composer without saving, processing or enabling anything", a
     screen.getByRole("textbox", { name: "¿Qué quieres recordar?" }),
   ).toBeTruthy();
   expect(
-    (screen.getByRole("button", { name: "Guardar texto" }) as HTMLButtonElement)
+    (screen.getByRole("button", { name: "Guardar" }) as HTMLButtonElement)
       .disabled,
   ).toBe(true);
   await userEvent.click(
@@ -165,12 +165,12 @@ it("saves from an empty library with the linked-app scope by default", async () 
   expect(document.activeElement).toBe(input);
   await userEvent.type(input, note.text);
   expect(
-    screen.getByRole("button", { name: "保存原话" }).hasAttribute("disabled"),
+    screen.getByRole("button", { name: "保存" }).hasAttribute("disabled"),
   ).toBe(false);
   expect(
     screen.queryByRole("checkbox", { name: /允许已关联应用读取/ }),
   ).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: "保存原话" }));
+  await userEvent.click(screen.getByRole("button", { name: "保存" }));
   await waitFor(() =>
     expect(api.saveMemoryNote).toHaveBeenCalledWith(
       {
@@ -208,7 +208,7 @@ it("preserves draft and request identity after an uncertain save", async () => {
   page();
   await userEvent.click(screen.getByRole("button", { name: "添加记忆" }));
   await userEvent.type(screen.getByRole("textbox"), note.text);
-  await userEvent.click(screen.getByRole("button", { name: "保存原话" }));
+  await userEvent.click(screen.getByRole("button", { name: "保存" }));
   expect(await screen.findByRole("alert")).toBeTruthy();
   expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(
     note.text,
@@ -219,7 +219,7 @@ it("preserves draft and request identity after an uncertain save", async () => {
   expect(result?.status).toBe("unknown");
   expect(result?.reason).toBe("save_result_unconfirmed");
   expect(result?.status).not.toBe("failed");
-  await userEvent.click(screen.getByRole("button", { name: "保存原话" }));
+  await userEvent.click(screen.getByRole("button", { name: "保存" }));
   expect(api.saveMemoryNote.mock.calls[0][0].request_id).toBe(
     api.saveMemoryNote.mock.calls[1][0].request_id,
   );
@@ -235,7 +235,7 @@ it("closes as saved when the POST response is lost but the operation exists", as
   const callbacks = page();
   await userEvent.click(screen.getByRole("button", { name: "添加记忆" }));
   await userEvent.type(screen.getByRole("textbox"), note.text);
-  await userEvent.click(screen.getByRole("button", { name: "保存原话" }));
+  await userEvent.click(screen.getByRole("button", { name: "保存" }));
   await waitFor(() =>
     expect(api.getMemoryNoteOperation).toHaveBeenCalledOnce(),
   );
@@ -292,7 +292,7 @@ it("does not ask for separate consent when an old note is waiting for permission
   page();
   await userEvent.click(screen.getByRole("button", { name: "添加记忆" }));
 
-  expect(await screen.findByText("原话已保存，等待整理")).toBeTruthy();
+  expect(await screen.findByText("正在等待整理")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "模型授权" })).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "重新整理" }));
   expect(api.processMemoryNote).toHaveBeenCalledExactlyOnceWith(

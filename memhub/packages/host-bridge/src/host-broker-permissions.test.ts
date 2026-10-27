@@ -22,11 +22,9 @@ import axios from "axios";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  askThroughBroker,
   type BrokerClientOptions,
   readHostCredentialFile,
   recallThroughBroker,
-  searchConversationsThroughBroker,
 } from "./broker-client.js";
 import { HostGrantStore, type HostReadTool } from "./host-grants.js";
 import { RecallBroker } from "./recall-broker.js";
@@ -36,17 +34,15 @@ const closers: Array<() => Promise<void>> = [];
 const workspace = `workspace:v1:${"a".repeat(64)}`;
 const otherWorkspace = `workspace:v1:${"b".repeat(64)}`;
 const coreToken = "isolated-core-only-token";
-const endpoints = ["recall", "ask", "conversations"] as const;
+// MemHub_ask and MemHub_conversations are gone; recall is the one
+// grant-governed read route left on this transport besides /context.
+const endpoints = ["recall"] as const;
 type Endpoint = (typeof endpoints)[number];
 const tools: Record<Endpoint, HostReadTool> = {
   recall: "om_recall",
-  ask: "om_ask",
-  conversations: "om_conversations",
 };
 const paths: Record<Endpoint, string> = {
   recall: "/api/v1/recall",
-  ask: "/api/v2/memories/ask",
-  conversations: "/api/v2/context/search",
 };
 interface CoreCall {
   url: string | undefined;
@@ -62,8 +58,8 @@ afterEach(async () => {
   );
 });
 
-function body(endpoint: Endpoint): Record<string, unknown> {
-  return endpoint === "ask" ? { question: "fixture" } : { query: "fixture" };
+function body(_endpoint: Endpoint): Record<string, unknown> {
+  return { query: "fixture" };
 }
 
 function deferred() {
@@ -76,15 +72,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function corePayload(url: string | undefined): unknown {
-  if (url === paths.ask)
-    return {
-      schema_version: 2,
-      answer: "fixture-answer",
-      memories: [],
-      mode: "empty",
-    };
-  if (url === paths.conversations) return sdkContext("fixture-request");
+function corePayload(_url: string | undefined): unknown {
   return {
     state: "grounded",
     query: "fixture",
@@ -95,22 +83,7 @@ function corePayload(url: string | undefined): unknown {
   };
 }
 
-function sdkContext(requestId: string) {
-  return {
-    schema_version: 2,
-    request_id: requestId,
-    state: "empty",
-    items: [],
-    used_characters: 0,
-    truncated: false,
-    total_ms: 1,
-  };
-}
-
-function markedPayload(url: string | undefined, marker: string): unknown {
-  if (url === paths.ask)
-    return { schema_version: 2, answer: marker, memories: [], mode: "empty" };
-  if (url === paths.conversations) return sdkContext(marker);
+function markedPayload(_url: string | undefined, marker: string): unknown {
   return { content: marker };
 }
 
@@ -214,14 +187,6 @@ function clientCall(
   switch (endpoint) {
     case "recall":
       return recallThroughBroker(discoveryPath, { query: "fixture" }, options);
-    case "ask":
-      return askThroughBroker(discoveryPath, { question: "fixture" }, options);
-    case "conversations":
-      return searchConversationsThroughBroker(
-        discoveryPath,
-        { query: "fixture" },
-        options,
-      );
   }
 }
 
@@ -399,7 +364,7 @@ describe.skipIf(process.platform === "win32")(
       expect(context.calls).toHaveLength(2);
     });
 
-    it.each(["recall", "ask"] as const)(
+    it.each(endpoints)(
       "denies invalid %s scopes and forwards only approved grants for workspace expansion",
       async (endpoint) => {
         const context = await fixture({ allowedScopes: [workspace] });
@@ -433,13 +398,27 @@ describe.skipIf(process.platform === "win32")(
       },
     );
 
-    it.each(["conversations"] as const)(
-      "requires an explicit all-apps grant for default %s without granting raw content itself",
-      async (endpoint) => {
-        const context = await fixture({ allowedScopes: [workspace] });
-        expect(
-          (await context.post(endpoint, context.issued.secret)).status,
-        ).toBe(403);
+    it.each([
+      ["POST", "/ask"],
+      ["POST", "/conversations"],
+      ["POST", "/memory-writes"],
+      ["GET", "/memory-writes/req-1"],
+    ] as const)(
+      "no longer serves the removed %s %s route",
+      async (method, route) => {
+        const context = await fixture();
+        const response = await axios.request({
+          method,
+          url: `${context.baseUrl}${route}`,
+          data: method === "POST" ? { query: "fixture" } : undefined,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${context.issued.secret}`,
+          },
+          proxy: false,
+          validateStatus: () => true,
+        });
+        expect(response.status).toBe(404);
         expect(context.calls).toHaveLength(0);
       },
     );
@@ -496,7 +475,7 @@ describe.skipIf(process.platform === "win32")(
             response.end(JSON.stringify(markedPayload(call.url, "old-result")));
           },
         });
-        const pending = context.post("ask", context.issued.secret);
+        const pending = context.post("recall", context.issued.secret);
         try {
           await entered.promise;
           const input = {

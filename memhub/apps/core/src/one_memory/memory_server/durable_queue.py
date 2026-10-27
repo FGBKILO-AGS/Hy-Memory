@@ -316,6 +316,12 @@ LEGACY_MEMORY_WRITE_JOB_COLUMNS = (
 
 _FIFO_BLOCKING_STATES = (PENDING, RUNNING, WAITING_FOR_PERMISSION, WAITING_FOR_MODEL)
 EVENT_TIME_WINDOW = timedelta(minutes=10)
+#: Sources whose jobs are a person adding a memory by hand ("添加记忆"), not
+#: history. History is digested strictly old to new through the event-time
+#: window; a note is stamped "now", so inside that window it waited behind the
+#: whole unprocessed history. These jobs are claimed ahead of the window,
+#: still one at a time per source and in order within their session.
+DIRECT_WRITE_SOURCES = frozenset({"one-memory-manual"})
 
 
 @dataclass(frozen=True)
@@ -2601,6 +2607,39 @@ class DurableWriteDrain:
                 placeholders = ",".join("?" for _ in enabled_sources)
                 source_clause = f"AND candidate.source_key IN ({placeholders}) "
                 source_params = tuple(sorted(enabled_sources))
+            direct_sources = ",".join("?" for _ in DIRECT_WRITE_SOURCES)
+            # Same eligibility as the window claim below (free lease, no
+            # running job of its source, nothing earlier in its session), but
+            # not bound to the window: a note must not wait for history.
+            direct_rows = connection.execute(
+                "SELECT candidate.job_id,candidate.source_key "
+                "FROM memory_write_jobs AS candidate "
+                "WHERE candidate.state=? "
+                "AND (candidate.lease_expires_at IS NULL OR candidate.lease_expires_at < ?) "
+                + source_clause
+                + f"AND candidate.source_key IN ({direct_sources}) "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM memory_write_jobs AS held "
+                "WHERE held.source_key=candidate.source_key AND held.state=? "
+                "AND held.lease_owner IS NOT NULL AND held.lease_expires_at>=?) "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM memory_write_jobs AS earlier "
+                "WHERE earlier.session_key=candidate.session_key "
+                f"AND earlier.state IN ({blocking}) "
+                "AND (earlier.event_at<candidate.event_at OR "
+                "(earlier.event_at=candidate.event_at "
+                "AND earlier.queue_seq<candidate.queue_seq))) "
+                "ORDER BY candidate.queue_seq",
+                (
+                    PENDING,
+                    now.isoformat(),
+                    *source_params,
+                    *sorted(DIRECT_WRITE_SOURCES),
+                    RUNNING,
+                    now.isoformat(),
+                    *_FIFO_BLOCKING_STATES,
+                ),
+            ).fetchall()
             window = connection.execute(
                 "SELECT window_anchor,window_end FROM memory_write_schedule_state WHERE singleton=1"
             ).fetchone()
@@ -2654,6 +2693,7 @@ class DurableWriteDrain:
                 if active is None:
                     connection.execute("DELETE FROM memory_write_schedule_state WHERE singleton=1")
                     window = None
+            anchor: Any = None
             if window is None:
                 anchor = connection.execute(
                     "SELECT candidate.event_at "
@@ -2682,8 +2722,10 @@ class DurableWriteDrain:
                         *_FIFO_BLOCKING_STATES,
                     ),
                 ).fetchone()
-                if anchor is None:
+                if anchor is None and not direct_rows:
                     return ()
+            has_window = window is not None or anchor is not None
+            if window is None and anchor is not None:
                 anchor_at = datetime.fromisoformat(str(anchor[0]))
                 if anchor_at.tzinfo is None:
                     anchor_at = anchor_at.replace(tzinfo=UTC)
@@ -2695,39 +2737,41 @@ class DurableWriteDrain:
                     "VALUES (1,?,?,?)",
                     (anchor_text, end_text, now.isoformat()),
                 )
-            rows = connection.execute(
-                "SELECT candidate.job_id,candidate.source_key "
-                "FROM memory_write_jobs AS candidate "
-                "WHERE candidate.state=? "
-                "AND (candidate.lease_expires_at IS NULL OR candidate.lease_expires_at < ?) "
-                + source_clause
-                + "AND candidate.event_at>=? AND candidate.event_at<? "
-                "AND NOT EXISTS ("
-                "SELECT 1 FROM memory_write_jobs AS held "
-                "WHERE held.source_key=candidate.source_key AND held.state=? "
-                "AND held.lease_owner IS NOT NULL AND held.lease_expires_at>=?) "
-                "AND NOT EXISTS ("
-                "SELECT 1 FROM memory_write_jobs AS earlier "
-                "WHERE earlier.session_key=candidate.session_key "
-                f"AND earlier.state IN ({blocking}) "
-                "AND (earlier.event_at<candidate.event_at OR "
-                "(earlier.event_at=candidate.event_at "
-                "AND earlier.queue_seq<candidate.queue_seq))) "
-                "ORDER BY candidate.event_at,candidate.queue_seq",
-                (
-                    PENDING,
-                    now.isoformat(),
-                    *source_params,
-                    anchor_text,
-                    end_text,
-                    RUNNING,
-                    now.isoformat(),
-                    *_FIFO_BLOCKING_STATES,
-                ),
-            ).fetchall()
+            rows: list[Any] = []
+            if has_window:
+                rows = connection.execute(
+                    "SELECT candidate.job_id,candidate.source_key "
+                    "FROM memory_write_jobs AS candidate "
+                    "WHERE candidate.state=? "
+                    "AND (candidate.lease_expires_at IS NULL OR candidate.lease_expires_at < ?) "
+                    + source_clause
+                    + "AND candidate.event_at>=? AND candidate.event_at<? "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM memory_write_jobs AS held "
+                    "WHERE held.source_key=candidate.source_key AND held.state=? "
+                    "AND held.lease_owner IS NOT NULL AND held.lease_expires_at>=?) "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM memory_write_jobs AS earlier "
+                    "WHERE earlier.session_key=candidate.session_key "
+                    f"AND earlier.state IN ({blocking}) "
+                    "AND (earlier.event_at<candidate.event_at OR "
+                    "(earlier.event_at=candidate.event_at "
+                    "AND earlier.queue_seq<candidate.queue_seq))) "
+                    "ORDER BY candidate.event_at,candidate.queue_seq",
+                    (
+                        PENDING,
+                        now.isoformat(),
+                        *source_params,
+                        anchor_text,
+                        end_text,
+                        RUNNING,
+                        now.isoformat(),
+                        *_FIFO_BLOCKING_STATES,
+                    ),
+                ).fetchall()
             selected: list[str] = []
             selected_sources: set[str] = set()
-            for row in rows:
+            for row in (*direct_rows, *rows):
                 source_key = str(row["source_key"])
                 if source_key in selected_sources:
                     continue

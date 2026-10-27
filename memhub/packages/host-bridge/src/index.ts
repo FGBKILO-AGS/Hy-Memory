@@ -1,5 +1,4 @@
 export {
-  askThroughBroker,
   BrokerClientError,
   type BrokerClientErrorCode,
   type BrokerClientOptions,
@@ -10,7 +9,6 @@ export {
   readHostCredentialFile,
   recallThroughBroker,
   reportCallEventDeliveryThroughBroker,
-  searchConversationsThroughBroker,
 } from "./broker-client.js";
 export {
   type CodebuddyPluginTarget,

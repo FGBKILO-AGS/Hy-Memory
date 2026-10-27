@@ -16,8 +16,8 @@ import { isDefiniteRefusal } from "./write-outcome";
 
 const states: Record<MemoryNoteReceipt["state"], string> = {
   waiting_for_model: "原话已保存，等待可用模型",
-  waiting_for_permission: "原话已保存，等待整理",
-  pending: "原话已保存，等待整理",
+  waiting_for_permission: "正在等待整理",
+  pending: "正在等待整理",
   running: "正在整理",
   failed: "原话已保存，整理未完成",
   ready: "整理已完成",
@@ -371,7 +371,7 @@ export function MemoryNoteComposer({
                   </button>
                 )}
                 <button type="submit" disabled={busy || !text.trim()}>
-                  {copy(busy ? "保存中…" : "保存原话")}
+                  {copy(busy ? "保存中…" : "保存")}
                 </button>
               </div>
             </form>

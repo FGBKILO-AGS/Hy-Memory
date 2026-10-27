@@ -11,7 +11,13 @@ from one_memory.imports.access import opaque_workspace_id
 from one_memory.secrets import InMemorySecretStore
 
 
-def test_external_scope_cannot_override_shared_or_host_workspace_boundary(tmp_path):
+def test_external_scope_cannot_override_shared_or_host_workspace_boundary(tmp_path, monkeypatch):
+    # Memory recall, not the raw fallback a home without a model would take.
+    async def model_ready(_app):
+        return True
+
+    monkeypatch.setattr("one_memory.api._recall_model_ready", model_ready)
+
     async def scenario():
         app = create_app(
             Settings(

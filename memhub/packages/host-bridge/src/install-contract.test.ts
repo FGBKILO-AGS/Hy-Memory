@@ -136,6 +136,23 @@ describe("custom Harness pairing Skill", () => {
       "<ABSOLUTE_PRIVATE_CREDENTIAL_FILE_FOR_custom-1234>",
     );
     expect(skill).not.toContain("omhg_v1_");
+    // After pairing, the model learns the three-tool surface from the Skill
+    // too: not every Harness reads the MCP initialize instructions.
+    expect(skill).toContain("## Using MemHub after connecting");
+    for (const tool of [
+      "MemHub_recall",
+      "MemHub_write",
+      "MemHub_diagnostic_trace",
+    ])
+      expect(skill).toContain(`\`${tool}\``);
+    expect(skill).toContain('mode: "raw"');
+    for (const removed of [
+      "MemHub_ask",
+      "MemHub_context",
+      "MemHub_conversations",
+      "MemHub_memory_write",
+    ])
+      expect(skill).not.toContain(removed);
   });
 
   it("treats a user-provided Harness name as display data", () => {

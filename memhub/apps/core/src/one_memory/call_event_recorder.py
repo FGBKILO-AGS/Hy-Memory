@@ -187,8 +187,9 @@ def record_legacy_result(
             host_session_id=None,
             injection_elapsed_ms=None,
             elapsed_ms=elapsed_ms,
-            raw_count=0,
-            memory_count=len(receipt.hits),
+            # A raw-fallback recall returned conversation excerpts, not memories.
+            raw_count=len(receipt.hits) if receipt.mode == "raw" else 0,
+            memory_count=0 if receipt.mode == "raw" else len(receipt.hits),
             references=(),
         )
     )

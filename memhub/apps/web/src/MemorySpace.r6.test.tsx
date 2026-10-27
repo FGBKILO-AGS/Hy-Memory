@@ -25,9 +25,7 @@ it("translates memory filters and detail affordances live without refetching", a
   expect(
     screen.getByRole("textbox", { name: "Filtrar memorias del mapa" }),
   ).toBeTruthy();
-  expect(
-    screen.getByRole("button", { name: "Actualizar memorias" }),
-  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Buscar" })).toBeTruthy();
   const calls = reads.sdkLibrary.mock.calls.length;
   act(() => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
@@ -36,6 +34,7 @@ it("translates memory filters and detail affordances live without refetching", a
     );
   });
   expect(screen.getByRole("heading", { name: "记忆", level: 1 })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "搜索" })).toBeTruthy();
   expect(reads.sdkLibrary).toHaveBeenCalledTimes(calls);
   localStorage.clear();
 });

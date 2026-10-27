@@ -9,10 +9,6 @@ function sessionWith(granted: GrantedTools): McpSession {
     undefined,
     undefined,
     undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
     granted,
   );
 }
@@ -29,7 +25,7 @@ async function listedNames(session: McpSession): Promise<string[]> {
 }
 
 describe("BUG-15: the listed tools follow what the grant allows", () => {
-  it("lists every read tool the grant allows", async () => {
+  it("lists exactly recall, write and diagnostic trace when all are granted", async () => {
     const names = await listedNames(
       sessionWith(async () => [
         "om_recall",
@@ -38,28 +34,23 @@ describe("BUG-15: the listed tools follow what the grant allows", () => {
         "om_diagnostic_trace",
       ]),
     );
-    expect(names).toContain("MemHub_recall");
-    expect(names).toContain("MemHub_ask");
-    expect(names).toContain("MemHub_conversations");
-    expect(names).toContain("MemHub_diagnostic_trace");
+    expect(names).toEqual([
+      "MemHub_recall",
+      "MemHub_write",
+      "MemHub_diagnostic_trace",
+    ]);
   });
 
   it("leaves out read tools the grant does not allow", async () => {
     const names = await listedNames(sessionWith(async () => ["om_recall"]));
-    expect(names).toContain("MemHub_recall");
-    expect(names).not.toContain("MemHub_ask");
-    expect(names).not.toContain("MemHub_conversations");
-    expect(names).not.toContain("MemHub_diagnostic_trace");
+    expect(names).toEqual(["MemHub_recall", "MemHub_write"]);
   });
 
-  it("keeps tools a grant does not govern even when nothing is granted", async () => {
+  it("keeps the write tool even when nothing is granted", async () => {
     const names = await listedNames(sessionWith(async () => []));
-    expect(names).not.toContain("MemHub_recall");
-    // Grants govern read tools only. Hiding the write and context doors
-    // because a read grant is empty would break them for everyone.
-    expect(names).toContain("MemHub_context");
-    expect(names).toContain("MemHub_memory_write");
-    expect(names).toContain("MemHub_memory_write_status");
+    // Grants govern read tools only. Hiding the write door because a read
+    // grant is empty would break it for everyone.
+    expect(names).toEqual(["MemHub_write"]);
   });
 
   it("lists everything when the grant cannot be read", async () => {
@@ -68,14 +59,15 @@ describe("BUG-15: the listed tools follow what the grant allows", () => {
         throw new Error("broker unreachable");
       }),
     );
-    expect(names).toContain("MemHub_recall");
-    expect(names).toContain("MemHub_conversations");
-    expect(names).toContain("MemHub_diagnostic_trace");
+    expect(names).toEqual([
+      "MemHub_recall",
+      "MemHub_write",
+      "MemHub_diagnostic_trace",
+    ]);
   });
 
   it("lists everything when there is no grant to read", async () => {
     const names = await listedNames(sessionWith(async () => null));
-    expect(names).toContain("MemHub_recall");
-    expect(names).toContain("MemHub_conversations");
+    expect(names).toHaveLength(3);
   });
 });

@@ -58,6 +58,40 @@ it.each(["zh-CN", "en", "es"] as const)(
   },
 );
 
+it.each(["system", "zh-CN", "en", "es"] as const)(
+  "keeps one stable settings row for the %s preference",
+  (preference) => {
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, preference);
+    render(
+      <LanguageProvider>
+        <LanguageSelector />
+      </LanguageProvider>,
+    );
+    const selector = screen.getByRole("combobox") as HTMLSelectElement;
+    const row = selector.closest(".r6-language-setting-row");
+    expect(selector.value).toBe(preference);
+    expect(row).toBeTruthy();
+    expect(row?.querySelector("label")?.hidden).toBe(false);
+    expect(
+      screen
+        .getByRole("option", {
+          name: /简体中文|Simplified Chinese|Chino simplificado/,
+        })
+        .getAttribute("lang"),
+    ).toBe("zh-CN");
+    expect(
+      screen
+        .getByRole("option", { name: /英语|English|Inglés/ })
+        .getAttribute("lang"),
+    ).toBe("en");
+    expect(
+      screen
+        .getByRole("option", { name: /西班牙语|Spanish|Español/ })
+        .getAttribute("lang"),
+    ).toBe("es");
+  },
+);
+
 it("offers an accessible selector, persists and updates its label", async () => {
   localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
   render(
