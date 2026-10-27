@@ -83,13 +83,6 @@ function stamped(value: string, locale: GuiLocale, t: Translate, suffix = "") {
   return `${parts.today ? t("apps.today") : ""}${parts.clock}${suffix}`;
 }
 
-function memoryAction(action: string | undefined, t: Translate) {
-  if (action === "create") return t("apps.newMemory");
-  if (action === "correct" || action === "restore")
-    return t("apps.updatedMemory");
-  return t("apps.saved");
-}
-
 type ActivityChoice = "call" | "update";
 
 function sourceMatchesHost(sourceId: string, hostId: string | null) {
@@ -99,6 +92,10 @@ function sourceMatchesHost(sourceId: string, hostId: string | null) {
 
 function successfulCall(item: CallEvent) {
   return item.state === "grounded" || item.state === "empty";
+}
+
+function attributedSuccessfulCall(item: CallEvent) {
+  return item.host_id !== null && successfulCall(item);
 }
 
 function callAttention(events: CallEvent[]) {
@@ -219,7 +216,10 @@ export function ApplicationsHome({
         const result = await getCallHistory({ limit: 20, offset: 0 });
         if (cancelled) return;
         setCallEvents(result.items);
-        setRecentCall(result.items.find(successfulCall) ?? null);
+        // The home card promises an application identity. Direct diagnostic
+        // calls have no host and remain available in call history, but cannot
+        // truthfully supply the icon and name required by this surface.
+        setRecentCall(result.items.find(attributedSuccessfulCall) ?? null);
         setCallState(
           !result.available
             ? "disabled"
@@ -604,6 +604,9 @@ export function ApplicationsHome({
   const recentCallHost = imports.sources.find((source) =>
     sourceMatchesHost(source.source_id, recentCall?.host_id ?? null),
   );
+  const recentCallHostName = recentCall
+    ? (recentCallHost?.display_name ?? callHostName(recentCall.host_id, locale))
+    : null;
   const attention = callAttention(callEvents);
   const attentionHost = attention ? callHostName(attention.host, locale) : null;
   const activity = summaryUnavailable
@@ -665,6 +668,11 @@ export function ApplicationsHome({
         : latest.source
           ? [latest.source]
           : [];
+  const latestSourceNames = latestSourceIds.map(
+    (id) =>
+      imports.sources.find((source) => source.source_id === id)?.display_name ??
+      id,
+  );
   const time = latestClock?.clock ?? (latest ? t("apps.unknownTime") : null);
   const checked = visible ? clockParts(visible.observed_at, locale) : null;
   // A failed read leaves the last health in place on purpose: clearing it would
@@ -936,8 +944,7 @@ export function ApplicationsHome({
                       : activity === "call" && recentCall
                         ? callDetailHeadline(
                             recentCall,
-                            recentCallHost?.display_name ??
-                              callHostName(recentCall.host_id, locale),
+                            recentCallHostName ?? undefined,
                             locale,
                           )
                         : activity === "memory" && latest
@@ -958,19 +965,18 @@ export function ApplicationsHome({
                         ? t("apps.callReadFailure")
                         : t("apps.memoryReadFailure")
                       : activity === "call" && recentCall
-                        ? `${stamped(recentCall.occurred_at, locale, t)} · ${callRowDetail(recentCall, locale)}${callState === "incomplete" ? t("apps.incompleteCalls") : ""}`
+                        ? `${recentCallHostName} · ${stamped(recentCall.occurred_at, locale, t)} · ${callRowDetail(recentCall, locale)}${callState === "incomplete" ? t("apps.incompleteCalls") : ""}`
                         : activity === "memory" && latest
-                          ? "revision" in latest
-                            ? `${time} · ${memoryAction(latest.action, t)} · ${latestSourceIds.map((id) => imports.sources.find((s) => s.source_id === id)?.display_name ?? id).join(", ")} · ${t("apps.revision", { count: new Intl.NumberFormat(locale).format(latest.revision) })}`
-                            : `${time} · SDK ${latest.layer} · ${latestSourceIds.map((id) => imports.sources.find((s) => s.source_id === id)?.display_name ?? id).join("、")}`
+                          ? [time, latestSourceNames.join(", ")]
+                              .filter(Boolean)
+                              .join(" · ")
                           : activity === "importing"
                             ? t("apps.savingConversations")
                             : t("apps.waitingMemories")}
                   </small>
                 </section>
                 {(activity === "unavailable" ||
-                  (activity === "call" && CALL_HISTORY_ENTRY_VISIBLE) ||
-                  activity === "memory") && (
+                  (activity === "call" && CALL_HISTORY_ENTRY_VISIBLE)) && (
                   <button
                     type="button"
                     className="r6-home-activity-link"

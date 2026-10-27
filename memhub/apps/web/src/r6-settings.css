@@ -24,14 +24,31 @@
   border-radius: 16px;
   background: #fff;
 }
-.r6-settings .r6-language-setting h2 {
-  margin: 0 0 12px;
+.r6-language-setting-title {
+  margin: 0 0 18px;
   font-size: 18px;
+  line-height: 28px;
+}
+.r6-settings .r6-language-setting-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  min-height: 44px;
+}
+.r6-settings .r6-language-setting-row label {
+  min-width: 0;
+  font-size: 14px;
+  line-height: 24px;
+  white-space: nowrap;
 }
 .r6-settings .r6-language-setting select {
+  box-sizing: border-box;
+  width: 100%;
   max-width: 100%;
-  min-height: 36px;
-  padding: 6px 10px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 12px;
   border: 1px solid #dce4eb;
   border-radius: 8px;
   color: inherit;
@@ -42,8 +59,11 @@
   outline: 2px solid #225f9d;
   outline-offset: 2px;
 }
-.r6-settings .r6-language-setting > p {
-  margin: 12px 0 0;
+.r6-language-setting-description {
+  margin: 16px 0 0;
+  color: #5e6e7a;
+  font-size: 13px;
+  line-height: 22px;
   overflow-wrap: anywhere;
 }
 .r6-settings .r6-settings-layout {

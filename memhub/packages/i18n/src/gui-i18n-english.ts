@@ -1722,6 +1722,7 @@ const baseEnglishMessages = {
   "memory:原话已保存，等待可用模型":
     "Original saved; waiting for an available model",
   "memory:原话已保存，等待整理": "Original saved; waiting for processing",
+  "memory:正在等待整理": "Awaiting processing",
   "memory:正在整理": "Processing",
   "memory:原话已保存，整理未完成": "Original saved; processing incomplete",
   "memory:整理已完成": "Processing complete",

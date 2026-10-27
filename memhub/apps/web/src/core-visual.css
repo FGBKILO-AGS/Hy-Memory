@@ -772,6 +772,31 @@ button.rail-button.active::before {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.map-pagination {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding: 12px 6px 0;
+  border-top: 1px solid var(--bd);
+  color: var(--tx3);
+  font-size: 12px;
+}
+.map-pagination > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.map-list-status {
+  flex: none;
+  margin: 0;
+  padding: 4px;
+  color: var(--tx3);
+  font-size: 12px;
+  line-height: 20px;
+}
 .map-filter-notice {
   font-size: 12px;
   line-height: 1.65;
