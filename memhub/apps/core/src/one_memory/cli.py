@@ -340,7 +340,13 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
         _write_restore(stream, as_json, document, "预览通过；加 --yes 后执行迁移。")
         return 4
 
-    from one_memory.hy_runtime_config import HY_MEMORY_NAMESPACE, HY_MEMORY_VERSION
+    from one_memory.hy_runtime_config import (
+        HY_MEMORY_NAMESPACE,
+        HY_MEMORY_VERSION,
+        configure_hy_runtime_environment,
+    )
+
+    configure_hy_runtime_environment(settings.data_dir)
     from one_memory.sdk_migration_runner import run_startup_migration
 
     step_names = {
@@ -650,6 +656,7 @@ def serve(*, maintenance: bool = False) -> None:
     from one_memory.diagnostic_log import configure_diagnostics, diagnostic_event
     from one_memory.hy_runtime_config import (
         apply_diagnostic_log_level,
+        configure_hy_runtime_environment,
         diagnostic_log_level,
     )
     from one_memory.log_file import start_logging_to_file
@@ -657,10 +664,15 @@ def serve(*, maintenance: bool = False) -> None:
     from one_memory.runtime import CoreRuntime, parent_pid
 
     settings = load_settings()
-    from one_memory.api import create_app
-
     if not maintenance:
         _refuse_unmigrated_home(settings.data_dir)
+    # HY resolves some trace paths at import time and its pipeline path when
+    # SharedRuntime starts. Bind both to the MemHub root before importing the
+    # application graph; otherwise HY falls back to ~/.hy_memory while the
+    # desktop Debug panel watches the managed data directory.
+    configure_hy_runtime_environment(settings.data_dir)
+    from one_memory.api import create_app
+
     start_logging_to_file(settings.data_dir)
     apply_diagnostic_log_level(diagnostic_log_level(settings.data_dir))
     configure_diagnostics(

@@ -110,11 +110,24 @@ def test_log_level_document_migrates_the_old_boolean_shape(tmp_path: Path) -> No
     assert json.loads(target.read_text()) == {"schema_version": 2, "level": "error"}
 
 
-def test_configure_environment_passes_debug_content_settings_to_sdk(tmp_path: Path) -> None:
+def test_configure_environment_passes_debug_content_settings_to_sdk(
+    tmp_path: Path, monkeypatch
+) -> None:
+    for name in (
+        "MEMORY_DATA_DIR",
+        "MEMORY_LOG_DIR",
+        "MEMORY_LOG_LEVEL",
+        "MEMORY_PIPELINE_TRACE_ENABLED",
+        "MEMORY_LOG_LLM_CONTENT",
+    ):
+        monkeypatch.delenv(name, raising=False)
     set_diagnostic_log_level(tmp_path, "debug")
     configure_hy_runtime_environment(tmp_path)
 
     environment = __import__("os").environ
+    memory_root = tmp_path / "hy-memory" / "governed-v2"
+    assert environment["MEMORY_DATA_DIR"] == str(memory_root)
+    assert environment["MEMORY_LOG_DIR"] == str(memory_root / "logs")
     assert environment["MEMORY_LOG_LEVEL"] == "DEBUG"
     assert environment["MEMORY_PIPELINE_TRACE_ENABLED"] == "true"
     assert environment["MEMORY_LOG_LLM_CONTENT"] == "true"
