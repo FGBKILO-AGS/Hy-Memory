@@ -5,7 +5,7 @@ import {
   type BrokerClientOptions,
   diagnosticTraceThroughBroker,
   grantedToolsThroughBroker,
-  memoryNoteThroughBroker,
+  memoryAddThroughBroker,
   readHostCredentialFile,
   recallThroughBroker,
 } from "./broker-client.js";
@@ -35,7 +35,7 @@ const session = new McpSession(
   }),
   // The broker refuses a write without an authenticated installation.
   (discovery, request) =>
-    memoryNoteThroughBroker(discovery, request, clientOptions),
+    memoryAddThroughBroker(discovery, request, clientOptions),
   (discovery, request) =>
     diagnosticTraceThroughBroker(discovery, request, clientOptions),
   // What the grant allows, so the list a host sees is the list it may use.

@@ -3,7 +3,7 @@ import { lstat, open } from "node:fs/promises";
 import path from "node:path";
 import type {
   ContextSearchRequest,
-  MemoryNoteReceipt,
+  MemoryAddReceipt,
   RecallReceipt,
   RecallRequest,
   SdkContextSearchResponse,
@@ -67,8 +67,8 @@ export type BrokerClientErrorCode =
   | "context_unavailable"
   | "context_cancelled"
   | "context_timeout"
-  | "memory_note_conflict"
-  | "memory_note_invalid"
+  | "memory_add_conflict"
+  | "memory_add_invalid"
   | "broker_request_failed"
   | "broker_unavailable";
 
@@ -83,9 +83,9 @@ const CLIENT_MESSAGES: Record<BrokerClientErrorCode, string> = {
     "MemHub context response is invalid or incompatible.",
   context_unavailable:
     "MemHub is running, but context search is temporarily unavailable.",
-  memory_note_conflict:
+  memory_add_conflict:
     "MemHub already holds a different memory under this request_id. Use a new request_id for new content.",
-  memory_note_invalid: "MemHub rejected this memory as invalid.",
+  memory_add_invalid: "MemHub rejected this memory as invalid.",
   host_credential_unavailable:
     "MemHub host credential is unavailable. Re-link this installation in MemHub.",
   host_authorization_required:
@@ -226,33 +226,33 @@ export async function grantedToolsThroughBroker(
 }
 
 /** Core caps a hand-added memory at 12,000 characters. */
-export const MEMORY_NOTE_TEXT_MAX = 12_000;
+export const MEMORY_ADD_TEXT_MAX = 12_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** What a host sends to write one hand-added memory. Scope is not a field:
- * the broker always files the note as cross-app, as the app's 添加记忆 does. */
-export interface MemoryNoteRequest {
+ * the broker always files the memory as cross-app, as the app's 添加记忆 does. */
+export interface MemoryAddBrokerRequest {
   request_id: string;
   text: string;
 }
 
-export function isMemoryNoteRequestId(value: unknown): value is string {
+export function isMemoryAddRequestId(value: unknown): value is string {
   return typeof value === "string" && UUID.test(value);
 }
 
-export function isMemoryNoteText(value: unknown): value is string {
+export function isMemoryAddText(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length >= 1 &&
-    value.length <= MEMORY_NOTE_TEXT_MAX &&
+    value.length <= MEMORY_ADD_TEXT_MAX &&
     value.trim() !== ""
   );
 }
 
 /** Exactly `{request_id, text}`; anything else is refused, not dropped. */
-export function isMemoryNoteRequest(
+export function isMemoryAddBrokerRequest(
   value: unknown,
-): value is MemoryNoteRequest {
+): value is MemoryAddBrokerRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const body = value as Record<string, unknown>;
   const keys = Object.keys(body);
@@ -260,27 +260,21 @@ export function isMemoryNoteRequest(
     keys.length === 2 &&
     keys.includes("request_id") &&
     keys.includes("text") &&
-    isMemoryNoteRequestId(body.request_id) &&
-    isMemoryNoteText(body.text)
+    isMemoryAddRequestId(body.request_id) &&
+    isMemoryAddText(body.text)
   );
 }
 
-/** Write one hand-added memory through the broker to Core's memory notes.
+/** Write one hand-added memory through the broker to Core's `POST /api/v2/memories`.
  *
  * The same entry the app's 添加记忆 uses. Reusing a request_id returns the
- * original note rather than saving a second one. */
-export async function memoryNoteThroughBroker(
+ * original addition rather than saving a second one. */
+export async function memoryAddThroughBroker(
   discoveryPath: string,
-  request: MemoryNoteRequest,
+  request: MemoryAddBrokerRequest,
   options?: BrokerClientOptions,
-): Promise<MemoryNoteReceipt> {
-  return postThroughBroker(
-    discoveryPath,
-    "memory-notes",
-    request,
-    15_000,
-    options,
-  );
+): Promise<MemoryAddReceipt> {
+  return postThroughBroker(discoveryPath, "memories", request, 15_000, options);
 }
 
 async function brokerBase(
@@ -411,7 +405,7 @@ async function postThroughBroker<T>(
     | "recall"
     | "context"
     | "call-events/delivery"
-    | "memory-notes"
+    | "memories"
     | "diagnostics/trace",
   request: unknown,
   timeout: number,
@@ -447,13 +441,13 @@ async function postThroughBroker<T>(
         throw new BrokerClientError("context_unavailable");
       // A reused request_id with different content is a conflict, not an
       // outage: the caller must pick a new id for new content.
-      if (endpoint === "memory-notes" && error.response?.status === 409)
-        throw new BrokerClientError("memory_note_conflict");
+      if (endpoint === "memories" && error.response?.status === 409)
+        throw new BrokerClientError("memory_add_conflict");
       if (
-        endpoint === "memory-notes" &&
+        endpoint === "memories" &&
         [400, 422].includes(error.response?.status ?? 0)
       )
-        throw new BrokerClientError("memory_note_invalid");
+        throw new BrokerClientError("memory_add_invalid");
       if (error.response?.status === 401)
         throw new BrokerClientError("host_authorization_required");
       if (error.response?.status === 403) {

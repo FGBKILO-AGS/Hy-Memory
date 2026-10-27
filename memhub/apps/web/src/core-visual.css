@@ -523,7 +523,7 @@ button.rail-button.active::before {
   font-size: 12px;
   color: var(--tx3);
 }
-.memory-note-trigger {
+.memory-add-trigger {
   height: 38px;
   border-radius: 10px;
   grid-column: 3;
@@ -1430,12 +1430,12 @@ button.map-related {
   color: var(--dg);
   border: 1px solid var(--dg-bd);
 }
-.memory-note-sheet .memory-note-recent {
+.memory-add-sheet .memory-add-recent {
   background: transparent;
   padding: 16px 0 0;
   border-radius: 0;
 }
-.memory-note-recent li {
+.memory-add-recent li {
   background: transparent;
 }
 .memory-query-bar {
@@ -1935,7 +1935,7 @@ button.map-related {
     grid-row: 1;
     justify-self: center;
   }
-  .memory-note-trigger {
+  .memory-add-trigger {
     grid-column: 3;
   }
   .desktop-shell .core-memory-map {
@@ -2053,7 +2053,7 @@ button.map-related {
   .memory-instrument-header h1 {
     font-size: 20px;
   }
-  .memory-note-trigger {
+  .memory-add-trigger {
     font-size: 12px;
     padding: 7px;
   }

@@ -341,7 +341,11 @@ function validated<T>(
 ):
   | { state: "ok"; data: T }
   | { state: Exclude<ReadState["state"], "ok">; code: string } {
-  if (outcome.state !== "ok") return outcome;
+  if (outcome.state !== "ok") {
+    // A Core refusal of the request itself reads as an invalid answer here.
+    const state = outcome.state === "rejected" ? "invalid" : outcome.state;
+    return { state, code: outcome.code };
+  }
   const data = validate(outcome.data);
   return data === null
     ? { state: "invalid", code: "response_invalid" }

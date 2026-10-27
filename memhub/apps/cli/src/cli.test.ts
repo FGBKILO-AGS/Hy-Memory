@@ -2004,16 +2004,11 @@ describe("stopped Runtime is exit 3, not a usage error", () => {
     ["path", "list", "--json"],
     ["adapter", "list", "--json"],
     ["task", "--id", "nope", "--json"],
-    [
-      "write",
-      "submit",
-      "--session",
-      "s",
-      "--messages-file",
-      "/tmp/messages.json",
-      "--json",
-    ],
-    ["backup", "create", "--target", "/tmp/x", "--yes", "--json"],
+    ["write", "status", "nope", "--json"],
+    ["backup", "create", "--target", "/tmp/x", "--json"],
+    ["scan-roots", "add", "--root", "/tmp/x", "--json"],
+    ["scan", "--source", "codex", "--json"],
+    ["onboarding", "reset", "--json"],
   ])("%s ... --json exits 3 with runtime_not_running", async (...argv) => {
     const streams = captureStreams();
     let code: number;
@@ -2023,13 +2018,57 @@ describe("stopped Runtime is exit 3, not a usage error", () => {
       streams.restore();
     }
     expect(code!).toBe(3);
-    const document = JSON.parse(streams.stderr());
+    // A result, not an error: on stdout like every other --json document.
+    expect(streams.stderr()).toBe("");
+    const document = JSON.parse(streams.stdout());
     expect(document).toMatchObject({
       code: "runtime_not_running",
       exit_code: 3,
     });
     // Never the usage-error shape.
     expect(document.status).not.toBe("usage_error");
+  });
+
+  it("write submit validates its messages file before attaching, then exits 3", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "memhub-write-"));
+    const file = path.join(directory, "messages.json");
+    await import("node:fs/promises").then(({ writeFile }) =>
+      writeFile(file, JSON.stringify([{ role: "user", content: "hi" }])),
+    );
+    const streams = captureStreams();
+    let missing: number;
+    let code: number;
+    try {
+      missing = await run(
+        [
+          "write",
+          "submit",
+          "--session",
+          "s",
+          "--messages-file",
+          path.join(directory, "absent.json"),
+          "--json",
+        ],
+        {},
+      );
+      code = await run(
+        [
+          "write",
+          "submit",
+          "--session",
+          "s",
+          "--messages-file",
+          file,
+          "--json",
+        ],
+        {},
+      );
+    } finally {
+      streams.restore();
+      await rm(directory, { recursive: true, force: true });
+    }
+    expect(missing!).toBe(2);
+    expect(code!).toBe(3);
   });
 
   it.each(["pause", "resume"] as const)(
@@ -2704,7 +2743,8 @@ describe("ui wires the Core session contract without token leakage", () => {
     } finally {
       output.restore();
     }
-    expect(code!).toBe(4);
+    // A stopped Runtime is exit 3, like every other command.
+    expect(code!).toBe(3);
     const document = JSON.parse(output.value());
     expect(document).toMatchObject({
       schema_version: 1,
@@ -2733,6 +2773,55 @@ describe("ui wires the Core session contract without token leakage", () => {
 // refuse while the Runtime owns the data dir, stop+call Core from a
 // maintenance process, and never report success from a malformed response.
 describe("backup restore drives the Core managed-restore contract", () => {
+  it("previews without --yes, exits 0 and starts nothing", async () => {
+    const maintenance = vi.fn();
+    const output = captureStdout();
+    let code: number;
+    try {
+      code = await run(
+        ["backup", "restore", "--source", "/tmp/x", "--json"],
+        {},
+        { runMaintenanceRestore: maintenance },
+      );
+    } finally {
+      output.restore();
+    }
+    expect(code!).toBe(0);
+    expect(maintenance).not.toHaveBeenCalled();
+    expect(JSON.parse(output.value())).toMatchObject({
+      command: "backup restore",
+      state: "preview",
+      target: "/tmp/x",
+      applied: false,
+      next_step: "memhub backup restore --source /tmp/x --yes",
+    });
+  });
+
+  it("restores with --yes alone (no second path confirmation)", async () => {
+    const maintenance = vi.fn(async () => ({
+      state: "restored" as const,
+      result: {
+        state: "restored" as const,
+        restoredBytes: 1,
+        previousBackupPath: "/tmp/pre.sqlite3",
+        sourceSchemaVersion: 34,
+      },
+    }));
+    const output = captureStdout();
+    let code: number;
+    try {
+      code = await run(
+        ["backup", "restore", "--source", "/tmp/x", "--yes", "--json"],
+        {},
+        { runMaintenanceRestore: maintenance },
+      );
+    } finally {
+      output.restore();
+    }
+    expect(code!).toBe(0);
+    expect(maintenance).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects while the Runtime is running, with a distinct exit code", async () => {
     runtimeMocks.inspectRuntimeStatus.mockResolvedValueOnce({
       state: "running",
@@ -2849,7 +2938,7 @@ describe("backup restore drives the Core managed-restore contract", () => {
     });
   });
 
-  it("requires --confirm to repeat the exact source path", async () => {
+  it("refuses a legacy --confirm that does not repeat the source path", async () => {
     const maintenance = vi.fn();
     const output = captureStdout();
     let code: number;
@@ -2877,7 +2966,7 @@ describe("backup restore drives the Core managed-restore contract", () => {
       command: "backup",
       verb: "restore",
       state: "rejected",
-      code: "backup_restore_confirmation_required",
+      code: "backup_restore_confirmation_mismatch",
     });
   });
 
@@ -3029,7 +3118,7 @@ describe("init onboarding", () => {
 
   // Boolean flags were idempotent, but accepting them twice hid a duplicated
   // argv fragment that could also have duplicated a value-bearing flag.
-  it.each(["--import", "--full-rescan", "--confirm-overrides", "--dry-run"])(
+  it.each(["--import", "--confirm-overrides"])(
     "refuses a repeated init %s flag",
     async (flag) => {
       expect(await run(["init", "--source", "codex", flag, flag], {})).toBe(2);
@@ -3102,12 +3191,25 @@ describe("init onboarding", () => {
     },
   );
 
-  it("accepts --dry-run together with --import", async () => {
-    // Parsing must accept the pair; it stops at the Runtime check, which is
-    // not a usage failure.
-    expect(
-      await run(["init", "--source", "codex", "--import", "--dry-run"], {}),
-    ).not.toBe(2);
+  // `--dry-run` and `--full-rescan` never did anything (P0-2/P0-3): they are
+  // gone rather than accepted as no-ops.
+  it.each(["--dry-run", "--full-rescan"])(
+    "refuses the removed no-op %s flag",
+    async (flag) => {
+      expect(
+        await run(["init", "--source", "codex", "--import", flag], {}),
+      ).toBe(2);
+    },
+  );
+
+  it("still parses the old `init --source --import` spelling", async () => {
+    // It stops at the Runtime check (exit 3), which is not a usage failure.
+    const streams = captureStreams();
+    try {
+      expect(await run(["init", "--source", "codex", "--import"], {})).toBe(3);
+    } finally {
+      streams.restore();
+    }
   });
 });
 

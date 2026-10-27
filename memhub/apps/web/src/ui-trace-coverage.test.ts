@@ -43,8 +43,8 @@ describe("ui trace write coverage", () => {
     expect(memory).toMatch(/updateSdkMemory\([\s\S]{0,160}trace\.traceId/);
     expect(memory).toMatch(/deleteSdkMemory\([\s\S]{0,160}trace\.traceId/);
     // The composer's save is the native four-level sample.
-    expect(source("MemoryNoteComposer.tsx")).toMatch(
-      /saveMemoryNote\([\s\S]{0,200}trace\.traceId/,
+    expect(source("MemoryAddComposer.tsx")).toMatch(
+      /addMemory\([\s\S]{0,200}trace\.traceId/,
     );
   });
 
@@ -225,11 +225,11 @@ describe("ui trace write coverage", () => {
     );
   });
 
-  it("traces the answer note save", () => {
-    // `saveAnswer` writes a memory note, so it must form a four-line chain.
+  it("traces the answer memory add", () => {
+    // `saveAnswer` adds a memory, so it must form a four-line chain.
     const view = source("MemorySpace.tsx");
     expect(view).toMatch(
-      /saveMemoryNote\(\s*\{[\s\S]{0,240}?scope: "all-apps",\s*\},?\s*trace\.traceId,?\s*\)/,
+      /addMemory\(\s*\{[\s\S]{0,240}?scope: "all-apps",\s*\},?\s*trace\.traceId,?\s*\)/,
     );
   });
 
@@ -271,19 +271,14 @@ describe("ui trace write coverage", () => {
     expect(body).toContain("X-One-Memory-Trace-Id");
   });
 
-  it("traces the memory-note process write", () => {
-    // "重新整理" starts note processing: a non-GET write that had no trace.
-    const composer = source("MemoryNoteComposer.tsx");
-    expect(composer).toMatch(/traceUiAction\("memory", "retry"\)/);
-    expect(composer).toMatch(
-      /processMemoryNote\(note\.evidence_id, trace\.traceId\)/,
-    );
+  it("has no separate memory-add process write", () => {
+    // Processing an addition is not a client write: activating a model
+    // readmits parked work. The composer must not grow a retry route again.
+    const composer = source("MemoryAddComposer.tsx");
+    expect(composer).not.toMatch(/traceUiAction\("memory", "retry"\)/);
     const api = source("api.ts");
-    const start = api.indexOf("export async function processMemoryNote(");
-    expect(start).toBeGreaterThan(-1);
-    const body = api.slice(start, start + 600);
-    expect(body).toContain("traceId?: string");
-    expect(body).toContain("X-One-Memory-Trace-Id");
+    expect(api).not.toContain("/process`");
+    expect(api).not.toContain("memory-notes");
   });
 
   it("traces every model-profile write through the hook's single choke point", () => {

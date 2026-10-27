@@ -133,6 +133,20 @@ describe("unified context search", () => {
     expect(output).not.toMatch(/^- raw |memory-1|raw-1|采用状态/m);
   });
 
+  it("labels raw hits as original-conversation excerpts, not memories", async () => {
+    const streams = captureStreams();
+    try {
+      expect(await run(["recall", "synthetic question"])).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    const output = streams.stdout();
+    expect(output).toContain(
+      "- [原始对话摘录 · codex] Synthetic raw citation.",
+    );
+    expect(output).toContain("- [记忆] Synthetic SDK memory.");
+  });
+
   it("queries the SDK context endpoint directly and preserves item ids", async () => {
     const streams = captureStreams();
     try {

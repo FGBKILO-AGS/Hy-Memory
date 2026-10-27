@@ -165,8 +165,40 @@ class FakeSdk:
 
     def list_memories(self, **kwargs):
         self.list_calls.append(kwargs)
-        assert kwargs["scene"] == "all"
         include = kwargs.get("include_sources") or []
+        scene = kwargs["scene"]
+        start, stop = kwargs["offset"], kwargs["offset"] + kwargs["limit"]
+        if scene == "chat":
+            rows = [row for row in self.chat.values() if not include or row["source"] in include]
+            return {
+                "vdb": {
+                    "memories": rows[start:stop],
+                    "total": len(rows),
+                    "limit": kwargs["limit"],
+                    "offset": kwargs["offset"],
+                },
+                "elapsed_ms": 1.0,
+            }
+        if scene in ("working", "coding"):
+            rows = [
+                {key: value for key, value in row.items() if not key.startswith("_")}
+                | {"status": "active"}
+                for (kind, variant, _id), row in self.productivity.items()
+                if kind == "experience"
+                and variant == scene
+                and (not include or row["source"] in include)
+            ]
+            return {
+                "request_id": "list",
+                "scene": "productivity",
+                "variant": scene,
+                "experiences": rows[start:stop],
+                "total": len(rows),
+                "limit": kwargs["limit"],
+                "offset": kwargs["offset"],
+                "elapsed_ms": 1.0,
+            }
+        assert scene == "all"
         chat = [
             {**row, "scene": "chat", "kind": "chat", "created_at": 10, "updated_at": 10}
             for row in self.chat.values()
@@ -547,5 +579,71 @@ def test_ambiguous_memory_id_is_a_conflict(tmp_path, monkeypatch):
         resolved = await client.get("/api/v2/memories/dup", params={"kind": "chat"})
         assert resolved.status_code == 200
         assert resolved.json()["content"] == "chat text"
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_scene_filter_lists_one_scene(tmp_path, monkeypatch):
+    async def scenario(app, sdk, client):
+        sdk.add_chat(chat_row("chat-1", "chat text"))
+        sdk.add_productivity("experience", experience_row("work-1", "w task", "w fix"))
+        sdk.add_productivity(
+            "experience", experience_row("code-1", "c task", "c fix", variant="coding")
+        )
+
+        working = await client.get("/api/v2/memory-library", params={"scene": "working"})
+        assert working.status_code == 200
+        body = working.json()
+        assert body["total"] == 1
+        assert [item["memory_id"] for item in body["memories"]] == ["work-1"]
+        assert body["memories"][0]["kind"] == "experience"
+        assert body["memories"][0]["variant"] == "working"
+        assert body["memories"][0]["scene"] == "working"
+        assert sdk.list_calls[-1]["scene"] == "working"
+
+        chat = await client.get("/api/v2/memory-library", params={"scene": "chat"})
+        assert chat.status_code == 200
+        assert [item["memory_id"] for item in chat.json()["memories"]] == ["chat-1"]
+        assert sdk.list_calls[-1]["scene"] == "chat"
+
+        default = await client.get("/api/v2/memory-library")
+        assert default.status_code == 200
+        assert sdk.list_calls[-1]["scene"] == "all"
+
+        bad = await client.get("/api/v2/memory-library", params={"scene": "normal"})
+        assert bad.status_code == 422
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_scene_filter_narrows_search_and_binds_the_window(tmp_path, monkeypatch):
+    async def scenario(app, sdk, client):
+        sdk.add_chat(chat_row("chat-1", "deploy chat"))
+        sdk.add_productivity("experience", experience_row("work-1", "deploy task", "run make"))
+        sdk.add_productivity(
+            "experience",
+            experience_row("code-1", "deploy code", "run tests", variant="coding"),
+        )
+
+        coding = await client.get(
+            "/api/v2/memory-library", params={"query": "deploy", "scene": "coding"}
+        )
+        assert coding.status_code == 200
+        body = coding.json()
+        assert body["total"] == 1
+        assert [item["memory_id"] for item in body["memories"]] == ["code-1"]
+        assert sdk.search_calls[-1][1]["scene"] == "all"
+
+        # The same window under another scene is a different search.
+        other = await client.get(
+            "/api/v2/memory-library",
+            params={"query": "deploy", "scene": "chat", "window_id": body["window_id"]},
+        )
+        assert other.status_code == 200
+        assert other.json()["window_reset"] is True
+        assert [item["memory_id"] for item in other.json()["memories"]] == ["chat-1"]
+        assert len(sdk.search_calls) == 2
 
     run_with_sdk(tmp_path, monkeypatch, scenario)

@@ -15,7 +15,7 @@ import pytest
 
 PRIMARY_MARKERS = ("unit", "contract", "integration", "performance", "live")
 EXPECTED_TEST_FILE_COUNT = 302
-EXPECTED_TEST_FILES_SHA256 = "800de24f074be47f27f36b32f744df8def491e7c1e0de0d1eddfb736306daf4f"
+EXPECTED_TEST_FILES_SHA256 = "07707528025ac134e46c93ebef12335e852df1ed0f52f8beb62abb3b4d1b0e97"
 
 # Pure transformations, validation models, parity checks and state machines.
 # This list is intentionally small: uncertain files default to contract.
@@ -78,8 +78,8 @@ INTEGRATION_FILES = frozenset(
         "test_measure_c1_loop_blocking_contract.py",
         "test_memory_content_import.py",
         "test_memory_freshness_integration_review.py",
+        "test_memory_additions.py",
         "test_memory_library_all_scenes.py",
-        "test_memory_notes.py",
         "test_memory_qa_api.py",
         "test_memory_server_durable_queue.py",
         "test_memory_supersede.py",

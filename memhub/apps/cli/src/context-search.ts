@@ -23,6 +23,7 @@ export interface ContextSearchDocument {
     | "unavailable"
     | "denied"
     | "not_found"
+    | "rejected"
     | "invalid";
   code?: string;
   request_id?: string;
@@ -97,6 +98,9 @@ export function renderContextText(document: ContextSearchDocument): string {
   if (document.state === "unavailable") return "暂时无法查记忆，请稍后重试。\n";
   if (document.state === "denied") return "当前应用没有查记忆权限。\n";
   if (document.state === "invalid") return "查记忆返回了无法识别的结果。\n";
+  if (document.state === "rejected") {
+    return `查记忆被拒绝（${document.code}），请检查参数。\n`;
+  }
   const lines = [
     document.state === "empty"
       ? "没有查到相关记忆。"
@@ -104,8 +108,14 @@ export function renderContextText(document: ContextSearchDocument): string {
         ? "查到以下内容，部分内容还在整理中："
         : "查到以下相关内容：",
   ];
+  // A raw hit is an excerpt of an original conversation, not a distilled
+  // memory; say which one each line is so it is not read as a conclusion.
   for (const item of document.items) {
-    lines.push(`- ${String(item.content)}`);
+    const label =
+      item.kind === "raw"
+        ? `[原始对话摘录 · ${String(item.source)}]`
+        : "[记忆]";
+    lines.push(`- ${label} ${String(item.content)}`);
   }
   if (document.truncated) lines.push("结果已按请求预算截断。");
   return `${lines.join("\n")}\n`;

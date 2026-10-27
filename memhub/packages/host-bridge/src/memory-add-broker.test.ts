@@ -1,4 +1,4 @@
-// MemHub_write end to end: MCP session -> broker -> a fake Core. The note is
+// MemHub_write end to end: MCP session -> broker -> a fake Core. The memory is
 // the same hand-added memory the app's 添加记忆 writes: authenticated by the
 // host credential, not grant-governed, sent to Core as a trusted local caller
 // (no external read envelope) and always filed cross-app.
@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   type BrokerClientOptions,
-  memoryNoteThroughBroker,
+  memoryAddThroughBroker,
   readHostCredentialFile,
 } from "./broker-client.js";
 import { HostGrantStore } from "./host-grants.js";
@@ -54,8 +54,8 @@ function receiptFor(text: string) {
   };
 }
 
-async function fixture(options: { noteStatus?: number } = {}) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "om-note-broker-"));
+async function fixture(options: { coreStatus?: number } = {}) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "om-memory-add-broker-"));
   roots.push(root);
   const store = await HostGrantStore.initialize(path.join(root, "grants"));
   const issued = await store.createInstallation({ hostId: "cursor" });
@@ -82,8 +82,8 @@ async function fixture(options: { noteStatus?: number } = {}) {
         body,
       });
       response.setHeader("Content-Type", "application/json");
-      if (request.url === "/api/v1/memory-notes") {
-        response.statusCode = options.noteStatus ?? 201;
+      if (request.url === "/api/v2/memories") {
+        response.statusCode = options.coreStatus ?? 201;
         response.end(
           JSON.stringify(
             response.statusCode === 201
@@ -107,7 +107,7 @@ async function fixture(options: { noteStatus?: number } = {}) {
     coreBaseUrl: `http://127.0.0.1:${(core.address() as AddressInfo).port}`,
     coreApiToken: coreToken,
     discoveryPath,
-    instanceId: "isolated-note-broker",
+    instanceId: "isolated-memory-add-broker",
     preferredPort: 0,
     hostGrantStore: store,
   });
@@ -120,7 +120,7 @@ async function fixture(options: { noteStatus?: number } = {}) {
     discoveryPath,
     undefined,
     undefined,
-    (discovery, request) => memoryNoteThroughBroker(discovery, request, client),
+    (discovery, request) => memoryAddThroughBroker(discovery, request, client),
     undefined,
     async () => [],
   );
@@ -168,14 +168,14 @@ describe.skipIf(process.platform === "win32")("MemHub_write", () => {
     expect(f.calls).toHaveLength(1);
     const [call] = f.calls;
     expect(call.method).toBe("POST");
-    expect(call.url).toBe("/api/v1/memory-notes");
+    expect(call.url).toBe("/api/v2/memories");
     expect(call.body).toEqual({
       request_id: REQUEST_ID,
       text: "Prefers tabs over spaces",
       scope: "all-apps",
     });
     expect(call.headers.authorization).toBe(`Bearer ${coreToken}`);
-    // Core denies memory notes to enveloped requests: none of it may leak.
+    // Core denies POST /api/v2/memories to enveloped requests: none of it may leak.
     for (const header of Object.keys(call.headers)) {
       expect(header).not.toMatch(
         /^x-one-memory-(read-context|host-id|installation-|allowed-)/,
@@ -194,34 +194,34 @@ describe.skipIf(process.platform === "win32")("MemHub_write", () => {
   });
 
   it("maps a 409 conflict and a 422 refusal to their own errors", async () => {
-    const conflict = await fixture({ noteStatus: 409 });
+    const conflict = await fixture({ coreStatus: 409 });
     await expect(
-      memoryNoteThroughBroker(
+      memoryAddThroughBroker(
         conflict.discoveryPath,
         { request_id: REQUEST_ID, text: "a" },
         conflict.client,
       ),
-    ).rejects.toMatchObject({ code: "memory_note_conflict" });
+    ).rejects.toMatchObject({ code: "memory_add_conflict" });
     const conflictCall = await callWrite(conflict.session, {
       text: "a",
       request_id: REQUEST_ID,
     });
     expect(conflictCall.result?.isError).toBe(true);
 
-    const invalid = await fixture({ noteStatus: 422 });
+    const invalid = await fixture({ coreStatus: 422 });
     await expect(
-      memoryNoteThroughBroker(
+      memoryAddThroughBroker(
         invalid.discoveryPath,
         { request_id: REQUEST_ID, text: "a" },
         invalid.client,
       ),
-    ).rejects.toMatchObject({ code: "memory_note_invalid" });
+    ).rejects.toMatchObject({ code: "memory_add_invalid" });
   });
 
   it("refuses an unauthenticated write before reaching Core", async () => {
     const f = await fixture();
     const response = await axios.post(
-      `${f.baseUrl}/memory-notes`,
+      `${f.baseUrl}/memories`,
       { request_id: REQUEST_ID, text: "anything" },
       {
         headers: { "Content-Type": "application/json" },
@@ -243,7 +243,7 @@ describe.skipIf(process.platform === "win32")("MemHub_write", () => {
       { request_id: REQUEST_ID, text: "x".repeat(12_001) },
       { text: "x" },
     ]) {
-      const response = await axios.post(`${f.baseUrl}/memory-notes`, body, {
+      const response = await axios.post(`${f.baseUrl}/memories`, body, {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${f.secret}`,

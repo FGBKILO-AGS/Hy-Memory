@@ -27,6 +27,7 @@ import {
   useState,
 } from "react";
 import {
+  addMemory,
   apiErrorCode,
   askMemoriesStream,
   deleteSdkMemory,
@@ -37,7 +38,6 @@ import {
   getSdkMemoryLibrary,
   manualExtract,
   retryUnknownMemoryProcessing,
-  saveMemoryNote,
   setExtractionWindow,
   updateSdkMemory,
 } from "./api";
@@ -60,10 +60,7 @@ import { sourceNameOr, UNATTRIBUTED_SOURCE_ID } from "./source-label";
 import { traceUiAction } from "./ui-trace";
 import { isDefiniteRefusal, writeTraceStatus } from "./write-outcome";
 import "./r6-memory.css";
-import {
-  MemoryNoteComposer,
-  type PendingMemoryNote,
-} from "./MemoryNoteComposer";
+import { MemoryAddComposer, type PendingMemoryAdd } from "./MemoryAddComposer";
 import type { MemoryArrival } from "./memory-arrival-state";
 import {
   blockReasonLabel,
@@ -326,9 +323,7 @@ export function MemorySpace({
   const [processing, setProcessing] = useState<MemoryProcessingSummary | null>(
     null,
   );
-  const [pendingNote, setPendingNote] = useState<PendingMemoryNote | null>(
-    null,
-  );
+  const [pendingAdd, setPendingAdd] = useState<PendingMemoryAdd | null>(null);
   const [checkingSetup, setCheckingSetup] = useState(false);
   // biome-ignore lint/correctness/useExhaustiveDependencies: Source authority changes invalidate an in-flight setup snapshot.
   useEffect(() => {
@@ -553,11 +548,11 @@ export function MemorySpace({
   async function saveAnswer(draft: { content: string }) {
     // HY decides what becomes a memory; the reader choosing to keep the
     // answer is what makes it their words for HY to read.
-    // Saving an answer writes a memory note, so it needs the same ui.action /
-    // ui.result pair as the composer's note save.
+    // Saving an answer adds a memory, so it needs the same ui.action /
+    // ui.result pair as the composer's save.
     const trace = traceUiAction("memory", "submit");
     try {
-      await saveMemoryNote(
+      await addMemory(
         {
           request_id: crypto.randomUUID(),
           text: draft.content,
@@ -569,8 +564,8 @@ export function MemorySpace({
     } catch (reason) {
       trace.done(writeTraceStatus(reason), {
         reason: isDefiniteRefusal(reason)
-          ? "answer_note_save_failed"
-          : "answer_note_save_result_unknown",
+          ? "answer_memory_add_failed"
+          : "answer_memory_add_result_unknown",
       });
       throw reason;
     }
@@ -770,11 +765,11 @@ export function MemorySpace({
               : null}
           </span>
         </div>
-        <MemoryNoteComposer
+        <MemoryAddComposer
           suspended={!active}
-          onPendingChange={setPendingNote}
+          onPendingChange={setPendingAdd}
           onSaved={() => {
-            // A finished note is a new memory: re-read the page now rather
+            // A finished addition is a new memory: re-read the page now rather
             // than leave it for the next poll.
             bumpSdkMap();
           }}
@@ -955,13 +950,13 @@ export function MemorySpace({
         hasMemories={(sdkLibrary.page?.total ?? 0) > 0}
         onConfigureModel={onConfigureModel}
       />
-      {simplified && pendingNote ? (
-        <p className="memory-pending-note" role="status">
+      {simplified && pendingAdd ? (
+        <p className="memory-pending-add" role="status">
           <span>
             {t("memory:原话已保存，正在等待整理：")}
-            {pendingNote.text}
+            {pendingAdd.text}
           </span>
-          {pendingNote.state === "waiting_for_model" ? (
+          {pendingAdd.state === "waiting_for_model" ? (
             <button type="button" onClick={onConfigureModel}>
               {t("memory:配置整理模型")}
             </button>

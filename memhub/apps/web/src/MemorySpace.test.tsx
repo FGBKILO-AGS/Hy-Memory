@@ -79,9 +79,8 @@ const {
   getGraphWidth,
   decideGraphWidth,
   getModelProfiles,
-  getMemoryNotes,
-  saveMemoryNote,
-  processMemoryNote,
+  getMemoryAddStatus,
+  addMemory,
 } = vi.hoisted(() => ({
   apiErrorCode: vi.fn(),
   getSdkRaw: vi.fn(),
@@ -94,9 +93,8 @@ const {
   getGraphWidth: vi.fn(),
   decideGraphWidth: vi.fn(),
   getModelProfiles: vi.fn(),
-  getMemoryNotes: vi.fn(),
-  saveMemoryNote: vi.fn(),
-  processMemoryNote: vi.fn(),
+  getMemoryAddStatus: vi.fn(),
+  addMemory: vi.fn(),
 }));
 
 const _LIBRARY_REFRESH_MS = 10_000;
@@ -113,9 +111,8 @@ vi.mock("./api", () => ({
   getGraphWidth,
   decideGraphWidth,
   getModelProfiles,
-  getMemoryNotes,
-  saveMemoryNote,
-  processMemoryNote,
+  getMemoryAddStatus,
+  addMemory,
 }));
 
 function deferred<T>() {
@@ -171,7 +168,7 @@ describe("MemorySpace", () => {
     getModelProfiles.mockResolvedValue([
       { profile_id: "profile-1", is_active: true },
     ]);
-    getMemoryNotes.mockResolvedValue([]);
+    getMemoryAddStatus.mockRejectedValue(new Error("not found"));
     setExtractionWindow.mockResolvedValue({ window_preset: "1y" });
     manualExtract.mockResolvedValue({
       promoted: 25,
@@ -197,8 +194,7 @@ describe("MemorySpace", () => {
         setExtractionWindow,
         manualExtract,
         decideGraphWidth,
-        saveMemoryNote,
-        processMemoryNote,
+        addMemory,
       ])
         expect(write).not.toHaveBeenCalled();
     }
@@ -281,7 +277,7 @@ describe("MemorySpace", () => {
       const view = render(<MemorySpace />);
       await userEvent.click(screen.getByRole("button", { name: "添加记忆" }));
       const draft = screen.getByLabelText("记下这件事") as HTMLTextAreaElement;
-      await userEvent.type(draft, "Unsent note");
+      await userEvent.type(draft, "Unsent draft");
       view.rerender(<MemorySpace active={false} />);
       expect(screen.queryByRole("dialog")).toBeNull();
       const event = new KeyboardEvent("keydown", {
@@ -293,7 +289,7 @@ describe("MemorySpace", () => {
       expect(event.defaultPrevented).toBe(false);
       view.rerender(<MemorySpace />);
       expect(screen.getByLabelText("记下这件事")).toBe(draft);
-      expect(draft.value).toBe("Unsent note");
+      expect(draft.value).toBe("Unsent draft");
       expectNoTeachingWrites();
     });
   });
@@ -801,7 +797,7 @@ describe("MemorySpace", () => {
     expect(screen.queryByText(/revision|evidence_ids/)).toBeNull();
   });
 
-  it("hands a saved answer to HY as a note instead of writing the memory itself", async () => {
+  it("hands a saved answer to HY as an added memory instead of writing the memory itself", async () => {
     askMemoriesStream.mockImplementation(async function* () {
       yield {
         type: "final",
@@ -821,7 +817,7 @@ describe("MemorySpace", () => {
     );
 
     await waitFor(() =>
-      expect(saveMemoryNote).toHaveBeenCalledWith(
+      expect(addMemory).toHaveBeenCalledWith(
         {
           request_id: expect.any(String),
           text: "Grounded answer",

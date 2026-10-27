@@ -1730,17 +1730,13 @@ const baseEnglishMessages = {
   "memory:整理已完成": "Processing complete",
   "memory:原话已保存，未提取出可用记忆":
     "Original saved; no usable memory extracted",
-  "memory:最近添加的内容读取失败。": "Could not read recently added notes.",
+  "memory:最近添加的内容读取失败。": "Could not read recently added memories.",
   "memory:整理状态暂时不可用，原话已保存。":
     "Processing status is temporarily unavailable; the original is saved.",
   "memory:已保存，正在后台沉淀记忆":
     "Saved; creating memories in the background",
   "memory:未能确认保存结果，输入已保留。重试不会重复添加。":
     "Could not confirm the save result. Your text is retained; retrying will not add a duplicate.",
-  "memory:整理未能开始，原话仍已保存。":
-    "Processing could not start; the original is still saved.",
-  "memory:整理结果尚未确认，原话仍已保存。请刷新后核对。":
-    "Processing is not yet confirmed; the original is saved. Refresh to check.",
   "memory:模型服务要求检查余额或付款状态，原话仍已保存。":
     "The model service requires a balance or payment check; the original remains saved.",
   "memory:这台设备打不开 3D 视图，已显示关联列表。":

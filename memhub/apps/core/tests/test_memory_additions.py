@@ -1,3 +1,5 @@
+"""Add one memory directly: `POST /api/v2/memories` and `GET /api/v2/memories/additions/{id}`."""
+
 import asyncio
 import json
 import sqlite3
@@ -20,7 +22,7 @@ def application(tmp_path):
         Settings(
             data_dir=tmp_path / "data",
             source_home=tmp_path,
-            api_token=SecretStr("note-test"),
+            api_token=SecretStr("memory-add-test"),
             imports_enabled=False,
             automatic_memory_processing=False,
             live_sync_enabled=False,
@@ -39,56 +41,59 @@ def client_for(app):
     return AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
-        headers={"Authorization": "Bearer note-test"},
+        headers={"Authorization": "Bearer memory-add-test"},
     )
 
 
 @pytest.mark.fresh_sdk
-def test_empty_library_can_save_a_note_without_a_matter_or_configured_model(tmp_path):
+def test_empty_library_can_add_a_memory_without_a_matter_or_configured_model(tmp_path):
     async def scenario():
         app = application(tmp_path)
         async with app.router.lifespan_context(app), client_for(app) as client:
             assert legacy_tables_present(app.state.settings.data_dir / "one-memory.sqlite3") == ()
-            note = {
+            addition = {
                 "request_id": str(uuid4()),
                 "text": "请记住：项目周会不排在周五。",
                 "scope": "all-apps",
             }
-            response = await client.post("/api/v1/memory-notes", json=note)
+            response = await client.post("/api/v2/memories", json=addition)
             assert response.status_code == 201
             saved = response.json()
             assert saved["state"] == "pending"
             assert saved["memory_ids"] == []
-            record = app.state.memory_note_store.require(saved["evidence_id"])
+            record = app.state.memory_addition_store.require(saved["evidence_id"])
             assert record.source_id == "one-memory-manual"
             assert record.role == "user" and record.written_by == WrittenBy.PERSON
-            assert record.verbatim == note["text"] and record.created_at is not None
-            again = await client.post("/api/v1/memory-notes", json=note)
+            assert record.verbatim == addition["text"] and record.created_at is not None
+            again = await client.post("/api/v2/memories", json=addition)
             assert again.json()["evidence_id"] == saved["evidence_id"]
-            operation = await client.get(f"/api/v1/memory-notes/operations/{note['request_id']}")
-            assert operation.status_code == 200
-            assert operation.json()["evidence_id"] == saved["evidence_id"]
-            assert (
-                await client.get(f"/api/v1/memory-notes/operations/{uuid4()}")
-            ).status_code == 404
+            status = await client.get(f"/api/v2/memories/additions/{addition['request_id']}")
+            assert status.status_code == 200
+            assert status.json()["evidence_id"] == saved["evidence_id"]
+            missing = await client.get(f"/api/v2/memories/additions/{uuid4()}")
+            assert missing.status_code == 404
+            assert missing.json()["detail"] == "memory_add_not_found"
             conflict = await client.post(
-                "/api/v1/memory-notes", json={**note, "text": "Changed content"}
+                "/api/v2/memories", json={**addition, "text": "Changed content"}
             )
             assert conflict.status_code == 409
+            assert conflict.json()["detail"] == "memory_add_conflict"
             assert (
-                app.state.memory_note_store.require(saved["evidence_id"]).verbatim == note["text"]
+                app.state.memory_addition_store.require(saved["evidence_id"]).verbatim
+                == addition["text"]
             )
             assert legacy_tables_present(app.state.settings.data_dir / "one-memory.sqlite3") == ()
         restarted = application(tmp_path)
         async with restarted.router.lifespan_context(restarted), client_for(restarted) as client:
-            notes = (await client.get("/api/v1/memory-notes")).json()
-            assert len(notes) == 1 and notes[0]["evidence_id"] == saved["evidence_id"]
+            status = await client.get(f"/api/v2/memories/additions/{addition['request_id']}")
+            assert status.status_code == 200
+            assert status.json()["evidence_id"] == saved["evidence_id"]
 
     asyncio.run(scenario())
 
 
 @pytest.mark.fresh_sdk
-def test_note_requires_authentication_explicit_scope_and_nonempty_content(tmp_path):
+def test_memory_add_requires_authentication_explicit_scope_and_nonempty_content(tmp_path):
     async def scenario():
         app = application(tmp_path)
         async with app.router.lifespan_context(app), client_for(app) as client:
@@ -100,23 +105,26 @@ def test_note_requires_authentication_explicit_scope_and_nonempty_content(tmp_pa
                 {"user_id": "other"},
             ):
                 assert (
-                    await client.post("/api/v1/memory-notes", json={**base, **change})
+                    await client.post("/api/v2/memories", json={**base, **change})
                 ).status_code == 422
             assert (
                 await client.post(
-                    "/api/v1/memory-notes",
+                    "/api/v2/memories",
                     json={"request_id": base["request_id"], "text": "No scope"},
                 )
             ).status_code == 422
             client.headers.pop("Authorization")
-            assert (await client.post("/api/v1/memory-notes", json=base)).status_code == 401
-            assert app.state.memory_note_store.list() == []
+            assert (await client.post("/api/v2/memories", json=base)).status_code == 401
+            status_path = f"/api/v2/memories/additions/{base['request_id']}"
+            assert (await client.get(status_path)).status_code == 401
+            client.headers["Authorization"] = "Bearer memory-add-test"
+            assert (await client.get(status_path)).status_code == 404
 
     asyncio.run(scenario())
 
 
-def test_note_and_source_grant_are_atomic(tmp_path):
-    from one_memory.memory_notes import MemoryNoteInput
+def test_memory_add_and_source_grant_are_atomic(tmp_path):
+    from one_memory.memory_additions import MemoryAddInput
 
     async def scenario():
         app = legacy_application(tmp_path)
@@ -127,8 +135,8 @@ def test_note_and_source_grant_are_atomic(tmp_path):
                     "BEGIN SELECT RAISE(ABORT, 'grant failed'); END"
                 )
             with pytest.raises(sqlite3.IntegrityError, match="grant failed"):
-                app.state.memory_note_store.save(
-                    MemoryNoteInput(
+                app.state.memory_addition_store.save(
+                    MemoryAddInput(
                         request_id=uuid4(), text="Do not leave half a save.", scope="all-apps"
                     )
                 )
@@ -137,22 +145,23 @@ def test_note_and_source_grant_are_atomic(tmp_path):
     asyncio.run(scenario())
 
 
-def test_revoked_note_source_is_not_silently_reauthorized(tmp_path):
+def test_revoked_manual_source_is_not_silently_reauthorized(tmp_path):
     async def scenario():
         app = legacy_application(tmp_path)
         async with app.router.lifespan_context(app), client_for(app) as client:
-            note = {"request_id": str(uuid4()), "text": "Remember this.", "scope": "all-apps"}
-            saved = (await client.post("/api/v1/memory-notes", json=note)).json()
+            addition = {"request_id": str(uuid4()), "text": "Remember this.", "scope": "all-apps"}
+            assert (await client.post("/api/v2/memories", json=addition)).status_code == 201
             with sqlite3.connect(app.state.evidence_store.database_path) as db:
                 db.execute(
                     "UPDATE source_grants SET revoked_at='2026-09-12' "
                     "WHERE source_id='one-memory-manual'"
                 )
-            assert (await client.post("/api/v1/memory-notes", json=note)).status_code == 409
-            assert (
-                await client.post(f"/api/v1/memory-notes/{saved['evidence_id']}/process", json={})
-            ).status_code == 409
-            assert (await client.get("/api/v1/memory-notes")).json() == []
+            again = await client.post("/api/v2/memories", json=addition)
+            assert again.status_code == 409
+            assert again.json()["detail"] == "memory_add_source_revoked"
+            status = await client.get(f"/api/v2/memories/additions/{addition['request_id']}")
+            assert status.status_code == 409
+            assert status.json()["detail"] == "memory_add_source_revoked"
 
     asyncio.run(scenario())
 
@@ -471,5 +480,159 @@ def test_sdk_context_search_sets_each_recall_lane_apart(tmp_path):
         assert [
             (call["limit"], call["schema_limit"], call["intention_limit"]) for call in calls
         ] == [(10, 3, 1), (5, 0, 2)]
+
+    asyncio.run(scenario())
+
+
+def _envelope(tools=("om_recall", "om_ask")) -> dict[str, str]:
+    return {
+        "x-one-memory-read-context": "external",
+        "x-one-memory-installation-id": "00000000-0000-0000-0000-000000000001",
+        "x-one-memory-installation-revision": "1",
+        "x-one-memory-allowed-scopes": json.dumps(["all-apps"]),
+        "x-one-memory-allowed-tools": json.dumps(list(tools)),
+    }
+
+
+def _bare_request(method: str, path: str, headers: dict[str, str]):
+    from starlette.requests import Request
+
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "headers": [(k.encode(), v.encode()) for k, v in headers.items()],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "/api/v2/memories"),
+        ("GET", f"/api/v2/memories/additions/{uuid4()}"),
+    ],
+)
+def test_memory_add_routes_are_denied_to_enveloped_requests(method, path):
+    """The broker writes as a trusted local caller; an external envelope never
+    reaches the add or status route, whatever tools it carries."""
+    from fastapi import HTTPException
+
+    from one_memory.external_memory_access import TOOLS, require_external_endpoint
+
+    with pytest.raises(HTTPException) as error:
+        require_external_endpoint(_bare_request(method, path, _envelope(sorted(TOOLS))))
+    assert (error.value.status_code, error.value.detail) == (403, "external_endpoint_denied")
+    # A trusted local caller (no envelope) is not refused by this gate.
+    require_external_endpoint(_bare_request(method, path, {}))
+
+
+def test_existing_memories_broker_routes_keep_their_access_rules():
+    """Adding `POST /api/v2/memories` neither opens nor closes the ask routes."""
+    from fastapi import HTTPException
+
+    from one_memory.external_memory_access import require_external_endpoint
+
+    for path in ("/api/v2/memories/ask", "/api/v2/memories/ask/stream"):
+        require_external_endpoint(_bare_request("POST", path, _envelope(("om_ask",))))
+        with pytest.raises(HTTPException) as denied:
+            require_external_endpoint(_bare_request("POST", path, _envelope(("om_recall",))))
+        assert denied.value.detail == "external_recall_scope_denied"
+    for method, path in (
+        ("GET", "/api/v2/memories/some-memory"),
+        ("GET", "/api/v2/memories/graph"),
+        ("PUT", "/api/v2/memories/some-memory"),
+        ("DELETE", "/api/v2/memories/some-memory"),
+    ):
+        with pytest.raises(HTTPException) as denied:
+            require_external_endpoint(_bare_request(method, path, _envelope(("om_ask",))))
+        assert denied.value.detail == "external_endpoint_denied"
+
+
+@pytest.mark.fresh_sdk
+def test_enveloped_memory_add_saves_nothing(tmp_path):
+    async def scenario():
+        app = application(tmp_path)
+        async with app.router.lifespan_context(app), client_for(app) as client:
+            addition = {"request_id": str(uuid4()), "text": "Remember this.", "scope": "all-apps"}
+            refused = await client.post("/api/v2/memories", json=addition, headers=_envelope())
+            assert refused.status_code == 403
+            assert refused.json()["detail"] == "external_endpoint_denied"
+            status = f"/api/v2/memories/additions/{addition['request_id']}"
+            assert (await client.get(status, headers=_envelope())).status_code == 403
+            assert (await client.get(status)).status_code == 404
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.fresh_sdk
+def test_memory_add_routes_do_not_collide_with_single_memory_routes(tmp_path):
+    """`/additions/{request_id}` is two segments and the add is a POST on the
+    collection: neither may be served by `/api/v2/memories/{memory_id}`."""
+    sdk_calls: list[tuple[str, object]] = []
+
+    class Client:
+        def __getattr__(self, name):
+            def record(*args, **kwargs):
+                sdk_calls.append((name, args))
+                return None
+
+            return record
+
+    class Handle:
+        async def client(self):
+            return Client()
+
+        async def close(self):
+            return None
+
+    async def scenario():
+        app = application(tmp_path)
+        request_id = str(uuid4())
+        async with app.router.lifespan_context(app), client_for(app) as client:
+            app.state.sdk_client_handle = Handle()
+            missing = await client.get(f"/api/v2/memories/additions/{request_id}")
+            assert missing.status_code == 404
+            assert missing.json()["detail"] == "memory_add_not_found"
+            created = await client.post(
+                "/api/v2/memories",
+                json={"request_id": request_id, "text": "Remember this.", "scope": "all-apps"},
+            )
+            assert created.status_code == 201
+            assert set(created.json()) == {
+                "evidence_id",
+                "text",
+                "scope",
+                "created_at",
+                "state",
+                "task_id",
+                "memory_ids",
+                "error",
+            }
+            status = await client.get(f"/api/v2/memories/additions/{request_id}")
+            assert status.json()["evidence_id"] == created.json()["evidence_id"]
+            # Neither route reached the single-memory SDK reads ...
+            assert not [call for call in sdk_calls if call[0] == "get"]
+            # ... while a single segment still does, even one named `additions`.
+            await client.get("/api/v2/memories/additions")
+            await client.get("/api/v2/memories/some-memory")
+            assert [call[1][0] for call in sdk_calls if call[0] == "get"] == [
+                "additions",
+                "some-memory",
+            ]
+            # The old note surface is gone.
+            assert (await client.get("/api/v1/memory-notes")).status_code == 404
+            assert (
+                await client.post(
+                    "/api/v1/memory-notes",
+                    json={"request_id": str(uuid4()), "text": "x", "scope": "all-apps"},
+                )
+            ).status_code == 404
+            schema = (await client.get("/openapi.json")).json()
+            assert "MemoryAddReceipt" in schema["components"]["schemas"]
+            assert "MemoryAddInput" in schema["components"]["schemas"]
+            assert not [name for name in schema["components"]["schemas"] if "Note" in name]
+            assert not [path for path in schema["paths"] if "note" in path]
 
     asyncio.run(scenario())

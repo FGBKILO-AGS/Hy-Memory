@@ -172,6 +172,20 @@ result = client.add_extracted(
 该入口仍走 SDK reconcile/持久化；MemHub 只做管理面门禁与可选
 `memory_id` 记录。
 
+应用的「添加记忆」、MCP `MemHub_write`（经 broker `POST /memories` 以本机可信身份转发）
+共用同一个本机 HTTP 合同，直接新增一条记忆：
+
+```text
+POST /api/v2/memories                         {request_id, text, scope: "all-apps"}
+GET  /api/v2/memories/additions/{request_id}  # 该次新增的状态
+```
+
+两者返回同一回执（`evidence_id`、`text`、`scope`、`created_at`、`state`、`task_id`、
+`memory_ids`、`error`）。同一 `request_id` 重放返回原回执；内容不同返回 409
+`memory_add_conflict`，未知 `request_id` 返回 404 `memory_add_not_found`。新增走持久
+写入队列的优先通道，最终调用 `add_extracted` + reconcile。带外部读取信封的请求
+一律拒绝（403 `external_endpoint_denied`）。
+
 ## Search：搜索记忆
 
 ```python

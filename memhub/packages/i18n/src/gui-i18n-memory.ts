@@ -300,9 +300,6 @@ export const memoryChineseMessages = {
   "memory:已保存，正在后台沉淀记忆": "已保存，正在后台沉淀记忆",
   "memory:未能确认保存结果，输入已保留。重试不会重复添加。":
     "未能确认保存结果，输入已保留。重试不会重复添加。",
-  "memory:整理未能开始，原话仍已保存。": "整理未能开始，原话仍已保存。",
-  "memory:整理结果尚未确认，原话仍已保存。请刷新后核对。":
-    "整理结果尚未确认，原话仍已保存。请刷新后核对。",
   "memory:模型服务要求检查余额或付款状态，原话仍已保存。":
     "模型服务要求检查余额或付款状态，原话仍已保存。",
   "memory:这台设备打不开 3D 视图，已显示关联列表。":
@@ -707,17 +704,14 @@ export const memorySpanishMessages: Record<
   "memory:整理已完成": "Procesamiento completado",
   "memory:原话已保存，未提取出可用记忆":
     "Texto guardado; no se extrajeron memorias utilizables",
-  "memory:最近添加的内容读取失败。": "No se pudieron leer las notas recientes.",
+  "memory:最近添加的内容读取失败。":
+    "No se pudieron leer las memorias añadidas recientemente.",
   "memory:整理状态暂时不可用，原话已保存。":
     "Estado del procesamiento no disponible. El texto está guardado.",
   "memory:已保存，正在后台沉淀记忆":
     "Guardado; generando memorias en segundo plano",
   "memory:未能确认保存结果，输入已保留。重试不会重复添加。":
     "No se pudo confirmar el guardado. Tu texto se conserva; reintentar no lo duplicará.",
-  "memory:整理未能开始，原话仍已保存。":
-    "No se pudo iniciar el procesamiento. El texto sigue guardado.",
-  "memory:整理结果尚未确认，原话仍已保存。请刷新后核对。":
-    "El resultado no está confirmado. El texto sigue guardado; actualiza para verificarlo.",
   "memory:模型服务要求检查余额或付款状态，原话仍已保存。":
     "Revisa el saldo o los pagos del proveedor. El texto sigue guardado.",
   "memory:这台设备打不开 3D 视图，已显示关联列表。":

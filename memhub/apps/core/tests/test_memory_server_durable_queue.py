@@ -963,7 +963,7 @@ class _SdkPublicClient:
     def add_extracted(self, contents, **kwargs):
         self.events.append("add_extracted")
         self.calls.append(("add_extracted", contents, kwargs))
-        return {"success": True, "memory_ids": ["memory-note"]}
+        return {"success": True, "memory_ids": ["memory-added"]}
 
     def get_write_outcome(self, request_id):
         self.calls.append(("get_write_outcome", request_id, {}))
@@ -988,7 +988,7 @@ def _sdk_evidence(
     text: str = "hello",
     memory_content: bool = False,
     source: str = "cursor",
-    manual_note: bool = False,
+    manual_addition: bool = False,
     created_at: datetime | None = None,
 ):
     from one_memory.imports.models import (
@@ -1002,7 +1002,7 @@ def _sdk_evidence(
 
     origin = (
         OriginMetadata(raw_meta={"input_mode": "direct_memory_note"})
-        if manual_note
+        if manual_addition
         else OriginMetadata()
     )
     return materialize_write_input(
@@ -1089,14 +1089,14 @@ def test_sdk_write_processor_calls_add_once_with_public_scope_and_receipt() -> N
     (
         _sdk_evidence("memory", text="remember this", memory_content=True),
         _sdk_evidence(
-            "note",
-            text="save this note",
+            "addition",
+            text="save this memory",
             source="one-memory-manual",
-            manual_note=True,
+            manual_addition=True,
         ),
     ),
 )
-def test_sdk_write_processor_uses_add_extracted_for_memory_content_and_notes(record) -> None:
+def test_sdk_write_processor_uses_add_extracted_for_memory_content_and_additions(record) -> None:
     from one_memory.sdk_write_processor import SdkWriteProcessor, SdkWriteReceipt
 
     client = _SdkPublicClient()
@@ -1112,7 +1112,7 @@ def test_sdk_write_processor_uses_add_extracted_for_memory_content_and_notes(rec
             before_hy_invocation=before,
         )
 
-    assert asyncio.run(run()) == SdkWriteReceipt(memory_ids=("memory-note",))
+    assert asyncio.run(run()) == SdkWriteReceipt(memory_ids=("memory-added",))
     assert client.events == ["before", "add_extracted"]
     assert client.calls[0][1] == [record.verbatim]
     assert len(client.calls) == 1
