@@ -233,7 +233,7 @@ it("shows latest recorded call separately without exposing recent-update detail 
   await screen.findByText("Codex 查到 3 条相关内容");
   expect(document.querySelector(".r6-home-call-direction")).toBeTruthy();
   expect(screen.queryByText("实际治理记忆")).toBeNull();
-  expect(screen.getByText(/今天 .+ · 查询成功/)).toBeTruthy();
+  expect(screen.getByText(/Codex · 今天 .+ · 查询成功/)).toBeTruthy();
   fireEvent.click(screen.getByRole("tab", { name: "最近更新" }));
   expect(screen.getByText("实际治理记忆")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "查看记忆" })).toBeNull();
@@ -246,10 +246,55 @@ it("shows latest recorded call separately without exposing recent-update detail 
   } else {
     // D96: the recent call still shows on the home page; only the way into
     // the call-history page is hidden.
-    expect(screen.getByText(/今天 .+ · 查询成功/)).toBeTruthy();
+    expect(screen.getByText(/Codex · 今天 .+ · 查询成功/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "查看记录" })).toBeNull();
     expect(onCalls).not.toHaveBeenCalled();
   }
+});
+it("skips direct diagnostics and shows the latest attributed application call", async () => {
+  history.mockResolvedValue({
+    available: true,
+    recording_error: false,
+    items: [
+      {
+        event_id: "direct-diagnostic",
+        host_id: null,
+        state: "grounded",
+        occurred_at: new Date().toISOString(),
+        memory_count: 1,
+        raw_count: 0,
+        references: [],
+      },
+      {
+        event_id: "workbuddy-call",
+        host_id: "workbuddy",
+        state: "grounded",
+        occurred_at: new Date(Date.now() - 60_000).toISOString(),
+        memory_count: 5,
+        raw_count: 0,
+        references: [],
+      },
+    ],
+  });
+  render(
+    <ApplicationsHome
+      imports={imports}
+      onManage={() => {}}
+      onMemories={() => {}}
+      onSettings={() => {}}
+      onCalls={() => {}}
+    />,
+  );
+
+  fireEvent.click(await screen.findByRole("tab", { name: "最近调用" }));
+  expect(await screen.findByText("WorkBuddy 查到 5 条相关内容")).toBeTruthy();
+  expect(screen.queryByText(/直接调用/)).toBeNull();
+  expect(screen.getByText(/WorkBuddy · 今天 .+ · 查询成功/)).toBeTruthy();
+  const direction = document.querySelector(".r6-home-call-direction");
+  expect(direction?.querySelector("img")?.getAttribute("src")).toContain(
+    "/r6/workbuddy.png",
+  );
+  expect(direction?.querySelector(".r6-app-initial")).toBeNull();
 });
 it("shows only the host for memory hits whose references have no source", async () => {
   history.mockResolvedValue({

@@ -94,6 +94,10 @@ function successfulCall(item: CallEvent) {
   return item.state === "grounded" || item.state === "empty";
 }
 
+function attributedSuccessfulCall(item: CallEvent) {
+  return item.host_id !== null && successfulCall(item);
+}
+
 function callAttention(events: CallEvent[]) {
   const hosts = new Set<string>();
   for (const event of events) {
@@ -212,7 +216,10 @@ export function ApplicationsHome({
         const result = await getCallHistory({ limit: 20, offset: 0 });
         if (cancelled) return;
         setCallEvents(result.items);
-        setRecentCall(result.items.find(successfulCall) ?? null);
+        // The home card promises an application identity. Direct diagnostic
+        // calls have no host and remain available in call history, but cannot
+        // truthfully supply the icon and name required by this surface.
+        setRecentCall(result.items.find(attributedSuccessfulCall) ?? null);
         setCallState(
           !result.available
             ? "disabled"
@@ -597,6 +604,9 @@ export function ApplicationsHome({
   const recentCallHost = imports.sources.find((source) =>
     sourceMatchesHost(source.source_id, recentCall?.host_id ?? null),
   );
+  const recentCallHostName = recentCall
+    ? (recentCallHost?.display_name ?? callHostName(recentCall.host_id, locale))
+    : null;
   const attention = callAttention(callEvents);
   const attentionHost = attention ? callHostName(attention.host, locale) : null;
   const activity = summaryUnavailable
@@ -934,8 +944,7 @@ export function ApplicationsHome({
                       : activity === "call" && recentCall
                         ? callDetailHeadline(
                             recentCall,
-                            recentCallHost?.display_name ??
-                              callHostName(recentCall.host_id, locale),
+                            recentCallHostName ?? undefined,
                             locale,
                           )
                         : activity === "memory" && latest
@@ -956,7 +965,7 @@ export function ApplicationsHome({
                         ? t("apps.callReadFailure")
                         : t("apps.memoryReadFailure")
                       : activity === "call" && recentCall
-                        ? `${stamped(recentCall.occurred_at, locale, t)} · ${callRowDetail(recentCall, locale)}${callState === "incomplete" ? t("apps.incompleteCalls") : ""}`
+                        ? `${recentCallHostName} · ${stamped(recentCall.occurred_at, locale, t)} · ${callRowDetail(recentCall, locale)}${callState === "incomplete" ? t("apps.incompleteCalls") : ""}`
                         : activity === "memory" && latest
                           ? [time, latestSourceNames.join(", ")]
                               .filter(Boolean)
