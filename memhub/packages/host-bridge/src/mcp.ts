@@ -2,16 +2,12 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import {
-  askThroughBroker,
   type BrokerClientOptions,
-  contextThroughBroker,
   diagnosticTraceThroughBroker,
   grantedToolsThroughBroker,
-  memoryWriteStatusThroughBroker,
-  memoryWriteThroughBroker,
+  memoryNoteThroughBroker,
   readHostCredentialFile,
   recallThroughBroker,
-  searchConversationsThroughBroker,
 } from "./broker-client.js";
 import { resolveHostWorkspacePath } from "./host-workspace.js";
 import { processMcpLine } from "./mcp-protocol.js";
@@ -37,17 +33,9 @@ const session = new McpSession(
     cwd: process.cwd(),
     home: os.homedir(),
   }),
-  (discovery, request) => askThroughBroker(discovery, request, clientOptions),
+  // The broker refuses a write without an authenticated installation.
   (discovery, request) =>
-    searchConversationsThroughBroker(discovery, request, clientOptions),
-  (discovery, request, signal) =>
-    contextThroughBroker(discovery, request, { ...clientOptions, signal }),
-  // The broker names the source from this credential; without it a write
-  // could not say which host it came from and is refused.
-  (discovery, request) =>
-    memoryWriteThroughBroker(discovery, request, clientOptions),
-  (discovery, requestId) =>
-    memoryWriteStatusThroughBroker(discovery, requestId, clientOptions),
+    memoryNoteThroughBroker(discovery, request, clientOptions),
   (discovery, request) =>
     diagnosticTraceThroughBroker(discovery, request, clientOptions),
   // What the grant allows, so the list a host sees is the list it may use.

@@ -704,11 +704,18 @@ export interface RecallRequest {
 }
 
 export interface RecallHit {
+  /** A memory id, or in raw mode the id of the original conversation excerpt. */
   memory_id: string;
   content: string;
-  /** `hy-sdk` means content already includes SDK-rendered logical time/history. */
-  content_format?: "plain" | "hy-sdk";
-  kind: MemoryKind;
+  /** `hy-sdk` means content already includes SDK-rendered logical time/history.
+   * `raw` means an original conversation excerpt, not a memory. */
+  content_format?: "plain" | "hy-sdk" | "raw";
+  /** `raw` only in raw mode: an excerpt carries no evidence ids and no scopes. */
+  kind: MemoryKind | "raw";
+  /** The app an excerpt came from (raw mode). */
+  source?: string | null;
+  /** The conversation an excerpt came from (raw mode). */
+  session_id?: string | null;
   scopes: string[];
   evidence_ids: string[];
   updated_at: string;
@@ -731,6 +738,13 @@ export interface RecallReceipt {
   truncated_by?: TruncationBudget | null;
   /** Scored (or known surplus) candidates left unreturned. */
   unexamined_count?: number;
+  /** Absent means `memory`. `raw` means Core searched imported original
+   * conversations instead, and the hits are excerpts, not confirmed memories. */
+  mode?: "memory" | "raw";
+  /** Why recall fell back to raw conversations. */
+  fallback_reason?: "model_unavailable" | "no_memories" | null;
+  /** Sources the caller was not allowed to read, left out of this result. */
+  excluded_sources?: string[];
 }
 
 export interface LiveSyncHealth {

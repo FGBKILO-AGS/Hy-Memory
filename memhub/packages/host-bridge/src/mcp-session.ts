@@ -1,34 +1,16 @@
 import { randomUUID } from "node:crypto";
-import type {
-  AskMemoryRequest,
-  ContextSearchRequest,
-  RecallRequest,
-  SdkAskMemoryResponse,
-  SdkContextSearchResponse,
-} from "@one-memory/contracts";
-import type { MemoryWriteReceipt } from "./broker-client.js";
+import type { MemoryNoteReceipt, RecallRequest } from "@one-memory/contracts";
 import {
-  askThroughBroker,
-  contextThroughBroker,
   diagnosticTraceThroughBroker,
-  memoryWriteStatusThroughBroker,
-  memoryWriteThroughBroker,
+  isMemoryNoteRequestId,
+  isMemoryNoteText,
+  MEMORY_NOTE_TEXT_MAX,
+  type MemoryNoteRequest,
+  memoryNoteThroughBroker,
   recallThroughBroker,
-  searchConversationsThroughBroker,
 } from "./broker-client.js";
-import {
-  CONTEXT_INPUT_SCHEMA,
-  CONTEXT_USAGE,
-  HOST_CONTEXT_TIMEOUT_MS,
-  isContextSearchRequest,
-} from "./context-protocol.js";
+import { HOST_CONTEXT_TIMEOUT_MS } from "./context-protocol.js";
 import { recallForHost } from "./host-facing.js";
-import {
-  isMemoryWriteRequestId,
-  isMemoryWriteToolRequest,
-  type MemoryWriteRequest,
-  type MemoryWriteToolRequest,
-} from "./memory-write-protocol.js";
 import { RECALL_PRESENTATION_GUIDANCE } from "./recall-presentation.js";
 
 interface JsonRpcRequest {
@@ -53,15 +35,10 @@ type Recall = (
   request: RecallRequest,
 ) => ReturnType<typeof recallThroughBroker>;
 
-type Ask = (
+type Write = (
   discoveryPath: string,
-  request: AskMemoryRequest,
-) => Promise<SdkAskMemoryResponse>;
-
-type SearchConversations = (
-  discoveryPath: string,
-  request: { query: string; limit?: number },
-) => Promise<SdkContextSearchResponse>;
+  request: MemoryNoteRequest,
+) => Promise<MemoryNoteReceipt>;
 
 type DiagnosticTrace = (
   discoveryPath: string,
@@ -70,17 +47,18 @@ type DiagnosticTrace = (
 
 // Tool descriptions also carry this guidance for hosts without a Skill.
 const MEMORY_USAGE_INSTRUCTIONS =
-  "Use MemHub when past decisions, preferences, constraints or prior work matter. " +
+  "MemHub exposes three tools: MemHub_recall reads memories, MemHub_write saves one new memory, and MemHub_diagnostic_trace reads diagnostic steps when detailed logging is enabled. " +
+  "Use MemHub_recall when past decisions, preferences, constraints or prior work matter; pass the query property. " +
   "Skip recall when prior context is irrelevant; recall is not required on every turn. " +
   "Before a real memory query starts, give one brief public action summary, not chain-of-thought. " +
   "Say it only when the query is actually sent, once per logical query. Do not say it when loading a Skill, reading static instructions, installing, or merely preparing a call. " +
-  "Do not repeat it for retries, pagination, or an internal raw and governed path of the same query. " +
+  "Do not repeat it for retries or pagination of the same query. " +
   'In Chinese context, say exactly "正在使用 MemHub 查询记忆"; otherwise use the current conversation language to say you are querying MemHub. ' +
   "Distinguish querying, results returned, and sources actually used in the answer. " +
-  "For MemHub_recall use the query property; for MemHub_ask use question. " +
-  "Use optional raw conversation or ask tools only if exposed and authorized for the requested scope. " +
+  'If a recall result has mode "raw", no generation model is configured or no memories exist yet, and MemHub searched imported original conversations instead: treat those hits as raw conversation excerpts, not confirmed memories, and say so. ' +
+  "Use MemHub_write only when the user asks you to remember something or states a durable preference, decision or constraint worth keeping; pass one concise conclusion as text, never a transcript. " +
+  "A write is processed asynchronously: a pending or waiting state means accepted, not failed. Retry a failed write with the same request_id instead of writing it again. " +
   "After a denial, do not retry it, switch tools or transports to bypass it, or broaden permissions. " +
-  "You may still use a successful authorized recall while clearly stating that raw conversations or a generated answer were not checked. " +
   "A returned result is not proof of adoption. Cite only sources actually used in the answer, from returned material. " +
   "Empty means no grounded result for this query, not that no history exists or nothing was imported. " +
   "If MemHub is offline, unavailable, or the call fails, say so plainly; do not claim a successful lookup or invent citations. Continue without recalled context. " +
@@ -88,17 +66,7 @@ const MEMORY_USAGE_INSTRUCTIONS =
   "Do not infer user approval from an agent report or from the pipeline's confirmed status. " +
   RECALL_PRESENTATION_GUIDANCE;
 
-export type { MemoryWriteRequest, MemoryWriteToolRequest };
-
 export class McpSession {
-  /** One write session per MCP process. A host starts the server per
-   * conversation, so this groups the writes of one conversation without
-   * asking the model to name a session it cannot see. */
-  private readonly writeSessionId = `mcp-${randomUUID()}`;
-  private readonly contextRequests = new Map<
-    string | number | null,
-    AbortController
-  >();
   constructor(
     private readonly discoveryPath: string,
     private readonly recall: Recall = recallThroughBroker,
@@ -109,24 +77,9 @@ export class McpSession {
      * which is exactly the cross-project boundary the workspace design
      * draws. The host's own answer cannot be talked into being wrong. */
     private readonly workspacePath?: string,
-    private readonly ask: Ask = askThroughBroker,
-    private readonly searchConversations: SearchConversations = searchConversationsThroughBroker,
-    private readonly context: (
-      path: string,
-      request: ContextSearchRequest,
-      signal?: AbortSignal,
-    ) => Promise<SdkContextSearchResponse> = (path, request, signal) =>
-      contextThroughBroker(path, request, { signal }),
-    /** A3-02: both write tools default to the broker, so the MCP door and the
-     * HTTP door reach the same durable entry rather than two paths to HY. */
-    private readonly memoryWrite: (
-      path: string,
-      request: MemoryWriteRequest,
-    ) => Promise<MemoryWriteReceipt> = memoryWriteThroughBroker,
-    private readonly memoryWriteStatus: (
-      path: string,
-      requestId: string,
-    ) => Promise<MemoryWriteReceipt | null> = memoryWriteStatusThroughBroker,
+    /** One hand-added memory, through the broker to Core's memory notes —
+     * the same entry the app's 添加记忆 uses. */
+    private readonly write: Write = memoryNoteThroughBroker,
     private readonly diagnosticTrace: DiagnosticTrace = diagnosticTraceThroughBroker,
     /** What the grant allows this installation to read.
      *
@@ -138,16 +91,6 @@ export class McpSession {
   ) {}
 
   async handle(request: JsonRpcRequest): Promise<JsonRpcResponse | null> {
-    if (request.method === "notifications/cancelled") {
-      const params = request.params as { requestId?: unknown } | undefined;
-      if (
-        params &&
-        (typeof params.requestId === "string" ||
-          typeof params.requestId === "number")
-      )
-        this.contextRequests.get(params.requestId)?.abort();
-      return null;
-    }
     if (request.method.startsWith("notifications/")) return null;
     const id = request.id ?? null;
 
@@ -159,7 +102,7 @@ export class McpSession {
           protocolVersion: protocolVersion(request.params),
           capabilities: { tools: {} },
           serverInfo: { name: "one-memory-recall", version: "0.0.0" },
-          instructions: `${MEMORY_USAGE_INSTRUCTIONS}\n\n${CONTEXT_USAGE}`,
+          instructions: MEMORY_USAGE_INSTRUCTIONS,
         },
       };
     }
@@ -186,11 +129,7 @@ export class McpSession {
   private async listedTools() {
     const definitions = [
       recallToolDefinition(),
-      askToolDefinition(),
-      conversationsToolDefinition(),
-      contextToolDefinition(),
-      memoryWriteToolDefinition(),
-      memoryWriteStatusToolDefinition(),
+      writeToolDefinition(),
       diagnosticTraceToolDefinition(),
     ];
     let granted: readonly string[] | null;
@@ -222,24 +161,6 @@ export class McpSession {
       };
     }
     try {
-      if (parsed.tool === "om_context") {
-        if (this.contextRequests.has(id))
-          throw new Error("MemHub context request id is already active");
-        const controller = new AbortController();
-        this.contextRequests.set(id, controller);
-        try {
-          const result = await this.context(
-            this.discoveryPath,
-            parsed.request,
-            controller.signal,
-          );
-          if (controller.signal.aborted)
-            throw new Error("MemHub context request was cancelled");
-          return toolSuccess(id, result);
-        } finally {
-          this.contextRequests.delete(id);
-        }
-      }
       if (parsed.tool === "om_recall") {
         const request =
           this.workspacePath === undefined
@@ -251,45 +172,21 @@ export class McpSession {
         // and the model read them out to the person.
         return toolSuccess(id, recallForHost(receipt));
       }
-      if (parsed.tool === "om_conversations") {
-        const found = await this.searchConversations(
-          this.discoveryPath,
-          parsed.request,
-        );
-        return toolSuccess(id, found);
-      }
-      if (parsed.tool === "om_memory_write") {
-        const receipt = await this.memoryWrite(this.discoveryPath, {
-          ...parsed.request,
-          request_id: parsed.request.request_id ?? randomUUID(),
-          session_id: this.writeSessionId,
+      if (parsed.tool === "om_write") {
+        // Generated here when the model gives none. Core's receipt does not
+        // carry it, so it is added to the result for a later retry.
+        const requestId = parsed.request.request_id ?? randomUUID();
+        const receipt = await this.write(this.discoveryPath, {
+          request_id: requestId,
+          text: parsed.request.text,
         });
-        // The id is the whole point: the host keeps it and asks later, rather
-        // than resubmitting (HY has no idempotency key, so a retry duplicates).
-        return toolSuccess(id, receipt);
+        // The id travels with the receipt so a retry can reuse it.
+        return toolSuccess(id, { request_id: requestId, ...receipt });
       }
-      if (parsed.tool === "om_memory_write_status") {
-        const receipt = await this.memoryWriteStatus(
-          this.discoveryPath,
-          parsed.request.request_id,
-        );
-        // null is a real answer: never accepted. Passed through rather than
-        // turned into an error, because the caller's next action differs.
-        return toolSuccess(id, receipt);
-      }
-      if (parsed.tool === "om_diagnostic_trace") {
-        return toolSuccess(
-          id,
-          await this.diagnosticTrace(this.discoveryPath, parsed.request),
-        );
-      }
-      const request =
-        this.workspacePath === undefined
-          ? parsed.request
-          : { ...parsed.request, workspace_path: this.workspacePath };
-      // Pass Core's refuse through unchanged. Do not invent an answer here.
-      const answer = await this.ask(this.discoveryPath, request);
-      return toolSuccess(id, answer);
+      return toolSuccess(
+        id,
+        await this.diagnosticTrace(this.discoveryPath, parsed.request),
+      );
     } catch (error) {
       return {
         jsonrpc: "2.0",
@@ -350,6 +247,9 @@ function recallToolDefinition() {
       "Covers the user's cross-app memories and, when the host states " +
       "one, the memories recorded in the current project. Read-only; " +
       "returns no candidate, rejected, or deleted memories. " +
+      "When no generation model is configured or no memories exist yet, it " +
+      'falls back to searching imported original conversations and says so with mode "raw" ' +
+      "(and a fallback_reason): treat those hits as raw conversation excerpts, not confirmed memories. " +
       MEMORY_USAGE_INSTRUCTIONS,
     inputSchema: {
       type: "object",
@@ -393,89 +293,51 @@ function recallToolDefinition() {
   };
 }
 
-function contextToolDefinition() {
-  const title = "MemHub context";
-  return {
-    name: "MemHub_context",
-    title,
-    description: CONTEXT_USAGE,
-    inputSchema: CONTEXT_INPUT_SCHEMA,
-    annotations: displayAnnotations(title),
-  };
-}
-
-/** A3-02: the durable write door, exposed to hosts as an MCP tool.
+/** One hand-added memory, the same entry as the app's 添加记忆.
  *
- * Deliberately described as *submitting*, never as writing: the tool returns a
- * request id and the write happens asynchronously through Core's v2 write
- * queue. A host that believes the write completed on return would resubmit on
- * the next turn and duplicate the memory, so a retry must reuse the id.
- *
- * Neither the session nor the source is a tool argument. The session is this
- * MCP process's own, and the broker names the source from the authenticated
- * installation: a model cannot file a memory under another host.
- */
-function memoryWriteToolDefinition() {
-  const title = "MemHub memory write";
+ * A conclusion, not a transcript: Core files it as a manual note and turns it
+ * into memories asynchronously, in a lane ahead of history import. Neither
+ * source nor scope is an argument; the note is always cross-app. */
+function writeToolDefinition() {
+  const title = "MemHub write";
   return {
-    name: "MemHub_memory_write",
+    name: "MemHub_write",
     title,
     description:
-      "Submit conversation messages for MemHub to turn into memories. Returns a request_id to poll with MemHub_memory_write_status; the write is applied asynchronously. Do not resubmit the same content: if a call must be retried, pass the same request_id. Include at least one user message.",
+      "Save one memory to MemHub, written by you or the user as a concise conclusion " +
+      "(a preference, decision, constraint or fact worth keeping), not a transcript of the conversation. " +
+      "Use it when the user asks you to remember something. " +
+      "The memory is processed asynchronously in a priority lane ahead of history import; " +
+      "the returned state may be pending, running, waiting_for_model or waiting_for_permission, which means accepted, not failed. " +
+      "If a call fails or times out, retry with the same request_id so the memory is not saved twice. " +
+      "Saved memories are available to every connected app.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
-      required: ["messages"],
+      required: ["text"],
       properties: {
-        messages: {
-          type: "array",
-          minItems: 1,
-          maxItems: 200,
-          items: {
-            type: "object",
-            additionalProperties: false,
-            required: ["role", "content"],
-            properties: {
-              role: { type: "string", enum: ["user", "assistant", "tool"] },
-              content: { type: "string", minLength: 1, maxLength: 12000 },
-            },
-          },
+        text: {
+          type: "string",
+          minLength: 1,
+          maxLength: MEMORY_NOTE_TEXT_MAX,
+          description: "The memory itself, in plain words. Must not be blank.",
         },
         request_id: {
           type: "string",
-          minLength: 1,
-          maxLength: 256,
+          format: "uuid",
           description:
-            "Optional idempotency key. Omit for a new write; reuse it only to retry the same write.",
+            "Optional idempotency key (UUID). Omit for a new memory; reuse the same value only to retry the same write.",
         },
-        memory_at: {
-          type: "string",
-          format: "date-time",
-          description: "When the conversation happened (RFC 3339).",
-        },
-        priority: { type: "string", enum: ["live", "normal"] },
       },
     },
-    annotations: displayAnnotations(title),
-  };
-}
-
-function memoryWriteStatusToolDefinition() {
-  const title = "MemHub memory write status";
-  return {
-    name: "MemHub_memory_write_status",
-    title,
-    description:
-      "Read the outcome of a submitted memory write by request_id. Returns null when the id was never accepted, which is different from a write that was accepted and failed.",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["request_id"],
-      properties: {
-        request_id: { type: "string", minLength: 1, maxLength: 256 },
-      },
+    annotations: {
+      title,
+      readOnlyHint: false,
+      destructiveHint: false,
+      // Idempotent for a reused request_id: Core returns the original note.
+      idempotentHint: true,
+      openWorldHint: false,
     },
-    annotations: displayAnnotations(title),
   };
 }
 
@@ -498,79 +360,6 @@ function diagnosticTraceToolDefinition() {
   };
 }
 
-function conversationsToolDefinition() {
-  const title = "MemHub conversation";
-  return {
-    name: "MemHub_conversations",
-    title,
-    description:
-      "Search the user's original conversations from every app MemHub " +
-      "has imported, and return verbatim excerpts. Each item is " +
-      "kind raw with content, the source app, session_id and memory_at " +
-      "(when it was said). Use this when the user refers to something they " +
-      "discussed in another app — 'the task I was working on in Cursor', " +
-      "'what we decided last week' — and you need what was actually said, " +
-      "not a summary of it. MemHub_recall returns memories; this " +
-      "returns the exchange. Read-only; reads nothing that was not already " +
-      "imported, and only from apps this installation may read. " +
-      MEMORY_USAGE_INSTRUCTIONS,
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["query"],
-      properties: {
-        query: {
-          type: "string",
-          minLength: 1,
-          maxLength: 512,
-        },
-        limit: {
-          type: "integer",
-          minimum: 1,
-          maximum: 20,
-          default: 20,
-        },
-      },
-    },
-    annotations: displayAnnotations(title),
-  };
-}
-
-function askToolDefinition() {
-  const title = "MemHub ask";
-  return {
-    name: "MemHub_ask",
-    title,
-    description:
-      "Ask a grounded question against MemHub. Returns an answer with " +
-      "cited memories, or an explicit refuse when evidence is insufficient. " +
-      "Same scope boundary as MemHub_recall: cross-app memories plus the current " +
-      "project when the host states one. Read-only; never invents an answer. " +
-      MEMORY_USAGE_INSTRUCTIONS,
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["question"],
-      properties: {
-        question: {
-          type: "string",
-          minLength: 1,
-          maxLength: 2000,
-        },
-        scope: {
-          type: "string",
-          minLength: 1,
-          maxLength: 512,
-          default: "all-apps",
-          description:
-            "Use all-apps or a scope resolved from the current host workspace. Wildcard and private scopes are not available to external tools.",
-        },
-      },
-    },
-    annotations: displayAnnotations(title),
-  };
-}
-
 function protocolVersion(params: unknown): string {
   if (params && typeof params === "object" && "protocolVersion" in params) {
     const version = (params as { protocolVersion?: unknown }).protocolVersion;
@@ -585,21 +374,9 @@ const LISTED_TOOL_ALIASES: Record<string, string> = {
   MemHub_recall: "om_recall",
   memhub_recall: "om_recall",
   om_recall: "om_recall",
-  MemHub_ask: "om_ask",
-  memhub_ask: "om_ask",
-  om_ask: "om_ask",
-  MemHub_conversations: "om_conversations",
-  memhub_conversations: "om_conversations",
-  om_conversations: "om_conversations",
-  MemHub_context: "om_context",
-  memhub_context: "om_context",
-  om_context: "om_context",
-  MemHub_memory_write: "om_memory_write",
-  memhub_memory_write: "om_memory_write",
-  om_memory_write: "om_memory_write",
-  MemHub_memory_write_status: "om_memory_write_status",
-  memhub_memory_write_status: "om_memory_write_status",
-  om_memory_write_status: "om_memory_write_status",
+  MemHub_write: "om_write",
+  memhub_write: "om_write",
+  om_write: "om_write",
   MemHub_diagnostic_trace: "om_diagnostic_trace",
   memhub_diagnostic_trace: "om_diagnostic_trace",
   om_diagnostic_trace: "om_diagnostic_trace",
@@ -611,42 +388,19 @@ function canonicalListedTool(name: unknown): string | undefined {
 
 /** The tools a grant decides on. The rest are open to every installation, so
  * an empty grant cannot be taken as permission to hide them. */
-const GRANT_GOVERNED_TOOLS = new Set([
-  "om_recall",
-  "om_ask",
-  "om_conversations",
-  "om_diagnostic_trace",
-]);
+const GRANT_GOVERNED_TOOLS = new Set(["om_recall", "om_diagnostic_trace"]);
 
 /** What the grant allows, or null when it could not be read. */
 export type GrantedTools = (
   discoveryPath: string,
 ) => Promise<readonly string[] | null>;
 
-function isMemoryWriteStatusRequest(
-  value: unknown,
-): value is { request_id: string } {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const call = value as Record<string, unknown>;
-  return (
-    Object.keys(call).length === 1 && isMemoryWriteRequestId(call.request_id)
-  );
-}
-
 function parseToolCall(params: unknown):
-  | { ok: true; tool: "om_context"; request: ContextSearchRequest }
   | { ok: true; tool: "om_recall"; request: RecallRequest }
   | {
       ok: true;
-      tool: "om_conversations";
-      request: { query: string; limit?: number };
-    }
-  | { ok: true; tool: "om_ask"; request: AskMemoryRequest }
-  | { ok: true; tool: "om_memory_write"; request: MemoryWriteToolRequest }
-  | {
-      ok: true;
-      tool: "om_memory_write_status";
-      request: { request_id: string };
+      tool: "om_write";
+      request: { text: string; request_id?: string };
     }
   | {
       ok: true;
@@ -676,42 +430,45 @@ function parseToolCall(params: unknown):
       return { ok: false, message: "diagnostic trace requires one valid id" };
     return { ok: true, tool: "om_diagnostic_trace", request: value };
   }
-  if (toolName === "om_memory_write") {
-    return isMemoryWriteToolRequest(call.arguments)
-      ? { ok: true, tool: "om_memory_write", request: call.arguments }
-      : {
-          ok: false,
-          message:
-            "om_memory_write requires 1-200 messages with at least one user turn; session and source are not arguments",
-        };
-  }
-  if (toolName === "om_memory_write_status") {
-    return isMemoryWriteStatusRequest(call.arguments)
-      ? { ok: true, tool: "om_memory_write_status", request: call.arguments }
-      : {
-          ok: false,
-          message: "om_memory_write_status requires a request_id",
-        };
-  }
-  if (toolName === "om_context") {
-    return isContextSearchRequest(call.arguments)
-      ? { ok: true, tool: "om_context", request: call.arguments }
-      : {
-          ok: false,
-          message:
-            "om_context requires a valid bounded query; unknown identity/scope fields are not allowed",
-        };
-  }
-  if (toolName === "om_recall") {
-    return parseRecallArgs(call.arguments);
-  }
-  if (toolName === "om_conversations") {
-    return parseConversationsArgs(call.arguments);
-  }
-  if (toolName === "om_ask") {
-    return parseAskArgs(call.arguments);
-  }
+  if (toolName === "om_write") return parseWriteArgs(call.arguments);
+  if (toolName === "om_recall") return parseRecallArgs(call.arguments);
   return { ok: false, message: `Unknown tool: ${String(call.name)}` };
+}
+
+function parseWriteArgs(args: unknown):
+  | {
+      ok: true;
+      tool: "om_write";
+      request: { text: string; request_id?: string };
+    }
+  | { ok: false; message: string } {
+  if (!args || typeof args !== "object" || Array.isArray(args))
+    return { ok: false, message: "MemHub_write arguments must be an object" };
+  const input = args as Record<string, unknown>;
+  if (Object.keys(input).some((key) => key !== "text" && key !== "request_id"))
+    return {
+      ok: false,
+      message:
+        "MemHub_write accepts only text and request_id; source and scope are not arguments",
+    };
+  if (!isMemoryNoteText(input.text))
+    return {
+      ok: false,
+      message: `text must contain 1 to ${MEMORY_NOTE_TEXT_MAX} characters and not be blank`,
+    };
+  if (
+    input.request_id !== undefined &&
+    !isMemoryNoteRequestId(input.request_id)
+  )
+    return { ok: false, message: "request_id must be a UUID" };
+  return {
+    ok: true,
+    tool: "om_write",
+    request:
+      input.request_id === undefined
+        ? { text: input.text }
+        : { text: input.text, request_id: input.request_id },
+  };
 }
 
 function parseRecallArgs(
@@ -788,81 +545,4 @@ function parseRecallArgs(
     request.timeout_ms = input.timeout_ms;
   }
   return { ok: true, tool: "om_recall", request };
-}
-
-function parseConversationsArgs(value: unknown):
-  | {
-      ok: true;
-      tool: "om_conversations";
-      request: { query: string; limit?: number };
-    }
-  | { ok: false; message: string } {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {
-      ok: false,
-      message: "om_conversations arguments must be an object",
-    };
-  }
-  const args = value as Record<string, unknown>;
-  const allowed = new Set(["query", "limit"]);
-  if (Object.keys(args).some((key) => !allowed.has(key))) {
-    return {
-      ok: false,
-      message: "om_conversations contains unknown arguments",
-    };
-  }
-  if (
-    typeof args.query !== "string" ||
-    args.query.length < 1 ||
-    args.query.length > 512
-  ) {
-    return { ok: false, message: "query must contain 1 to 512 characters" };
-  }
-  if (
-    args.limit !== undefined &&
-    (!Number.isInteger(args.limit) ||
-      (args.limit as number) < 1 ||
-      (args.limit as number) > 20)
-  ) {
-    return { ok: false, message: "limit must be an integer from 1 to 20" };
-  }
-  const request: { query: string; limit?: number } = { query: args.query };
-  if (args.limit !== undefined) request.limit = args.limit as number;
-  return { ok: true, tool: "om_conversations", request };
-}
-
-function parseAskArgs(
-  args: unknown,
-):
-  | { ok: true; tool: "om_ask"; request: AskMemoryRequest }
-  | { ok: false; message: string } {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
-    return { ok: false, message: "om_ask arguments must be an object" };
-  }
-  const input = args as Record<string, unknown>;
-  const allowed = new Set(["question", "scope"]);
-  if (Object.keys(input).some((key) => !allowed.has(key))) {
-    return { ok: false, message: "om_ask contains unknown arguments" };
-  }
-  if (
-    typeof input.question !== "string" ||
-    input.question.length < 1 ||
-    input.question.length > 2_000
-  ) {
-    return {
-      ok: false,
-      message: "question must contain 1 to 2000 characters",
-    };
-  }
-  if (
-    input.scope !== undefined &&
-    (typeof input.scope !== "string" ||
-      input.scope.length < 1 ||
-      input.scope.length > 512)
-  ) {
-    return { ok: false, message: "scope must contain 1 to 512 characters" };
-  }
-  const request: AskMemoryRequest = { question: input.question };
-  if (typeof input.scope === "string") request.scope = input.scope;
-  return { ok: true, tool: "om_ask", request };
 }

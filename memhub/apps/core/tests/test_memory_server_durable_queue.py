@@ -5330,3 +5330,70 @@ def test_equal_event_time_uses_queue_sequence_inside_one_session(tmp_path) -> No
         owner="equal-owner",
     )
     assert drain.claim(limit=10) == (second.job_id,)
+
+
+def test_a_hand_added_memory_is_claimed_ahead_of_unprocessed_history(tmp_path) -> None:
+    """A hand-added memory ("添加记忆") waited behind every unprocessed history job.
+
+    History is claimed through a ten-minute event-time window, oldest first. A
+    note is stamped "now", so with a backlog it sat at the far end of the
+    timeline and ran only after the whole history was digested.
+    """
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    old = datetime(2025, 1, 1, tzinfo=UTC)
+    history = [
+        queue.submit(
+            _request(
+                key=f"history-{index}",
+                evidence=(f"h{index}",),
+                source="cursor",
+                session=f"cursor-{index}",
+                event_at=old + timedelta(hours=index),
+            )
+        )
+        for index in range(3)
+    ]
+    note = queue.submit(
+        _request(
+            key="note",
+            evidence=("n1",),
+            source="one-memory-manual",
+            session="note:1",
+            event_at=datetime.now(UTC),
+        )
+    )
+    drain = DurableWriteDrain(queue, execute=_never_execute)
+
+    assert drain.claim(limit=1) == (note.job_id,)
+    # History keeps its own order through the window.
+    assert drain.claim(limit=1) == (history[0].job_id,)
+
+
+def test_hand_added_memories_still_run_one_at_a_time_in_order(tmp_path) -> None:
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    now = datetime.now(UTC)
+    first = queue.submit(
+        _request(
+            key="note-1",
+            evidence=("n1",),
+            source="one-memory-manual",
+            session="note:1",
+            event_at=now,
+        )
+    )
+    second = queue.submit(
+        _request(
+            key="note-2",
+            evidence=("n2",),
+            source="one-memory-manual",
+            session="note:2",
+            event_at=now + timedelta(seconds=1),
+        )
+    )
+    drain = DurableWriteDrain(queue, execute=_never_execute)
+
+    assert drain.claim(limit=5) == (first.job_id,)
+    # Its source is busy: the next note waits for the running one, not for history.
+    assert drain.claim(limit=5) == ()
+    assert queue.get("note-2").state == PENDING
+    assert second.job_id

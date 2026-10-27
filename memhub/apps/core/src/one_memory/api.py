@@ -74,7 +74,11 @@ from one_memory.exception_reporting import (
     report_exception,
     watched_task,
 )
-from one_memory.external_memory_access import external_access, require_external_endpoint
+from one_memory.external_memory_access import (
+    ExternalMemoryAccess,
+    external_access,
+    require_external_endpoint,
+)
 from one_memory.extraction_settings import ExtractionSettings, ExtractionSettingsStore
 from one_memory.file_imports import FileImportStore, file_import_router
 from one_memory.hy_graph_admin import GraphWidthDecision, GraphWidthMismatch
@@ -96,11 +100,13 @@ from one_memory.hy_sdk_types import (
     HySdkError,
     HySdkMemoryPage,
     HySdkMemoryRecord,
+    HySdkRawHit,
     HySdkRawPage,
     HySdkRawRecord,
     HySdkReadError,
     HySdkUserProfile,
     library_keyword_hits,
+    parse_sdk_raw_search,
     parse_sdk_search,
 )
 from one_memory.imports.access import (
@@ -3239,6 +3245,7 @@ def create_app(
         http_request: Request,
     ) -> RecallReceipt:
         from one_memory.call_event_recorder import record_legacy_result
+        from one_memory.recall_fallback import recall_with_fallback
 
         started = time.monotonic()
         await _require_external_recall_scope(
@@ -3246,7 +3253,16 @@ def create_app(
         )
         target = _recall_target(app)
         access = external_access(http_request.headers)
-        receipt = await target.recall_async(request)
+        receipt = await recall_with_fallback(
+            request,
+            model_ready=lambda: _recall_model_ready(app),
+            recall_memories=target.recall_async,
+            has_memories=lambda: _library_has_memories(app),
+            raw_sources=lambda: _recall_raw_sources(app, request, access, started),
+            search_raw=lambda query, limit, sources: _search_sdk_raw(
+                app, query, limit=limit, sources=sources
+            ),
+        )
         event_store = getattr(app.state, "call_event_store", None)
         if event_store is not None and request.query != "__om_probe__":
             try:
@@ -4304,6 +4320,100 @@ def _sdk_memory_runtime(app: FastAPI) -> SdkMemoryRuntime:
         SdkMemoryRuntime,
         app.state.sdk_memory_runtime,
     )
+
+
+async def _recall_model_ready(app: FastAPI) -> bool:
+    """A generation model is configured and usable, so memories can exist."""
+    try:
+        profile = await asyncio.to_thread(_model_profile_store(app).active, _secret_store(app))
+    except Exception:
+        return False
+    return profile is not None and bool(profile.capabilities.model_available)
+
+
+async def _library_has_memories(app: FastAPI) -> bool:
+    """Any active memory at all. Asked only after an empty memory search."""
+    try:
+        client = await _sdk_client_handle(app).client()
+        raw = await asyncio.to_thread(
+            client.list_memories,
+            user_id="local",
+            statuses=["active"],
+            limit=1,
+            offset=0,
+            order="desc",
+        )
+        page, _ = HySdkMemoryPage.from_sdk_skipping_invalid(raw, limit=1, offset=0)
+    except Exception:
+        # Unknown is not "empty": keep the memory answer rather than guess.
+        return True
+    return page.total > 0
+
+
+async def _recall_raw_sources(
+    app: FastAPI,
+    request: RecallRequest,
+    access: ExternalMemoryAccess | None,
+    started: float,
+) -> frozenset[str] | None:
+    """The raw sources this caller may read: the `/context` raw-lane rule.
+
+    Recall's own grant does not cover original conversations. A host reads
+    them only with `om_conversations` and its granted, unrevoked sources; a
+    trusted local caller reads every source.
+    """
+    if access is None:
+        return None
+    from one_memory.context_access import resolve_context_authority
+    from one_memory.context_models import ContextSearchRequest
+
+    query = ContextSearchRequest(
+        query=request.query,
+        kinds=("raw",),
+        limit=request.limit,
+        character_budget=request.character_budget,
+        timeout_ms=request.timeout_ms,
+    )
+    try:
+        authority = await asyncio.to_thread(
+            resolve_context_authority,
+            query,
+            access,
+            _evidence_store(app).database_path,
+            deadline=started + request.timeout_ms / 1_000,
+        )
+    except (HTTPException, TimeoutError):
+        return frozenset()
+    if not authority.raw_allowed:
+        return frozenset()
+    return frozenset(authority.raw_sources or ())
+
+
+async def _search_sdk_raw(
+    app: FastAPI,
+    query: str,
+    *,
+    limit: int,
+    sources: frozenset[str] | None,
+) -> tuple[HySdkRawHit, ...]:
+    """The imported conversations nearest the query: the SDK raw layer."""
+    client = await _sdk_client_handle(app).client()
+    raw = await asyncio.to_thread(
+        client.search,
+        query,
+        user_ids=["local"],
+        agent_ids=[],
+        include_sources=sorted(sources) if sources else None,
+        limit=limit,
+        min_score=0.0,
+        schema_min_score=0.0,
+        schema_limit=0,
+        intention_limit=0,
+        scene="chat",
+        reader=HY_MEMORY_READER,
+        layers=["l1_raw"],
+    )
+    return parse_sdk_raw_search(raw)
 
 
 def _sdk_client_handle(app: FastAPI) -> SdkClientHandle:
