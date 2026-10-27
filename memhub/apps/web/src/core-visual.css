@@ -855,6 +855,18 @@ button.rail-button.active::before {
   font-size: 11px;
   color: var(--tx3);
 }
+/* Which part of the library the memory is from: chat, work or coding. */
+.map-memory-scene {
+  grid-column: 2;
+  justify-self: start;
+  align-self: flex-start;
+  padding: 0 6px;
+  border: 0.5px solid var(--bd);
+  border-radius: 3px;
+  color: var(--tx3);
+  font-size: 10px;
+  line-height: 1.6;
+}
 .map-memory-made {
   display: block;
   opacity: 0.72;

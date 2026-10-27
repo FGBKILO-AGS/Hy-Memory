@@ -49,7 +49,13 @@ import { subscribePoll } from "./poll-scheduler";
 import { R6Button } from "./R6Controls";
 import { SdkMemoryLibrary } from "./SdkMemoryLibrary";
 import { SdkRawHistory } from "./SdkRawHistory";
-import { sdkDetail, sdkLibraryPage } from "./sdk-memory-map";
+import {
+  SDK_MEMORY_PAGE_SIZE,
+  sdkDetail,
+  sdkEditableText,
+  sdkLibraryPage,
+  sdkNamespace,
+} from "./sdk-memory-map";
 import { sourceNameOr, UNATTRIBUTED_SOURCE_ID } from "./source-label";
 import { traceUiAction } from "./ui-trace";
 import { isDefiniteRefusal, writeTraceStatus } from "./write-outcome";
@@ -188,6 +194,16 @@ export function MemorySpace({
   const [sdkLibraryQuery, setSdkLibraryQuery] = useState("");
   const [sdkLibrarySource, setSdkLibrarySource] = useState("");
   const [sdkLibraryOffset, setSdkLibraryOffset] = useState(0);
+  // A keyword search pages through one server-side result window. The id is
+  // kept for the query and source it was searched with; a new query or
+  // source starts without one, so the server searches afresh.
+  const sdkSearchWindow = useRef<{ key: string; id: string | null }>({
+    key: "",
+    id: null,
+  });
+  // The page the list shows, for the namespace of a memory being opened.
+  const sdkPageRef = useRef<MemoryLibraryPage | null>(null);
+  sdkPageRef.current = sdkLibrary.page;
   const sdkMapVisible = simplified && active && displayedMode === "map";
   useEffect(() => {
     if (!sdkMapVisible) return;
@@ -197,7 +213,10 @@ export function MemorySpace({
     let cancelled = false;
     let controller: AbortController | null = null;
     const source = sdkLibrarySource || undefined;
-    const query = sdkLibraryQuery || undefined;
+    const query = sdkLibraryQuery.trim() || undefined;
+    const windowKey = JSON.stringify([query ?? "", source ?? ""]);
+    if (sdkSearchWindow.current.key !== windowKey)
+      sdkSearchWindow.current = { key: windowKey, id: null };
     const read = async (first: boolean) => {
       controller?.abort();
       const request = new AbortController();
@@ -211,17 +230,37 @@ export function MemorySpace({
               source,
               query,
               offset: sdkLibraryOffset,
-              limit: 100,
+              limit: SDK_MEMORY_PAGE_SIZE,
+              windowId: query ? sdkSearchWindow.current.id : null,
             },
             request.signal,
           ),
-          // The overlay is decoration: the list stands without it.
+          // The overlay is decoration: the list stands without it. It reads
+          // chat memories only, newest first; a mixed page's chat rows are
+          // among the newest offset+page chat memories, so that prefix holds
+          // every relation the page can draw.
           getSdkMemoryGraph(
-            { source, offset: query ? 0 : sdkLibraryOffset, limit: 100 },
+            {
+              source,
+              offset: 0,
+              limit: query
+                ? 100
+                : Math.min(
+                    300,
+                    Math.max(100, sdkLibraryOffset + SDK_MEMORY_PAGE_SIZE),
+                  ),
+            },
             request.signal,
           ).catch(() => null),
         ]);
         if (cancelled) return;
+        if (sdkSearchWindow.current.key === windowKey)
+          sdkSearchWindow.current = {
+            key: windowKey,
+            id: page.window_id ?? null,
+          };
+        // The window expired: the server searched again and answered page 1.
+        if (page.window_reset && sdkLibraryOffset !== 0) setSdkLibraryOffset(0);
         setSdkLibrary({
           page: sdkLibraryPage(page),
           loading: false,
@@ -547,12 +586,16 @@ export function MemorySpace({
       // The inspector reads the memory through v2 and renders it in place.
       // Staying here keeps the map's list, graph and detail where the design
       // put them.
-      const result = sdkDetail(await getSdkMemory(memoryId));
+      const record = await getSdkMemory(
+        memoryId,
+        sdkNamespace(sdkPageRef.current?.sdk_memory_refs?.[memoryId]),
+      );
+      const result = sdkDetail(record);
       if (epoch !== detailEpoch.current || result.memory.memory_id !== memoryId)
         return;
       setDetail(result);
       setDetailLoad(null);
-      setDraft(result.memory.content);
+      setDraft(sdkEditableText(record));
     } catch (reason) {
       if (epoch === detailEpoch.current) {
         setError(message(reason, t));
@@ -586,7 +629,11 @@ export function MemorySpace({
     // An SDK memory is removed outright: there is no revision to undo.
     const trace = traceUiAction("memory", "confirm");
     try {
-      await deleteSdkMemory(detail.memory.memory_id, trace.traceId);
+      await deleteSdkMemory(
+        detail.memory.memory_id,
+        trace.traceId,
+        sdkNamespace(detail.sdk_ref),
+      );
       trace.done("succeeded");
       closeDetail();
       bumpSdkMap();
@@ -613,10 +660,11 @@ export function MemorySpace({
         detail.memory.memory_id,
         draft,
         trace.traceId,
+        sdkNamespace(detail.sdk_ref),
       );
       trace.done("succeeded");
       setDetail(sdkDetail(saved));
-      setDraft(saved.content);
+      setDraft(sdkEditableText(saved));
       bumpSdkMap();
     } catch (reason) {
       trace.done(writeTraceStatus(reason), {

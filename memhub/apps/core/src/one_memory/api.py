@@ -91,6 +91,7 @@ from one_memory.hy_runtime_config import (
     set_diagnostic_log_level,
 )
 from one_memory.hy_sdk_runtime import (
+    AmbiguousMemoryIdError,
     SdkClientHandle,
     builtin_retrieval_snapshot,
     close_all_shared_runtimes,
@@ -105,6 +106,7 @@ from one_memory.hy_sdk_types import (
     HySdkRawRecord,
     HySdkReadError,
     HySdkUserProfile,
+    LibraryHit,
     library_keyword_hits,
     parse_sdk_raw_search,
     parse_sdk_search,
@@ -158,6 +160,7 @@ from one_memory.imports.sources.registry import (
 )
 from one_memory.imports.storage import EvidenceStore
 from one_memory.imports.supervisor import ImportSupervisor
+from one_memory.library_search_window import LibrarySearchWindows, window_key
 from one_memory.library_upgrade import LibraryUpgradeError, prepare_library
 from one_memory.loop_watchdog import LoopWatchdog
 from one_memory.memory_governance import (
@@ -402,10 +405,20 @@ class ConnectSourcesResponse(BaseModel):
     request_id: str | None = None
 
 
+SdkMemoryKind = Literal["chat", "experience", "fact"]
+SdkMemoryVariant = Literal["working", "coding"]
+
+
 class SdkMemoryUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # Chat: the memory text. Experience: the solution. Fact: the statement.
     content: str = Field(min_length=1, max_length=200_000)
+    # Optional namespace, as listed on the memory (`kind`, `variant`).
+    kind: SdkMemoryKind | None = None
+    variant: SdkMemoryVariant | None = None
+    # Experiences only: also replace the task.
+    task: str | None = Field(default=None, min_length=1, max_length=200_000)
 
 
 class SdkUserProfileResponse(BaseModel):
@@ -2841,8 +2854,21 @@ def create_app(
         source: str | None = Query(default=None, min_length=1),
         query: str | None = Query(default=None, max_length=512),
         offset: int = Query(default=0, ge=0),
-        limit: int = Query(default=100, ge=1, le=500),
+        limit: int = Query(default=LIBRARY_PAGE_SIZE, ge=1, le=500),
+        window_id: str | None = Query(default=None, min_length=1, max_length=64),
     ) -> HySdkMemoryPage:
+        """One page of memories across chat, working and coding.
+
+        Without `query`: `list_memories(scene="all")`, newest update first;
+        `total` is the SDK's count across the three scenes.
+
+        With `query`: keyword search over one SDK relevance window (see
+        `_library_search_page`). The first request (no `window_id`) searches
+        and returns a `window_id`; later pages pass it back with their offset
+        and are cut from the same matches, so pages never overlap or skip. A
+        `window_id` that expired or was searched with other filters searches
+        again and answers page 1 with `window_reset: true`.
+        """
         try:
             client = await _sdk_client_handle(app).client()
             search_query = (query or "").strip()
@@ -2852,59 +2878,25 @@ def create_app(
                         status_code=422,
                         detail="sdk_search_supports_active_status_only",
                     )
-                # SDK search has no count-only contract and, on the local store,
-                # no keyword channel. Ask for one bounded relevance window with
-                # no score floor, then keep the rows that contain the words, so
-                # a word in the library is found and a word in none of it finds
-                # nothing. The whole library is never listed in Core.
-                # A larger window made one search take long enough to freeze
-                # the page; 20 is the bounded window the library searches.
-                fetch = 20
-                search_raw = await asyncio.to_thread(
-                    client.search,
-                    search_query,
-                    user_ids=["local"],
-                    agent_ids=[],
-                    include_sources=[source] if source else None,
-                    limit=fetch,
-                    min_score=0.0,
-                    schema_min_score=0.0,
-                    schema_limit=fetch,
-                    # The library lists stored memories; proactive intentions
-                    # are a recall-time lane the list never shows.
-                    intention_limit=0,
-                    scene="normal",
-                    reader=HY_MEMORY_READER,
-                )
-                hit_ids, window = library_keyword_hits(search_raw, search_query)
-                rows = await _get_sdk_rows(client, list(hit_ids[offset : offset + limit]))
-                memories: list[HySdkMemoryRecord] = []
-                skipped = 0
-                for row in rows:
-                    if row is None:
-                        continue
-                    try:
-                        record = HySdkMemoryRecord.from_sdk(row)
-                    except HySdkReadError:
-                        skipped += 1
-                        continue
-                    if record.status == "active":
-                        memories.append(record)
-                _log_skipped_sdk_memories(skipped)
-                return HySdkMemoryPage(
-                    memories=tuple(memories),
-                    total=len(hit_ids),
-                    limit=limit,
+                return await _library_search_page(
+                    app,
+                    client,
+                    query=search_query,
+                    source=source,
+                    statuses=list(statuses),
                     offset=offset,
-                    search_window=fetch if window >= fetch else None,
+                    limit=limit,
+                    window_id=window_id,
                 )
             raw = await asyncio.to_thread(
                 client.list_memories,
                 user_id="local",
+                scene="all",
                 statuses=list(statuses),
                 include_sources=[source] if source else None,
                 offset=offset,
                 limit=limit,
+                order="desc",
             )
             page, skipped = HySdkMemoryPage.from_sdk_skipping_invalid(
                 raw, limit=limit, offset=offset
@@ -3072,9 +3064,18 @@ def create_app(
         response_model=HySdkMemoryRecord,
         dependencies=protected,
     )
-    async def get_sdk_memory(memory_id: str) -> HySdkMemoryRecord:
+    async def get_sdk_memory(
+        memory_id: str,
+        kind: SdkMemoryKind | None = None,
+        variant: SdkMemoryVariant | None = None,
+    ) -> HySdkMemoryRecord:
+        _check_memory_namespace(kind, variant)
         try:
-            memory = await _get_sdk_memory(_sdk_client_handle(app), memory_id)
+            memory = await _get_sdk_memory(
+                _sdk_client_handle(app), memory_id, kind=kind, variant=variant
+            )
+        except AmbiguousMemoryIdError:
+            raise HTTPException(status_code=409, detail="memory_id_ambiguous") from None
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_get_failed") from None
         if memory is None:
@@ -3090,13 +3091,40 @@ def create_app(
         memory_id: str,
         request: SdkMemoryUpdateRequest,
     ) -> HySdkMemoryRecord:
+        _check_memory_namespace(request.kind, request.variant)
+        if request.task is not None and request.kind in {"chat", "fact"}:
+            raise HTTPException(status_code=422, detail="memory_task_requires_experience")
+        namespace = _namespace_kwargs(request.kind, request.variant)
         try:
             client = await app.state.sdk_write_coordinator.client()
-            result = await asyncio.to_thread(client.update, memory_id, request.content)
-            if not isinstance(result, dict) or result.get("success") is not True:
+            update_kwargs: dict[str, object] = dict(namespace)
+            if request.task is not None:
+                update_kwargs["task"] = request.task
+            result = await asyncio.to_thread(
+                client.update, memory_id, request.content, **update_kwargs
+            )
+            if not isinstance(result, dict):
                 raise HySdkError("hy_memory_update_rejected")
-            raw = await asyncio.to_thread(client.get, memory_id)
+            if result.get("success") is not True:
+                if "not found" in str(result.get("error_message") or ""):
+                    raise HTTPException(status_code=404, detail="memory_not_found")
+                raise HySdkError("hy_memory_update_rejected")
+            # The SDK names the namespace it wrote; read that one back.
+            if result.get("kind") in {"experience", "fact"}:
+                namespace = {"kind": result["kind"]}
+                if result.get("variant") in {"working", "coding"}:
+                    namespace["variant"] = result["variant"]
+            raw = await asyncio.to_thread(client.get, memory_id, **namespace)
             memory = None if raw is None else HySdkMemoryRecord.from_sdk(raw)
+        except HTTPException:
+            raise
+        except AmbiguousMemoryIdError:
+            raise HTTPException(status_code=409, detail="memory_id_ambiguous") from None
+        except ValueError as error:
+            if request.task is None:
+                raise _sdk_http_error(error, "hy_memory_update_failed") from None
+            # The SDK refuses `task` for anything but an experience.
+            raise HTTPException(status_code=422, detail="memory_task_requires_experience") from None
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_update_failed") from None
         if memory is None:
@@ -3108,10 +3136,17 @@ def create_app(
         status_code=204,
         dependencies=protected,
     )
-    async def delete_sdk_memory(memory_id: str) -> Response:
+    async def delete_sdk_memory(
+        memory_id: str,
+        kind: SdkMemoryKind | None = None,
+        variant: SdkMemoryVariant | None = None,
+    ) -> Response:
+        _check_memory_namespace(kind, variant)
         try:
             client = await app.state.sdk_write_coordinator.client()
-            result = await asyncio.to_thread(client.delete, memory_id)
+            result = await asyncio.to_thread(
+                client.delete, memory_id, **_namespace_kwargs(kind, variant)
+            )
             if not isinstance(result, dict):
                 raise HySdkError("hy_memory_delete_rejected")
             error_code = result.get("error_code")
@@ -3119,6 +3154,8 @@ def create_app(
                 raise HySdkError(str(error_code or "hy_memory_delete_incomplete"))
             if result.get("success") is not True and result.get("deleted_count") != 0:
                 raise HySdkError("hy_memory_delete_rejected")
+        except AmbiguousMemoryIdError:
+            raise HTTPException(status_code=409, detail="memory_id_ambiguous") from None
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_delete_failed") from None
         return Response(status_code=204)
@@ -4438,23 +4475,133 @@ def _log_skipped_sdk_memories(count: int) -> None:
 _SDK_GET_CONCURRENCY = 8
 
 
-async def _get_sdk_rows(client: Any, memory_ids: list[str]) -> list[object]:
+async def _get_sdk_rows(client: Any, hits: list[LibraryHit]) -> list[object]:
     gate = asyncio.Semaphore(_SDK_GET_CONCURRENCY)
 
-    async def one(memory_id: str) -> object:
+    async def one(hit: LibraryHit) -> object:
         async with gate:
-            return await asyncio.to_thread(client.get, memory_id)
+            # Name the namespace the search found the row in, so an id that
+            # also exists elsewhere cannot make the read ambiguous.
+            return await asyncio.to_thread(
+                client.get, hit.memory_id, **_namespace_kwargs(hit.kind, hit.variant)
+            )
 
-    return list(await asyncio.gather(*(one(memory_id) for memory_id in memory_ids)))
+    return list(await asyncio.gather(*(one(hit) for hit in hits)))
 
 
 async def _get_sdk_memory(
     handle: SdkClientHandle,
     memory_id: str,
+    *,
+    kind: str | None = None,
+    variant: str | None = None,
 ) -> HySdkMemoryRecord | None:
     client = await handle.client()
-    raw = await asyncio.to_thread(client.get, memory_id)
+    raw = await asyncio.to_thread(client.get, memory_id, **_namespace_kwargs(kind, variant))
     return None if raw is None else HySdkMemoryRecord.from_sdk(raw)
+
+
+def _namespace_kwargs(kind: str | None, variant: str | None) -> dict[str, str]:
+    """The SDK's kind/variant arguments, only the ones the caller gave."""
+    namespace: dict[str, str] = {}
+    if kind is not None:
+        namespace["kind"] = kind
+    if variant is not None:
+        namespace["variant"] = variant
+    return namespace
+
+
+def _check_memory_namespace(kind: str | None, variant: str | None) -> None:
+    if kind == "chat" and variant is not None:
+        raise HTTPException(status_code=422, detail="memory_variant_requires_productivity_kind")
+
+
+# Keyword search reads one SDK relevance window this large, once per window.
+LIBRARY_SEARCH_WINDOW = 200
+# The memory panel's page size; the API still accepts 1..500 for the CLI.
+LIBRARY_PAGE_SIZE = 20
+
+
+def _library_search_windows(app: FastAPI) -> LibrarySearchWindows:
+    windows = getattr(app.state, "library_search_windows", None)
+    if windows is None:
+        windows = LibrarySearchWindows()
+        app.state.library_search_windows = windows
+    return cast(LibrarySearchWindows, windows)
+
+
+async def _library_search_page(
+    app: FastAPI,
+    client: Any,
+    *,
+    query: str,
+    source: str | None,
+    statuses: list[str],
+    offset: int,
+    limit: int,
+    window_id: str | None,
+) -> HySdkMemoryPage:
+    """One page of a keyword search, cut from a cached result window.
+
+    SDK search has no count-only contract and, on the local store, no keyword
+    channel. The search asks once for a bounded relevance window across chat,
+    working and coding (no reranking, no score floor), keeps the rows that
+    contain every word, and caches those matches under a `window_id`. Every
+    page of that search is a slice of the same matches, read fresh from the
+    SDK so edits and deletes show. The whole library is never listed in Core.
+    """
+    windows = _library_search_windows(app)
+    key = window_key(query, source, statuses)
+    window = windows.get(window_id, key) if window_id else None
+    window_reset = window_id is not None and window is None
+    if window is None:
+        fetch = LIBRARY_SEARCH_WINDOW
+        search_raw = await asyncio.to_thread(
+            client.search,
+            query,
+            scene="all",
+            rerank=False,
+            user_ids=["local"],
+            agent_ids=[],
+            include_sources=[source] if source else None,
+            limit=fetch,
+            min_score=0.0,
+            working_fact_min_score=0.0,
+            working_experience_min_score=0.0,
+            schema_min_score=0.0,
+            schema_limit=fetch,
+            # The library lists stored memories; proactive intentions are a
+            # recall-time lane the list never shows.
+            intention_limit=0,
+            reader=HY_MEMORY_READER,
+        )
+        hits, held = library_keyword_hits(search_raw, query)
+        window = windows.put(key, hits, fetch if held >= fetch else None)
+        if window_reset:
+            offset = 0
+    rows = await _get_sdk_rows(client, list(window.hits[offset : offset + limit]))
+    memories: list[HySdkMemoryRecord] = []
+    skipped = 0
+    for row in rows:
+        if row is None:
+            continue
+        try:
+            record = HySdkMemoryRecord.from_sdk(row)
+        except HySdkReadError:
+            skipped += 1
+            continue
+        if record.status == "active":
+            memories.append(record)
+    _log_skipped_sdk_memories(skipped)
+    return HySdkMemoryPage(
+        memories=tuple(memories),
+        total=len(window.hits),
+        limit=limit,
+        offset=offset,
+        search_window=window.search_window,
+        window_id=window.window_id,
+        window_reset=window_reset,
+    )
 
 
 async def _search_sdk_memories(

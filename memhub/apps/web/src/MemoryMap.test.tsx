@@ -589,6 +589,44 @@ it("names the SDK's no-source bucket 未识别来源, apart from a source under 
   expect(screen.getByText("只在最相关的 500 条记忆里查找关键词")).toBeTruthy();
 });
 
+it("badges each listed memory with its scene and pages 20 at a time", () => {
+  const items = ["对话一条", "工作经验", "编码事实"].map((content, i) => ({
+    ...memories[0],
+    memory_id: `x${i}`,
+    content,
+  })) as GovernedMemory[];
+  const view = pagedView({
+    items,
+    total: 45,
+    offset: 20,
+    limit: 20,
+    sdk_memory_refs: {
+      x0: { scene: "chat", kind: "chat", variant: null },
+      x1: { scene: "working", kind: "experience", variant: "working" },
+      x2: { scene: "coding", kind: "fact", variant: "coding" },
+    },
+  });
+  render(<Host simplified items={items} libraryView={view} />);
+  const list = screen.getByRole("list", { name: "地图记忆列表" });
+  expect(
+    within(list).getByRole("button", { name: /对话一条/ }).textContent,
+  ).toContain("对话");
+  expect(
+    within(list).getByRole("button", { name: /工作经验/ }).textContent,
+  ).toContain("工作");
+  expect(
+    within(list).getByRole("button", { name: /编码事实/ }).textContent,
+  ).toContain("编码");
+  expect(screen.getByText(/第 2 \/ 3 页/)).toBeTruthy();
+  // A short page (a row deleted since the search) still offers the next page.
+  const next = screen.getByRole("button", { name: "下一页记忆" });
+  expect((next as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(next);
+  expect(view.onPage).toHaveBeenCalledWith(40);
+  fireEvent.click(screen.getByRole("button", { name: "上一页记忆" }));
+  expect(view.onPage).toHaveBeenCalledWith(0);
+});
+
 it("says a filtered source is empty rather than that nothing matched", () => {
   render(
     <Host

@@ -17,6 +17,9 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from hy_memory import (  # type: ignore[import-untyped]
+    AmbiguousMemoryIdError as AmbiguousMemoryIdError,  # re-export for api.py
+)
+from hy_memory import (
     HyMemoryClient,
     MemoryConfig,
     SharedRuntime,

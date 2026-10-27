@@ -1,7 +1,13 @@
 import type { SdkMemoryRecord } from "@one-memory/contracts";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { projectPagedSourceMap } from "./memory-map-model";
-import { sdkDetail, sdkLibraryPage } from "./sdk-memory-map";
+import {
+  sdkDetail,
+  sdkEditableText,
+  sdkLibraryPage,
+  sdkMemoryRef,
+  sdkNamespace,
+} from "./sdk-memory-map";
 
 const NOW = Date.UTC(2026, 9, 25) / 1_000;
 
@@ -84,4 +90,53 @@ it("carries a full search window through to the list", () => {
       search_window: 500,
     }).search_window,
   ).toBe(500);
+});
+
+it("carries each memory's scene and namespace, and edits an experience's solution", () => {
+  const experience = record({
+    memory_id: "e",
+    content: "Fix tests\nPin seed",
+    layer: "experience",
+    scene: "working",
+    kind: "experience",
+    variant: "working",
+    task: "Fix tests",
+    solution: "Pin seed",
+    created_at: NOW - 86_400,
+    updated_at: NOW - 3_600,
+  });
+  const page = sdkLibraryPage({
+    memories: [record({ memory_id: "c" }), experience],
+    total: 2,
+    limit: 20,
+    offset: 0,
+    window_id: "w1",
+    window_reset: true,
+  });
+  expect(page.sdk_memory_refs).toEqual({
+    c: { scene: "chat", kind: "chat", variant: null },
+    e: { scene: "working", kind: "experience", variant: "working" },
+  });
+  expect(page.window_id).toBe("w1");
+  expect(page.window_reset).toBe(true);
+  // An experience has no conversation time to show as "imported".
+  expect(page.source_time_by_memory?.e).toBeUndefined();
+  expect(page.items[1]).toMatchObject({
+    kind: "working",
+    updated_at: new Date((NOW - 3_600) * 1_000).toISOString(),
+  });
+
+  const detail = sdkDetail(experience);
+  expect(detail.sdk_ref).toEqual({
+    scene: "working",
+    kind: "experience",
+    variant: "working",
+  });
+  expect(sdkNamespace(detail.sdk_ref)).toEqual({
+    kind: "experience",
+    variant: "working",
+  });
+  expect(sdkNamespace(sdkMemoryRef(record({})))).toBeUndefined();
+  expect(sdkEditableText(experience)).toBe("Pin seed");
+  expect(sdkEditableText(record({}))).toBe("memory");
 });

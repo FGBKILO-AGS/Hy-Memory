@@ -59,9 +59,14 @@ vi.mock("./MemoryMap", () => ({
     onSave(event: { preventDefault(): void }): void;
     onDelete(): void;
     libraryView?: {
-      page: { source_ids_by_memory?: Record<string, string[]> } | null;
+      page: {
+        source_ids_by_memory?: Record<string, string[]>;
+        offset: number;
+      } | null;
       unattributedSource?: string;
       onSource(value: string): void;
+      onQuery(value: string): void;
+      onPage(offset: number): void;
       resetPage(): void;
     };
   }) => (
@@ -85,6 +90,31 @@ vi.mock("./MemoryMap", () => ({
       </span>
       <span data-testid="map-busy">{String(busy)}</span>
       <span data-testid="map-detail">{detail?.memory.memory_id ?? ""}</span>
+      <span data-testid="map-offset">{libraryView?.page?.offset ?? ""}</span>
+      <button type="button" onClick={() => onOpenMemory("e1")}>
+        open e1
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          libraryView?.onQuery("deploy");
+          libraryView?.resetPage();
+        }}
+      >
+        search deploy
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          libraryView?.onQuery("other");
+          libraryView?.resetPage();
+        }}
+      >
+        search other
+      </button>
+      <button type="button" onClick={() => libraryView?.onPage(20)}>
+        page 2
+      </button>
       <button type="button" onClick={() => onOpenMemory("a")}>
         open a
       </button>
@@ -178,7 +208,8 @@ it("draws the map from SDK memories on SDK authority, without legacy reads", asy
       source: undefined,
       query: undefined,
       offset: 0,
-      limit: 100,
+      limit: 20,
+      windowId: null,
     },
     expect.any(AbortSignal),
   );
@@ -236,7 +267,9 @@ it("opens an SDK memory in place instead of switching away from the map", async 
   );
   fireEvent.click(screen.getByText("open a"));
 
-  await waitFor(() => expect(api.sdkMemory).toHaveBeenCalledWith("a"));
+  await waitFor(() =>
+    expect(api.sdkMemory).toHaveBeenCalledWith("a", undefined),
+  );
   // The inspector stays on the map; the reader is never moved to a second list.
   expect(screen.getByTestId("map").hidden).toBe(false);
   expect(screen.getByTestId("sdk-library").textContent).toBe("");
@@ -291,6 +324,7 @@ it("saves and deletes an opened memory through v2 without a stale-read block", a
         "a",
         "memory a",
         expect.any(String),
+        undefined,
       ),
     );
     await waitFor(() =>
@@ -300,7 +334,11 @@ it("saves and deletes an opened memory through v2 without a stale-read block", a
     fireEvent.click(screen.getByText("delete"));
     fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
     await waitFor(() =>
-      expect(api.deleteSdkMemory).toHaveBeenCalledWith("a", expect.any(String)),
+      expect(api.deleteSdkMemory).toHaveBeenCalledWith(
+        "a",
+        expect.any(String),
+        undefined,
+      ),
     );
     await waitFor(() =>
       expect(screen.getByTestId("map-detail").textContent).toBe(""),
@@ -384,4 +422,154 @@ it("groups and draws SDK memories by source with the real map model", async () =
       .map((n) => n.memory_id),
   ).toEqual(["a", "b"]);
   expect(drawn.edges.length).toBeGreaterThan(0);
+});
+
+const experience = (memory_id: string): SdkMemoryRecord => ({
+  ...record(memory_id),
+  content: "Fix flaky tests\nPin the seed",
+  layer: "experience",
+  scene: "coding",
+  kind: "experience",
+  variant: "coding",
+  task: "Fix flaky tests",
+  solution: "Pin the seed",
+  created_at: 1_761_000_000,
+  updated_at: 1_761_000_100,
+});
+
+it("opens, edits and deletes a coding experience by its kind and variant", async () => {
+  api.sdkLibrary.mockResolvedValue({
+    memories: [record("a"), experience("e1")],
+    total: 2,
+    limit: 20,
+    offset: 0,
+  });
+  api.sdkGraph.mockResolvedValue(null);
+  api.sdkMemory.mockResolvedValue(experience("e1"));
+  api.updateSdkMemory.mockResolvedValue({
+    ...experience("e1"),
+    solution: "Pin the seed",
+  });
+  api.deleteSdkMemory.mockResolvedValue(undefined);
+
+  render(<MemorySpace simplified active />);
+  await waitFor(() =>
+    expect(screen.getByTestId("map-loaded").textContent).toBe("true"),
+  );
+  // A productivity memory has no graph node; the page still draws.
+  expect(screen.getByTestId("map-memories").textContent).toBe(
+    "a:confirmed,e1:confirmed",
+  );
+  fireEvent.click(screen.getByText("open e1"));
+  await waitFor(() =>
+    expect(api.sdkMemory).toHaveBeenCalledWith("e1", {
+      kind: "experience",
+      variant: "coding",
+    }),
+  );
+  await waitFor(() =>
+    expect(screen.getByTestId("map-detail").textContent).toBe("e1"),
+  );
+
+  // The editor holds the solution, not the joined task and solution.
+  fireEvent.click(screen.getByText("save"));
+  await waitFor(() =>
+    expect(api.updateSdkMemory).toHaveBeenCalledWith(
+      "e1",
+      "Pin the seed",
+      expect.any(String),
+      { kind: "experience", variant: "coding" },
+    ),
+  );
+  await waitFor(() =>
+    expect(screen.getByTestId("map-busy").textContent).toBe("false"),
+  );
+  fireEvent.click(screen.getByText("delete"));
+  fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
+  await waitFor(() =>
+    expect(api.deleteSdkMemory).toHaveBeenCalledWith("e1", expect.any(String), {
+      kind: "experience",
+      variant: "coding",
+    }),
+  );
+});
+
+it("pages a keyword search through one window and restarts when it resets", async () => {
+  sdkAuthority();
+  api.sdkGraph.mockResolvedValue(null);
+  render(<MemorySpace simplified active />);
+  await waitFor(() =>
+    expect(screen.getByTestId("map-loaded").textContent).toBe("true"),
+  );
+
+  // The server keeps window "w1" until it expires, then answers any page
+  // asked of it with page 1 of a fresh window "w2".
+  const live = new Set(["w1"]);
+  api.sdkLibrary.mockImplementation(
+    async (request: { offset: number; windowId?: string | null }) => {
+      const reset = !!request.windowId && !live.has(request.windowId);
+      const offset = reset ? 0 : request.offset;
+      const windowId = reset || live.has("w2") ? "w2" : "w1";
+      if (reset) live.add("w2");
+      return {
+        memories: [record(`${windowId}-${offset}`)],
+        total: 45,
+        limit: 20,
+        offset,
+        window_id: windowId,
+        window_reset: reset,
+      };
+    },
+  );
+  fireEvent.click(screen.getByText("search deploy"));
+  await waitFor(() =>
+    expect(screen.getByTestId("map-memories").textContent).toBe(
+      "w1-0:confirmed",
+    ),
+  );
+  expect(api.sdkLibrary).toHaveBeenLastCalledWith(
+    expect.objectContaining({ query: "deploy", offset: 0, windowId: null }),
+    expect.any(AbortSignal),
+  );
+
+  fireEvent.click(screen.getByText("page 2"));
+  await waitFor(() =>
+    expect(screen.getByTestId("map-memories").textContent).toBe(
+      "w1-20:confirmed",
+    ),
+  );
+  expect(api.sdkLibrary).toHaveBeenLastCalledWith(
+    expect.objectContaining({ query: "deploy", offset: 20, windowId: "w1" }),
+    expect.any(AbortSignal),
+  );
+
+  // Back to page 1 on the same window, then the window expires: asking for
+  // page 2 again restarts at page 1 of the new window.
+  fireEvent.click(screen.getByText("search deploy"));
+  await waitFor(() =>
+    expect(screen.getByTestId("map-offset").textContent).toBe("0"),
+  );
+  live.delete("w1");
+  fireEvent.click(screen.getByText("page 2"));
+  await waitFor(() =>
+    expect(api.sdkLibrary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ query: "deploy", offset: 0, windowId: "w2" }),
+      expect.any(AbortSignal),
+    ),
+  );
+  await waitFor(() =>
+    expect(screen.getByTestId("map-memories").textContent).toBe(
+      "w2-0:confirmed",
+    ),
+  );
+  expect(screen.getByTestId("map-offset").textContent).toBe("0");
+
+  // A new query drops the window.
+  fireEvent.click(screen.getByText("search other"));
+  await waitFor(() =>
+    expect(api.sdkLibrary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ query: "other", offset: 0, windowId: null }),
+      expect.any(AbortSignal),
+    ),
+  );
 });

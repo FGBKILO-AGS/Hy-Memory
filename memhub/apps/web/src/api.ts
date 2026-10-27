@@ -25,9 +25,11 @@ import {
   type ModelProfileInput,
   type ModelProfilePatch,
   type OnboardingState,
+  type SdkMemoryKind,
   type SdkMemoryPage,
   type SdkMemoryRecord,
   type SdkMemoryStatus,
+  type SdkMemoryVariant,
   type SdkRawContextItem,
   type SdkRawPage,
   type SourceDirectoryCandidate,
@@ -63,6 +65,7 @@ import {
   recoverableFileUpload,
 } from "./file-upload-client";
 import { recoverableProbe } from "./model-probe-client";
+import { SDK_MEMORY_PAGE_SIZE } from "./sdk-memory-map";
 
 export const DEFAULT_CORE_URL = "http://127.0.0.1:8765";
 
@@ -694,13 +697,16 @@ export async function getSdkMemoryLibrary(
     source,
     query,
     offset = 0,
-    limit = 100,
+    limit = SDK_MEMORY_PAGE_SIZE,
+    windowId,
   }: {
     statuses?: SdkMemoryStatus[];
     source?: string;
     query?: string;
     offset?: number;
     limit?: number;
+    /** Keyword search: the window a previous page returned. */
+    windowId?: string | null;
   } = {},
   signal?: AbortSignal,
 ): Promise<SdkMemoryPage> {
@@ -710,7 +716,10 @@ export async function getSdkMemoryLibrary(
   });
   for (const status of statuses) params.append("statuses", status);
   if (source) params.set("source", source);
-  if (query?.trim()) params.set("query", query.trim());
+  if (query?.trim()) {
+    params.set("query", query.trim());
+    if (windowId) params.set("window_id", windowId);
+  }
   const response = await client.get<SdkMemoryPage>("/api/v2/memory-library", {
     params,
     signal,
@@ -718,10 +727,32 @@ export async function getSdkMemoryLibrary(
   return response.data;
 }
 
-export async function getSdkMemory(memoryId: string): Promise<SdkMemoryRecord> {
-  const response = await client.get<SdkMemoryRecord>(
-    `/api/v2/memories/${encodeURIComponent(memoryId)}`,
-  );
+/** The namespace of an SDK memory, for get/update/delete. Chat memories need
+ * none; an experience or fact names its kind and working/coding variant. */
+export interface SdkMemoryNamespace {
+  kind?: SdkMemoryKind;
+  variant?: SdkMemoryVariant | null;
+}
+
+function namespaceParams(
+  namespace: SdkMemoryNamespace | undefined,
+): Record<string, string> | undefined {
+  if (!namespace?.kind && !namespace?.variant) return undefined;
+  const params: Record<string, string> = {};
+  if (namespace.kind) params.kind = namespace.kind;
+  if (namespace.variant) params.variant = namespace.variant;
+  return params;
+}
+
+export async function getSdkMemory(
+  memoryId: string,
+  namespace?: SdkMemoryNamespace,
+): Promise<SdkMemoryRecord> {
+  const params = namespaceParams(namespace);
+  const path = `/api/v2/memories/${encodeURIComponent(memoryId)}`;
+  const response = params
+    ? await client.get<SdkMemoryRecord>(path, { params })
+    : await client.get<SdkMemoryRecord>(path);
   return response.data;
 }
 
@@ -729,10 +760,17 @@ export async function updateSdkMemory(
   memoryId: string,
   content: string,
   traceId?: string,
+  /** An experience's `content` is its solution; `task` replaces the task. */
+  edit?: SdkMemoryNamespace & { task?: string },
 ): Promise<SdkMemoryRecord> {
+  const body: Record<string, string> = { content };
+  if (edit?.kind) body.kind = edit.kind;
+  if (edit?.variant) body.variant = edit.variant;
+  if (edit?.task !== undefined && edit.kind === "experience")
+    body.task = edit.task;
   const response = await client.put<SdkMemoryRecord>(
     `/api/v2/memories/${encodeURIComponent(memoryId)}`,
-    { content },
+    body,
     // A rewrite is a write; carry the trace id so the ui.action / ui.result
     // pair joins the kernel legs in one chain.
     traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
@@ -743,10 +781,16 @@ export async function updateSdkMemory(
 export async function deleteSdkMemory(
   memoryId: string,
   traceId?: string,
+  namespace?: SdkMemoryNamespace,
 ): Promise<void> {
+  const params = namespaceParams(namespace);
+  const config = {
+    ...(traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : {}),
+    ...(params ? { params } : {}),
+  };
   await client.delete(
     `/api/v2/memories/${encodeURIComponent(memoryId)}`,
-    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
+    Object.keys(config).length ? config : undefined,
   );
 }
 

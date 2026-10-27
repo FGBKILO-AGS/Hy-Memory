@@ -226,7 +226,8 @@ it("shows the three-column surface without four modes or a management button", a
       source: undefined,
       query: undefined,
       offset: 0,
-      limit: 100,
+      limit: 20,
+      windowId: null,
     },
     expect.any(AbortSignal),
   );
@@ -240,7 +241,7 @@ it("shows the three-column surface without four modes or a management button", a
     expect(reads.sdkLibrary).toHaveBeenCalledWith({
       statuses: ["active"],
       offset: 0,
-      limit: 100,
+      limit: 20,
     }),
   );
   fireEvent(window, new Event("one-memory:manage"));
