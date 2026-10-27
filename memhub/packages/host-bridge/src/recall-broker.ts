@@ -6,15 +6,16 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import type {
-  AskMemoryRequest,
   ContextSearchRequest,
   RecallReceipt,
   RecallRequest,
-  SdkAskMemoryResponse,
   SdkContextSearchResponse,
 } from "@one-memory/contracts";
 import axios from "axios";
-import type { CallEventDeliveryRequest } from "./broker-client.js";
+import {
+  type CallEventDeliveryRequest,
+  isMemoryNoteRequest,
+} from "./broker-client.js";
 import {
   authorizeContext,
   contextResponseInvalidField,
@@ -31,10 +32,6 @@ import {
   type VerifiedHostIdentity,
 } from "./host-grants.js";
 import {
-  isMemoryWriteRequest,
-  isMemoryWriteRequestId,
-} from "./memory-write-protocol.js";
-import {
   SourceNotificationDispatcher,
   SourceNotificationError,
   type SourceNotificationHandler,
@@ -43,14 +40,10 @@ import {
 const LOOPBACK_HOST = "127.0.0.1";
 const DEFAULT_PORT = 18_765;
 const MAX_BODY_BYTES = 64 * 1024;
-/** Core accepts up to 200 messages of 12,000 characters each. */
-const MAX_MEMORY_WRITE_BODY_BYTES = 8 * 1024 * 1024;
+/** 12,000 characters, each of which JSON may escape to six bytes. */
+const MAX_MEMORY_NOTE_BODY_BYTES = 128 * 1024;
 const CONNECTION_DIAGNOSTIC_SUMMARY_MS = 5 * 60 * 1000;
 const DELIVERY_BINDING_TTL_MS = 60_000;
-/** Raw-only context for MemHub_conversations: Core caps a search at 20 items. */
-const CONVERSATION_DEFAULT_LIMIT = 20;
-const CONVERSATION_CHARACTER_BUDGET = 12_000;
-const CONVERSATION_TIMEOUT_MS = 8_000;
 const CALL_EVENT_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const HOST_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_:-]{0,127}$/;
@@ -254,13 +247,6 @@ export class RecallBroker {
       await this.grantedTools(request, response);
       return;
     }
-    if (
-      request.method === "GET" &&
-      request.url?.startsWith("/memory-writes/")
-    ) {
-      await this.proxyMemoryWriteStatus(request, response);
-      return;
-    }
     if (request.method !== "POST") {
       sendJson(response, 404, { error: "not found" });
       return;
@@ -333,8 +319,8 @@ export class RecallBroker {
       await this.proxyContext(request, response);
       return;
     }
-    if (request.url === "/memory-writes") {
-      await this.proxyMemoryWrite(request, response);
+    if (request.url === "/memory-notes") {
+      await this.proxyMemoryNote(request, response);
       return;
     }
     if (request.url === "/diagnostics/trace") {
@@ -381,14 +367,6 @@ export class RecallBroker {
     }
     if (request.url === "/call-events/delivery") {
       await this.proxyDelivery(request, response);
-      return;
-    }
-    if (request.url === "/ask") {
-      await this.proxyAsk(request, response);
-      return;
-    }
-    if (request.url === "/conversations") {
-      await this.proxyConversations(request, response);
       return;
     }
     sendJson(response, 404, { error: "not found" });
@@ -996,115 +974,11 @@ export class RecallBroker {
     }
   }
 
-  /** Search the original conversations, not the memories drawn from them.
-   *
-   * An agent asked to pick a task back up needs what was actually said in the
-   * other app. Recall cannot supply that: it returns memories, which are
-   * conclusions, and a conclusion is not enough to resume work from.
-   *
-   * Core's context search with only the raw lane. Core decides which sources
-   * this installation may read; the broker never widens the request. */
-  private async proxyConversations(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> {
-    try {
-      const body = await readJsonBody(request);
-      if (!isConversationSearchRequest(body)) {
-        sendJson(response, 400, { error: "invalid conversation request" });
-        return;
-      }
-      const authorized = await this.authorizeHost(
-        request,
-        "om_conversations",
-        "all-apps",
-      );
-      const search: ContextSearchRequest = {
-        query: body.query,
-        kinds: ["raw"],
-        limit: Math.min(body.limit ?? CONVERSATION_DEFAULT_LIMIT, 20),
-        character_budget: CONVERSATION_CHARACTER_BUDGET,
-        timeout_ms: CONVERSATION_TIMEOUT_MS,
-      };
-      const result = await axios.post<unknown>(
-        `${this.options.coreBaseUrl}/api/v2/context/search`,
-        search,
-        {
-          headers: authorized.headers,
-          proxy: false,
-          maxRedirects: 0,
-          timeout: CONVERSATION_TIMEOUT_MS + 1000,
-          maxContentLength: 2 * 1024 * 1024,
-        },
-      );
-      if (
-        !isContextResponseForRequest(result.data, search) ||
-        !authorized.identity ||
-        !isContextResponseAuthorized(result.data, authorized.identity)
-      )
-        throw new Error("invalid_conversation_response");
-      await authorized.verifyBeforeRelease();
-      sendJson(response, 200, result.data);
-    } catch (error) {
-      if (sendAuthorizationError(response, error)) return;
-      if (error instanceof BodyReadError) {
-        sendJson(response, error.status, { error: error.message });
-        return;
-      }
-      sendJson(response, 502, {
-        error: "MemHub Core conversation search is unavailable",
-      });
-    }
-  }
-
-  private async proxyAsk(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> {
-    try {
-      const body = await readJsonBody(request);
-      if (!isAskRequest(body)) {
-        sendJson(response, 400, { error: "invalid ask request" });
-        return;
-      }
-      const authorized = await this.authorizeHost(
-        request,
-        "om_ask",
-        body.scope ?? "all-apps",
-      );
-      // Ask may call a generation model; keep the broker timeout aligned with
-      // the web client's 120s budget rather than the short recall budget.
-      const coreResponse = await axios.post<unknown>(
-        `${this.options.coreBaseUrl}/api/v2/memories/ask`,
-        body,
-        {
-          headers: authorized.headers,
-          proxy: false,
-          maxRedirects: 0,
-          timeout: 120_000,
-        },
-      );
-      if (!isSdkAskResponse(coreResponse.data))
-        throw new Error("invalid_ask_response");
-      await authorized.verifyBeforeRelease();
-      sendJson(response, 200, coreResponse.data);
-    } catch (error) {
-      if (sendAuthorizationError(response, error)) return;
-      if (error instanceof BodyReadError) {
-        sendJson(response, error.status, { error: error.message });
-        return;
-      }
-      sendJson(response, 502, {
-        error: "MemHub Core ask is unavailable",
-      });
-    }
-  }
-
   /** The installation behind a request: authenticated, never tool-authorized.
    *
-   * Memory writes are not grant-governed, but they must name a host: the
-   * source of every write is this identity's host id, not anything the
-   * request says. Without a grant store there is no identity, so no write. */
+   * Memory notes are not grant-governed, but only an installation MemHub
+   * paired may write one. Without a grant store there is no identity, so no
+   * write. */
   private async authenticateHost(
     request: IncomingMessage,
   ): Promise<VerifiedHostIdentity> {
@@ -1131,10 +1005,10 @@ export class RecallBroker {
     }
   }
 
-  /** Core's v2 write entry, as the authenticated host.
+  /** Core's memory-note entry, as a trusted local caller.
    *
-   * Sent as a trusted local caller: Core refuses memory writes that carry the
-   * external read envelope, and writes are not grant-governed. */
+   * Core refuses `/api/v1/memory-notes` to requests that carry the external
+   * read envelope, and writes are not grant-governed. */
   private coreWriteHeaders(request: IncomingMessage): Record<string, string> {
     return {
       Authorization: `Bearer ${this.options.coreApiToken}`,
@@ -1143,35 +1017,46 @@ export class RecallBroker {
     };
   }
 
-  private async proxyMemoryWrite(
+  /** One hand-added memory, the same entry as the app's 添加记忆.
+   *
+   * The body is exactly `{request_id, text}`: a host cannot choose a scope or
+   * a source. The note is filed cross-app, as a hand-added memory. */
+  private async proxyMemoryNote(
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
     try {
-      const identity = await this.authenticateHost(request);
+      await this.authenticateHost(request);
       const body = await readJsonBody(
         request,
         undefined,
-        MAX_MEMORY_WRITE_BODY_BYTES,
+        MAX_MEMORY_NOTE_BODY_BYTES,
       );
-      if (!isMemoryWriteRequest(body)) {
-        sendJson(response, 400, { error: "invalid_memory_write" });
+      if (!isMemoryNoteRequest(body)) {
+        sendJson(response, 400, { error: "memory_note_invalid" });
         return;
       }
       const result = await axios.post<unknown>(
-        `${this.options.coreBaseUrl}/api/v2/memory-writes`,
-        { ...body, source_id: identity.hostId },
+        `${this.options.coreBaseUrl}/api/v1/memory-notes`,
+        { request_id: body.request_id, text: body.text, scope: "all-apps" },
         {
           headers: this.coreWriteHeaders(request),
           proxy: false,
           maxRedirects: 0,
           timeout: 15_000,
-          maxBodyLength: MAX_MEMORY_WRITE_BODY_BYTES,
           validateStatus: () => true,
         },
       );
-      if ([202, 409, 422].includes(result.status)) {
+      if (result.status === 200 || result.status === 201) {
         sendJson(response, result.status, result.data);
+        return;
+      }
+      if (result.status === 409) {
+        sendJson(response, 409, { error: "memory_note_conflict" });
+        return;
+      }
+      if (result.status === 422) {
+        sendJson(response, 422, { error: "memory_note_invalid" });
         return;
       }
       sendJson(response, 502, { error: "MemHub memory write is unavailable" });
@@ -1182,50 +1067,6 @@ export class RecallBroker {
         return;
       }
       sendJson(response, 502, { error: "MemHub memory write is unavailable" });
-    }
-  }
-
-  private async proxyMemoryWriteStatus(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> {
-    let requestId: string;
-    try {
-      const segment = (request.url ?? "").slice("/memory-writes/".length);
-      if (segment.includes("/") || segment.includes("?")) throw new Error();
-      requestId = decodeURIComponent(segment);
-    } catch {
-      sendJson(response, 400, { error: "invalid_memory_write_request_id" });
-      return;
-    }
-    if (!isMemoryWriteRequestId(requestId)) {
-      sendJson(response, 400, { error: "invalid_memory_write_request_id" });
-      return;
-    }
-    try {
-      await this.authenticateHost(request);
-      const result = await axios.get<unknown>(
-        `${this.options.coreBaseUrl}/api/v2/memory-writes/${encodeURIComponent(requestId)}`,
-        {
-          headers: this.coreWriteHeaders(request),
-          proxy: false,
-          maxRedirects: 0,
-          timeout: 10_000,
-          validateStatus: () => true,
-        },
-      );
-      if (result.status === 200 || result.status === 404) {
-        sendJson(response, result.status, result.data);
-        return;
-      }
-      sendJson(response, 502, {
-        error: "MemHub memory write status is unavailable",
-      });
-    } catch (error) {
-      if (sendAuthorizationError(response, error)) return;
-      sendJson(response, 502, {
-        error: "MemHub memory write status is unavailable",
-      });
     }
   }
 
@@ -1405,9 +1246,7 @@ function brokerOperation(url: string | undefined): string | null {
       "/recall": "recall",
       "/context": "context",
       "/call-events/delivery": "call_event_delivery",
-      "/ask": "ask",
-      "/memory-writes": "memory_write",
-      "/conversations": "conversations",
+      "/memory-notes": "memory_note",
       "/source-changed": "source_notification",
       "/control/connections": "connection_control",
     }[url ?? ""] ?? null
@@ -1440,50 +1279,6 @@ function sendAuthorizationError(
     return true;
   }
   return false;
-}
-
-/** Same shape Core's query string takes, so nothing here can widen it. */
-export interface ConversationSearchQuery {
-  query: string;
-  limit?: number;
-}
-
-function isConversationSearchRequest(
-  value: unknown,
-): value is ConversationSearchQuery {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const request = value as Record<string, unknown>;
-  const allowed = new Set(["query", "limit"]);
-  if (Object.keys(request).some((key) => !allowed.has(key))) return false;
-  return (
-    typeof request.query === "string" &&
-    request.query.length >= 1 &&
-    request.query.length <= 512 &&
-    (request.limit === undefined ||
-      (Number.isInteger(request.limit) &&
-        (request.limit as number) >= 1 &&
-        (request.limit as number) <= 50))
-  );
-}
-
-function isAskRequest(value: unknown): value is AskMemoryRequest {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const request = value as Record<string, unknown>;
-  const allowed = new Set(["question", "scope", "workspace_path"]);
-  if (Object.keys(request).some((key) => !allowed.has(key))) return false;
-  return (
-    typeof request.question === "string" &&
-    request.question.length >= 1 &&
-    request.question.length <= 2_000 &&
-    (request.scope === undefined ||
-      (typeof request.scope === "string" &&
-        request.scope.length >= 1 &&
-        request.scope.length <= 512)) &&
-    (request.workspace_path === undefined ||
-      (typeof request.workspace_path === "string" &&
-        request.workspace_path.length >= 1 &&
-        request.workspace_path.length <= 4_096))
-  );
 }
 
 function isRecallRequest(value: unknown): value is RecallRequest {
@@ -1582,43 +1377,6 @@ function sendJson(
   response.statusCode = status;
   response.setHeader("Content-Type", "application/json; charset=utf-8");
   response.end(`${JSON.stringify(value)}\n`);
-}
-
-function isSdkAskResponse(value: unknown): value is SdkAskMemoryResponse {
-  if (value === null || typeof value !== "object" || Array.isArray(value))
-    return false;
-  const response = value as Record<string, unknown>;
-  if (
-    response.schema_version !== 2 ||
-    typeof response.answer !== "string" ||
-    !["generated", "extractive", "empty"].includes(String(response.mode)) ||
-    !Array.isArray(response.memories)
-  )
-    return false;
-  return response.memories.every((item) => {
-    if (item === null || typeof item !== "object" || Array.isArray(item))
-      return false;
-    const memory = item as Record<string, unknown>;
-    return (
-      Object.keys(memory).every((key) =>
-        [
-          "memory_id",
-          "content",
-          "layer",
-          "status",
-          "source",
-          "gmt_created",
-        ].includes(key),
-      ) &&
-      ["memory_id", "content", "layer", "status"].every(
-        (key) => typeof memory[key] === "string",
-      ) &&
-      (memory.source === null || typeof memory.source === "string") &&
-      (memory.gmt_created === null ||
-        (typeof memory.gmt_created === "number" &&
-          Number.isSafeInteger(memory.gmt_created)))
-    );
-  });
 }
 
 function isLoopback(address: string | undefined): boolean {

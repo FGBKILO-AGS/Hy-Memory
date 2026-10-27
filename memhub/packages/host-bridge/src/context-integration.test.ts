@@ -12,7 +12,6 @@ import {
   reportCallEventDeliveryThroughBroker,
 } from "./broker-client.js";
 import {
-  CONTEXT_INPUT_SCHEMA,
   contextResponseInvalidField,
   HOST_CONTEXT_TIMEOUT_MS,
   isSdkContextSearchResponse,
@@ -593,50 +592,32 @@ it("reports a Core context failure without claiming MemHub is stopped", async ()
   expect(f.calls.map((call) => call.url)).toEqual(["/api/v2/context/search"]);
 });
 
-it("MCP advertises context and passes the exact mixed receipt without workspace injection", async () => {
+it("MCP no longer exposes context; the HTTP context route stays for hooks and the CLI", async () => {
   const f = await fixture();
   f.respond(mixed);
-  const legacy = vi.fn();
-  const session = new McpSession(
-    f.discoveryPath,
-    legacy,
-    "/must-not-inject",
-    legacy,
-    legacy,
-    (discovery, request) =>
-      contextThroughBroker(discovery, request, {
-        credentialProvider: () => f.issued.secret,
-      }),
-  );
+  const recall = vi.fn();
+  const session = new McpSession(f.discoveryPath, recall, "/must-not-inject");
   const listed = await session.handle({
     jsonrpc: "2.0",
     id: 1,
     method: "tools/list",
   });
-  expect(listed?.result).toMatchObject({
-    tools: expect.arrayContaining([
-      expect.objectContaining({ name: "MemHub_context" }),
-    ]),
-  });
+  const { tools } = (listed?.result ?? { tools: [] }) as {
+    tools: Array<{ name: string }>;
+  };
+  expect(tools.map((tool) => tool.name)).not.toContain("MemHub_context");
   const response = await session.handle({
     jsonrpc: "2.0",
     id: 2,
     method: "tools/call",
-    params: {
-      name: "om_context",
-      arguments: { query: "original", raw_source_ids: ["codex"] },
-    },
+    params: { name: "om_context", arguments: { query: "original" } },
   });
-  expect(response?.result).toEqual({
-    content: [{ type: "text", text: JSON.stringify(mixed) }],
-    structuredContent: mixed,
+  expect(response?.error).toEqual({
+    code: -32602,
+    message: "Unknown tool: om_context",
   });
-  expect(f.calls[0].body).toEqual({
-    query: "original",
-    raw_source_ids: ["codex"],
-    timeout_ms: HOST_CONTEXT_TIMEOUT_MS,
-  });
-  expect(legacy).not.toHaveBeenCalled();
+  expect(recall).not.toHaveBeenCalled();
+  expect(f.calls).toEqual([]);
 });
 
 it("CLI context mode uses its credential and preserves JSON and prose provenance", async () => {
@@ -707,57 +688,6 @@ it("cancels an in-flight HTTP read and never releases its late content", async (
   } finally {
     release?.();
     await result;
-  }
-});
-
-it("MCP cancellation reaches the HTTP request and only affects its own id", async () => {
-  const f = await fixture();
-  f.respond(mixed);
-  let release!: () => void;
-  f.before(
-    () =>
-      new Promise<void>((resolve) => {
-        release = resolve;
-      }),
-  );
-  const session = new McpSession(
-    f.discoveryPath,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    (discovery, request, signal) =>
-      contextThroughBroker(discovery, request, {
-        credentialProvider: () => f.issued.secret,
-        signal,
-      }),
-  );
-  const pending = session.handle({
-    jsonrpc: "2.0",
-    id: 41,
-    method: "tools/call",
-    params: { name: "om_context", arguments: { query: "original" } },
-  });
-  try {
-    await vi.waitFor(() => expect(f.calls).toHaveLength(1));
-    await session.handle({
-      jsonrpc: "2.0",
-      method: "notifications/cancelled",
-      params: { requestId: 42 },
-    });
-    expect(f.disconnected()).toBe(false);
-    await session.handle({
-      jsonrpc: "2.0",
-      method: "notifications/cancelled",
-      params: { requestId: 41 },
-    });
-    await expect(pending).resolves.toMatchObject({ result: { isError: true } });
-    expect(JSON.stringify(await pending)).toContain("cancelled");
-    await vi.waitFor(() => expect(f.disconnected()).toBe(true));
-    expect(JSON.stringify(await pending)).not.toContain("original");
-  } finally {
-    release?.();
-    await pending;
   }
 });
 
@@ -863,9 +793,17 @@ it("shipped CLI bundle performs authenticated raw+memory lookup", async () => {
   expect(f.calls.map((call) => call.url)).toEqual(["/api/v2/context/search"]);
 });
 
-it("shipped MCP bundle passes its installed credential and preserves both paths", async () => {
+it("shipped MCP bundle passes its installed credential and lists only the granted tools", async () => {
   const f = await fixture();
-  f.respond(mixed);
+  const receipt = {
+    state: "empty",
+    query: "original",
+    scope: "all-apps",
+    hits: [],
+    used_characters: 0,
+    truncated: false,
+  };
+  f.respond(receipt);
   const env = await nativeEnvironment(f);
   const result = await new Promise<string>((resolve, reject) => {
     const child = spawn(process.execPath, [path.resolve("dist/mcp.cjs")], {
@@ -909,7 +847,7 @@ it("shipped MCP bundle passes its installed credential and preserves both paths"
       `${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`,
     );
     child.stdin.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "om_context", arguments: { query: "original" } } })}\n`,
+      `${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "MemHub_recall", arguments: { query: "original" } } })}\n`,
     );
   });
   const messages = result
@@ -919,12 +857,15 @@ it("shipped MCP bundle passes its installed credential and preserves both paths"
   expect(
     messages
       .find((m) => m.id === 2)
-      .result.tools.some(
-        (tool: { name: string }) => tool.name === "MemHub_context",
-      ),
-  ).toBe(true);
+      .result.tools.map((tool: { name: string }) => tool.name),
+    // The fixture grants recall and the raw lane, not diagnostic trace.
+  ).toEqual(["MemHub_recall", "MemHub_write"]);
   expect(messages.find((m) => m.id === 3).result.structuredContent).toEqual(
-    mixed,
+    receipt,
+  );
+  expect(f.calls.map((call) => call.url)).toEqual(["/api/v1/recall"]);
+  expect(f.calls[0].headers["x-one-memory-installation-id"]).toBe(
+    f.issued.receipt.installationId,
   );
 });
 
@@ -980,9 +921,6 @@ it("gives a lookup with no timeout of its own the host default, not Core's two s
     { query: "x", timeout_ms: 500 },
   ]);
   expect(HOST_CONTEXT_TIMEOUT_MS).toBeGreaterThan(2000);
-  expect(CONTEXT_INPUT_SCHEMA.properties.timeout_ms.default).toBe(
-    HOST_CONTEXT_TIMEOUT_MS,
-  );
 });
 
 it("gives a recall with no timeout of its own the same host default", async () => {

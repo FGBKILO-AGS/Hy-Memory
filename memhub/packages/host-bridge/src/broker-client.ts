@@ -2,11 +2,10 @@ import { constants, type Stats } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import path from "node:path";
 import type {
-  AskMemoryRequest,
   ContextSearchRequest,
+  MemoryNoteReceipt,
   RecallReceipt,
   RecallRequest,
-  SdkAskMemoryResponse,
   SdkContextSearchResponse,
 } from "@one-memory/contracts";
 import axios from "axios";
@@ -16,7 +15,6 @@ import {
   isContextSearchRequest,
 } from "./context-protocol.js";
 import { readDiscovery } from "./discovery.js";
-import type { MemoryWriteRequest } from "./memory-write-protocol.js";
 
 export type HostCredentialProvider = () => string | Promise<string>;
 
@@ -69,8 +67,8 @@ export type BrokerClientErrorCode =
   | "context_unavailable"
   | "context_cancelled"
   | "context_timeout"
-  | "memory_write_conflict"
-  | "memory_write_invalid"
+  | "memory_note_conflict"
+  | "memory_note_invalid"
   | "broker_request_failed"
   | "broker_unavailable";
 
@@ -85,9 +83,9 @@ const CLIENT_MESSAGES: Record<BrokerClientErrorCode, string> = {
     "MemHub context response is invalid or incompatible.",
   context_unavailable:
     "MemHub is running, but context search is temporarily unavailable.",
-  memory_write_conflict:
-    "MemHub already holds a different write under this request_id. Poll MemHub_memory_write_status for it, or use a new request_id for new content.",
-  memory_write_invalid: "MemHub rejected this memory write as invalid.",
+  memory_note_conflict:
+    "MemHub already holds a different memory under this request_id. Use a new request_id for new content.",
+  memory_note_invalid: "MemHub rejected this memory as invalid.",
   host_credential_unavailable:
     "MemHub host credential is unavailable. Re-link this installation in MemHub.",
   host_authorization_required:
@@ -227,55 +225,60 @@ export async function grantedToolsThroughBroker(
   }
 }
 
-/** A write accepted by Core's v2 memory-write entry.
- *
- * `request_id` is the durable handle a caller keeps: it can be queried later
- * with `memoryWriteStatusThroughBroker` instead of resubmitting. A retry must
- * reuse the same id; Core treats it as the idempotency key.
- */
-export interface MemoryWriteReceipt {
+/** Core caps a hand-added memory at 12,000 characters. */
+export const MEMORY_NOTE_TEXT_MAX = 12_000;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** What a host sends to write one hand-added memory. Scope is not a field:
+ * the broker always files the note as cross-app, as the app's 添加记忆 does. */
+export interface MemoryNoteRequest {
   request_id: string;
-  state: string;
-  created_at: string;
-  updated_at: string;
-  detail?: string;
-  raw_ids?: string[];
-  memory_ids?: string[];
+  text: string;
 }
 
-/** Submit a write through the broker to Core `POST /api/v2/memory-writes`.
- *
- * The broker authenticates the installation and names the source from it;
- * nothing here calls HY directly.
- */
-export async function memoryWriteThroughBroker(
-  discoveryPath: string,
-  request: MemoryWriteRequest,
-  options?: BrokerClientOptions,
-): Promise<MemoryWriteReceipt> {
-  return postThroughBroker(
-    discoveryPath,
-    "memory-writes",
-    request,
-    15_000,
-    options,
+export function isMemoryNoteRequestId(value: unknown): value is string {
+  return typeof value === "string" && UUID.test(value);
+}
+
+export function isMemoryNoteText(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= MEMORY_NOTE_TEXT_MAX &&
+    value.trim() !== ""
   );
 }
 
-/** Read back the outcome of an accepted write, or null when the id is unknown.
+/** Exactly `{request_id, text}`; anything else is refused, not dropped. */
+export function isMemoryNoteRequest(
+  value: unknown,
+): value is MemoryNoteRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const body = value as Record<string, unknown>;
+  const keys = Object.keys(body);
+  return (
+    keys.length === 2 &&
+    keys.includes("request_id") &&
+    keys.includes("text") &&
+    isMemoryNoteRequestId(body.request_id) &&
+    isMemoryNoteText(body.text)
+  );
+}
+
+/** Write one hand-added memory through the broker to Core's memory notes.
  *
- * Unknown must be distinguishable from failed: "never accepted" and "accepted
- * and failed" lead a caller to different actions.
- */
-export async function memoryWriteStatusThroughBroker(
+ * The same entry the app's 添加记忆 uses. Reusing a request_id returns the
+ * original note rather than saving a second one. */
+export async function memoryNoteThroughBroker(
   discoveryPath: string,
-  requestId: string,
+  request: MemoryNoteRequest,
   options?: BrokerClientOptions,
-): Promise<MemoryWriteReceipt | null> {
-  return getThroughBroker(
+): Promise<MemoryNoteReceipt> {
+  return postThroughBroker(
     discoveryPath,
-    `memory-writes/${encodeURIComponent(requestId)}`,
-    10_000,
+    "memory-notes",
+    request,
+    15_000,
     options,
   );
 }
@@ -383,34 +386,6 @@ export async function reportCallEventDeliveryThroughBroker(
   );
 }
 
-export async function askThroughBroker(
-  discoveryPath: string,
-  request: AskMemoryRequest,
-  options?: BrokerClientOptions,
-): Promise<SdkAskMemoryResponse> {
-  return postThroughBroker(discoveryPath, "ask", request, 125_000, options);
-}
-
-/** Search the original conversations across every imported app.
- *
- * Separate from recall on purpose. Recall answers "what does MemHub know
- * about me"; this answers "what did I actually say over there", which is what
- * an agent needs to pick a piece of work back up. The broker reads Core's raw
- * context lane, so the answer is an SDK context response of raw items only. */
-export async function searchConversationsThroughBroker(
-  discoveryPath: string,
-  request: { query: string; limit?: number },
-  options?: BrokerClientOptions,
-): Promise<SdkContextSearchResponse> {
-  return postThroughBroker(
-    discoveryPath,
-    "conversations",
-    request,
-    15_000,
-    options,
-  );
-}
-
 async function credentialHeaders(
   options: BrokerClientOptions,
 ): Promise<Record<string, string>> {
@@ -434,11 +409,9 @@ async function postThroughBroker<T>(
   discoveryPath: string,
   endpoint:
     | "recall"
-    | "ask"
-    | "conversations"
     | "context"
     | "call-events/delivery"
-    | "memory-writes"
+    | "memory-notes"
     | "diagnostics/trace",
   request: unknown,
   timeout: number,
@@ -473,14 +446,14 @@ async function postThroughBroker<T>(
       if (endpoint === "context" && (error.response?.status ?? 0) >= 500)
         throw new BrokerClientError("context_unavailable");
       // A reused request_id with different content is a conflict, not an
-      // outage: the caller must pick a new id or poll the original.
-      if (endpoint === "memory-writes" && error.response?.status === 409)
-        throw new BrokerClientError("memory_write_conflict");
+      // outage: the caller must pick a new id for new content.
+      if (endpoint === "memory-notes" && error.response?.status === 409)
+        throw new BrokerClientError("memory_note_conflict");
       if (
-        endpoint === "memory-writes" &&
+        endpoint === "memory-notes" &&
         [400, 422].includes(error.response?.status ?? 0)
       )
-        throw new BrokerClientError("memory_write_invalid");
+        throw new BrokerClientError("memory_note_invalid");
       if (error.response?.status === 401)
         throw new BrokerClientError("host_authorization_required");
       if (error.response?.status === 403) {
@@ -496,50 +469,6 @@ async function postThroughBroker<T>(
       }
       // Anything the broker actually answered means it is running, however
       // badly the request went. Only a failure to reach it says otherwise.
-      if (error.response) throw new BrokerClientError("broker_request_failed");
-    }
-    // Axios errors include Authorization in config/request: never retain cause.
-    throw new BrokerClientError("broker_unavailable");
-  }
-}
-
-/** Read one resource through the broker.
- *
- * A 404 is returned as `null` rather than thrown: for a write status, "never
- * accepted" is a legitimate answer the caller must be able to distinguish from
- * "accepted and failed", and from the broker being unreachable.
- */
-async function getThroughBroker<T>(
-  discoveryPath: string,
-  endpoint: string,
-  timeout: number,
-  options: BrokerClientOptions = {},
-): Promise<T | null> {
-  const headers = await abortable(credentialHeaders(options), options.signal);
-  try {
-    options.signal?.throwIfAborted();
-    const { baseUrl, instanceId } = await abortable(
-      brokerBase(discoveryPath),
-      options.signal,
-    );
-    options.signal?.throwIfAborted();
-    await assertBrokerIdentity(baseUrl, instanceId, options.signal);
-    options.signal?.throwIfAborted();
-    const response = await axios.get<T>(`${baseUrl}/${endpoint}`, {
-      headers,
-      timeout,
-      proxy: false,
-      maxRedirects: 0,
-      signal: options.signal,
-    });
-    return response.data;
-  } catch (error) {
-    if (axios.isAxiosError(error)) {
-      if (error.response?.status === 404) return null;
-      if (error.response?.status === 401)
-        throw new BrokerClientError("host_authorization_required");
-      if (error.response?.status === 403)
-        throw new BrokerClientError("host_authorization_required");
       if (error.response) throw new BrokerClientError("broker_request_failed");
     }
     // Axios errors include Authorization in config/request: never retain cause.

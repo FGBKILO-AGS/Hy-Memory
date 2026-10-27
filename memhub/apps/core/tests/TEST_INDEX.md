@@ -217,6 +217,7 @@
 | `test_recall_library_scale.py` | `contract` | 覆盖 recall reaches a memory that is not among the newest 500、semantic recall reaches a memory outside the newest 500、recall still works just below the boundary 等 5 个场景。 |
 | `test_recall_log_probe_exclusion.py` | `contract` | A-21：R-10 一旦引入召回日志，「探针不污染」必须自动变红而不是静默失效。 |
 | `test_recall_probe.py` | `contract` | The self-check query, and what it must not touch on its way through. |
+| `test_recall_raw_fallback.py` | `integration` | MemHub_recall degrades to the imported conversations instead of answering empty. |
 | `test_recall_revoked_candidate_crowding.py` | `contract` | Revoked-source rows must not crowd a readable recall hit out of the page. |
 | `test_recall_scope_candidate_budget.py` | `contract` | 覆盖 other scopes cannot consume the recall candidate budget、internal wildcard still reports real candidate truncation、workspace resolution does not remove shared results 等 9 个场景。 |
 | `test_recall_scope_control.py` | `integration` | 覆盖 external scope cannot override shared or host workspace boundary、scope only mutation is versioned without changing status or reindexing 场景。 |
@@ -303,4 +304,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 298 个测试文件。
+共 299 个测试文件。

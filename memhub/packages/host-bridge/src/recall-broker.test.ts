@@ -199,7 +199,7 @@ describe("RecallBroker", () => {
     expect(exception?.details).not.toHaveProperty("message");
     expect(exception?.details).not.toHaveProperty("stack_origin");
   });
-  it.each(["recall", "ask"])(
+  it.each(["recall"])(
     "answers %s without waiting for a slow diagnostic write",
     async (endpoint) => {
       const events: string[] = [];
@@ -250,7 +250,7 @@ describe("RecallBroker", () => {
       expect(events[0]).toBe(`${endpoint}.started`);
     },
   );
-  it.each(["recall", "ask"])(
+  it.each(["recall"])(
     "answers %s when the diagnostic writer throws synchronously",
     async (endpoint) => {
       const rejections: unknown[] = [];
@@ -306,7 +306,7 @@ describe("RecallBroker", () => {
       expect(rejections).toEqual([]);
     },
   );
-  it.each(["recall", "ask"])(
+  it.each(["recall"])(
     "preserves %s scope denial instead of claiming Core is offline",
     async (endpoint) => {
       const diagnostics: Array<Record<string, unknown>> = [];
