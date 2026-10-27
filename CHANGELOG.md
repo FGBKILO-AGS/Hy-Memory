@@ -4,6 +4,15 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- MemHub "添加记忆" (add a memory) no longer waits behind unprocessed history.
+  Notes are claimed ahead of the event-time window that keeps history strictly
+  old to new; they still run one at a time and in order within their session.
+- SDK reconcile keeps time order. Both reconcile prompts now state that only
+  `memory_at` decides which memory is newer, that an older memory must never
+  supersede or overwrite a newer one, and that an unknown time is not newer;
+  the Chinese prompt now lists `memory_at` among the new-memory fields. The
+  reconciler also enforces this in code: a SUPERSEDE or UPDATE aimed at a memory
+  with a later `memory_at` becomes an ADD, so the newer memory stays current.
 - The SDK memory page now reads its list, count, source and time labels and
   graph from one page response for one source filter, so rows, totals and the
   map no longer disagree. Memories with no recorded source are shown and
