@@ -6,7 +6,7 @@ working 两类经验既列不出也数不到：一个 45 条记忆的库在界�
 """
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -97,13 +97,14 @@ async def test_stats_counts_every_scene_with_its_latest_times(coding_config, moc
             "latest_updated_at": int((BASE + timedelta(days=1)).timestamp()),
         }
         assert stats["scenes"]["coding"]["count"] == 2
+        # Productivity stores write naive UTC (utcnow), so naive means UTC.
         assert stats["scenes"]["coding"]["latest_created_at"] == int(
-            (BASE + timedelta(hours=2)).timestamp()
+            (BASE + timedelta(hours=2)).replace(tzinfo=timezone.utc).timestamp()
         )
         # The store stamps updated_at on write; the stat is the newest it holds.
         stored = [await coding.get_by_id(eid, user_id="u") for eid in ("c1", "c2")]
         assert stats["scenes"]["coding"]["latest_updated_at"] == max(
-            int(item.updated_at.timestamp()) for item in stored
+            int(item.updated_at.replace(tzinfo=timezone.utc).timestamp()) for item in stored
         )
         assert stats["scenes"]["working"]["count"] == 1
         assert stats["scenes"]["working"]["facts"] == 1
