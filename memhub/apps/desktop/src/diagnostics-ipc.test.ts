@@ -246,21 +246,23 @@ it("shows HY pipeline metrics without exposing model content", async () => {
   const target = path.join(pipelineDir, "2026-10-14.log");
   await writeFile(target, "");
   const cursor = await captureDebugLogCursor(dataDir);
-  await appendFile(
-    target,
-    `${JSON.stringify({
-      request_id: "request-safe-1",
-      user_id: "private-user",
-      agent_id: "private-agent",
-      session_id: "private-session",
-      step: "EXTRACT",
-      prompt: "private prompt",
-      content: "private response",
-      parsed: "private parsed output",
-      tokens: 42,
-      elapsed_ms: 123.5,
-      timestamp: "2026-10-14T10:01:00.000",
-    })}\n`,
+  const pipelineEntry = {
+    request_id: "request-safe-1",
+    user_id: "private-user",
+    agent_id: "private-agent",
+    session_id: "private-session",
+    step: "EXTRACT",
+    prompt: "private prompt",
+    content: "private response",
+    parsed: "private parsed output",
+    tokens: 42,
+    elapsed_ms: 123.5,
+    timestamp: "2026-10-14T10:01:00.000",
+  };
+  await appendFile(target, `${JSON.stringify(pipelineEntry)}\n`);
+  await writeFile(
+    path.join(dataDir, "hy-memory", "governed-v2", "logs", "hy_memory.log"),
+    `${JSON.stringify({ ...pipelineEntry, request_id: "must-not-appear" })}\n`,
   );
 
   const snapshot = await readDebugLogSnapshot(

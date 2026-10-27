@@ -18,6 +18,7 @@ const UI_TRACE = "one-memory:log-ui-trace";
 const DEBUG_LOGS = "one-memory:get-debug-logs";
 const DEBUG_LOG_NAME =
   /^diagnostic-(runtime|core|host-bridge|desktop|cli)\.jsonl(?:\.\d+)?$/;
+const PIPELINE_LOG_NAME = /^\d{4}-\d{2}-\d{2}\.log$/;
 const SERVICE_LOG_NAMES = [
   "service.log",
   "service-error.log",
@@ -554,7 +555,11 @@ async function pipelineLogFiles(root: string): Promise<PipelineLogCursor[]> {
         await visit(target);
         continue;
       }
-      if (!entry.isFile() || !entry.name.endsWith(".log")) continue;
+      // The same root also contains HY's human-readable hy_memory.log.
+      // Pipeline files are date-named JSONL; accepting every .log file makes
+      // the Debug poller repeatedly parse unrelated text and still display no
+      // HY entries.
+      if (!entry.isFile() || !PIPELINE_LOG_NAME.test(entry.name)) continue;
       const info = await safeRegularFile(target);
       if (!info) continue;
       files.push({

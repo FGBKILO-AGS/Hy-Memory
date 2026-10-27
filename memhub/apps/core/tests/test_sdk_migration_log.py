@@ -143,14 +143,24 @@ def test_a_finished_migration_records_the_result(home, monkeypatch):
     legacy_home(home)
     from one_memory.sdk_migration_runner import StartupMigrationResult
 
+    startup_order = []
+
     def run_startup_migration(**options):
+        startup_order.append("run_migration")
         options["progress"]("cutover")
         return StartupMigrationResult(state="cutover", migration_id="sdk-authority-v2-abc")
 
+    import one_memory.hy_runtime_config as hy_runtime_config
     import one_memory.sdk_migration_runner as runner
 
+    monkeypatch.setattr(
+        hy_runtime_config,
+        "configure_hy_runtime_environment",
+        lambda data_dir: startup_order.append(f"configure_hy:{data_dir}"),
+    )
     monkeypatch.setattr(runner, "run_startup_migration", run_startup_migration)
     assert cli.run(MIGRATE, output=StringIO()) == 0
+    assert startup_order == [f"configure_hy:{home}", "run_migration"]
     finished = lines(home)[-1]
     assert finished["event"] == "migrate.finished"
     assert finished["migration_id"] == "sdk-authority-v2-abc"
