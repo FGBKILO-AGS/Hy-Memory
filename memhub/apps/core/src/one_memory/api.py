@@ -253,6 +253,11 @@ class HealthResponse(BaseModel):
     # is answering. Reads fall back to exact LIKE while this is not ready.
     content_candidate_backfill: Literal["idle", "running", "ready", "failed"] = "idle"
     content_candidate_backfill_failure: str | None = None
+    # Picking up work an earlier run left unfinished starts after readiness.
+    # "running" is not degraded: Core is ready and answers throughout; the
+    # failed steps are named so a stuck recovery is visible without a log.
+    recovery: Literal["pending", "running", "done", "failed"] = "done"
+    recovery_failed_steps: tuple[str, ...] = ()
 
 
 class BackupRequest(BaseModel):
@@ -685,28 +690,8 @@ def create_app(
                 # Only the maintenance Core (restore) may open such a home.
                 raise SdkMigrationRequired()
             if app.state.memory_authority is MemoryAuthority.SDK:
-                from one_memory.hy_sdk_migration import (
-                    repair_sdk_metadata_from_bundle,
-                )
-
-                try:
-                    repair = await asyncio.to_thread(
-                        repair_sdk_metadata_from_bundle,
-                        data_dir=runtime_settings.data_dir,
-                        database_path=database_path,
-                    )
-                    if repair.vector_rows or repair.coding_rows:
-                        logger.info(
-                            "sdk_metadata_repair_completed mapped=%d vector=%d coding=%d",
-                            repair.mapped,
-                            repair.vector_rows,
-                            repair.coding_rows,
-                        )
-                except Exception as error:
-                    logger.warning(
-                        "sdk_metadata_repair_failed error_type=%s",
-                        type(error).__name__,
-                    )
+                # The metadata repair after a cutover reads every bundle: it is
+                # recovery work, so it runs after readiness (`recover_after_ready`).
                 app.state.memory_governance_store = RetiredGovernanceStore(database_path)
                 app.state.evidence_store = RetiredEvidenceStore(database_path)
             else:
@@ -921,8 +906,6 @@ def create_app(
                 extraction_settings=app.state.extraction_settings_store,
                 data_dir=runtime_settings.data_dir,
             )
-            if app.state.memory_authority is MemoryAuthority.SDK:
-                app.state.sdk_memory_runtime.start_raw_retention()
             # C2 owns the single production budget (handle 5s + reserve 250ms,
             # total 5.25s, lease 10s, renew 1s, claim 250ms). The composition
             # root only consumes it: no local formula, and the 250ms claim
@@ -1012,11 +995,9 @@ def create_app(
                 source_claim_enabled=lambda source_id: _sedimentation_claim_enabled(app, source_id),
             )
             app.state.memory_write_drain = memory_write_drain
-            app.state.memory_write_drain_task = watched_task(
-                asyncio.get_running_loop(),
-                lambda: memory_write_drain.run_forever(),
-                name="one-memory-durable-write-drain",
-            )
+            # Started by `recover_after_ready`: a running drain claims jobs and
+            # holds the single writer, which the rest of startup still needs.
+            app.state.memory_write_drain_task = None
             # D52: every entry that already holds committed Evidence goes
             # through the one durable queue. The intake turns one record into
             # one complete-turn request; the drain stays the only consumer, so
@@ -1089,60 +1070,6 @@ def create_app(
                 sdk_authority=lambda: app.state.memory_authority is MemoryAuthority.SDK,
             )
             app.state.import_job_store.replace_never_published_snapshot_failures()
-            # A file's Evidence and its pending-dispatch row commit atomically,
-            # but the callback that turns them into a task runs after the
-            # transaction. A crash in that window leaves durable Evidence with
-            # no in-memory timer left to notice it; drain those rows once on
-            # startup through the same permission/debounce path as live work.
-            if (
-                runtime_settings.automatic_memory_processing
-                and app.state.memory_authority is MemoryAuthority.LEGACY
-            ):
-                # Two-phase, like the live runner: enumerate the file
-                # identities, read each without consuming its pending marker,
-                # await the durable submit, and only then consume. A crash or
-                # a failed/cancelled submit leaves the marker for the next
-                # startup instead of dropping the committed Evidence. The
-                # legacy `take_all_stable_records()` consumes while reading and
-                # is deliberately no longer the startup path.
-                for user_id, source_id, file_key in await asyncio.to_thread(
-                    app.state.evidence_store.list_pending_dispatch_files
-                ):
-                    try:
-                        for dispatch in await asyncio.to_thread(
-                            app.state.evidence_store.take_stable_file_dispatches,
-                            user_id=user_id,
-                            source_id=source_id,
-                            file_key=file_key,
-                        ):
-                            # Same intake as the live callback, so the crash
-                            # window between Evidence commit and durable submit
-                            # is closed by the same idempotent path rather than
-                            # a second one.
-                            token = live_sync_arrival.set(dispatch.priority == "live")
-                            try:
-                                await enqueue_stable_evidence(dispatch.record)
-                            finally:
-                                live_sync_arrival.reset(token)
-                    except Exception:
-                        # The submit did not succeed, so the pending marker is
-                        # deliberately left in place: the next startup will
-                        # replay this file. Startup continues for the other
-                        # files instead of failing the whole composition root.
-                        logger.warning(
-                            "stable_evidence_startup_replay_deferred source=%s file=%s",
-                            source_id,
-                            file_key,
-                            exc_info=True,
-                        )
-                        continue
-                    await asyncio.to_thread(
-                        app.state.evidence_store.consume_stable_file_records,
-                        user_id=user_id,
-                        source_id=source_id,
-                        file_key=file_key,
-                    )
-            app.state.import_supervisor.resume_interrupted()
             app.state.source_connection_store = SourceConnectionStore(
                 app.state.source_grant_store,
                 app.state.import_job_store,
@@ -1185,11 +1112,6 @@ def create_app(
             app.state.live_sync_supervisor.set_watched_sources(
                 watch_roots if watching and runtime_settings.live_sync_enabled else ()
             )
-            if runtime_settings.live_sync_enabled:
-                app.state.live_sync_supervisor.start()
-                if app.state.live_sync_watch is not None:
-                    app.state.live_sync_watch.start(prime=True)
-            await _reconcile_source_sync_from_config()
             # Taking up the memory work again — the tasks left unfinished, then
             # the conversations with no memory yet — reads every conversation
             # ever imported: 13.5 seconds on this machine's real database, and
@@ -1203,9 +1125,6 @@ def create_app(
             warm_bulk_pool()
             app.state.memory_backfill = None
             app.state.memory_visibility_task = None
-            if app.state.memory_authority is MemoryAuthority.LEGACY:
-                _start_backfill(app)
-                _start_visibility_recompute(app)
             # Both times the loop was blocked here it was found from outside,
             # by hand, days later. This says so at the time, and says what was
             # holding it.
@@ -1224,15 +1143,182 @@ def create_app(
             app.state.resource_diagnostics = watched_task(
                 asyncio.get_running_loop(), _emit_resource_snapshots
             )
+            # Readiness is "Core answers": the stores above are open and
+            # /health, recall and the library work. Everything below picks up
+            # work an earlier run left unfinished -- the post-cutover metadata
+            # repair, the durable write queue, interrupted imports, live sync,
+            # source reconcile. On a library with pending work that took longer
+            # than the Runtime's readiness budget, so the Runtime killed a
+            # healthy Core and the next one began the same recovery again. It
+            # now runs only after readiness, one step at a time, and a failed
+            # step is reported without taking readiness or the other steps
+            # with it.
+            app.state.recovery = "pending"
+            app.state.recovery_failed_steps = ()
+
+            async def recover_after_ready() -> None:
+                app.state.recovery = "running"
+                recovery_started = time.monotonic()
+                failed: list[str] = []
+
+                async def step(name: str, action: Callable[[], Awaitable[None]]) -> None:
+                    step_started = time.monotonic()
+                    try:
+                        await action()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as error:
+                        failed.append(name)
+                        app.state.recovery_failed_steps = tuple(failed)
+                        logger.warning(
+                            "core_recovery_step_failed step=%s error_type=%s",
+                            name,
+                            type(error).__name__,
+                        )
+                        diagnostic_event(
+                            level="warn",
+                            component="core.recovery",
+                            event="core.recovery_step_failed",
+                            outcome="failed",
+                            error_type=type(error).__name__,
+                            duration_ms=elapsed_ms(step_started),
+                            details={"phase": name},
+                        )
+
+                async def repair_sdk_metadata() -> None:
+                    from one_memory.hy_sdk_migration import (
+                        repair_sdk_metadata_from_bundle,
+                    )
+
+                    repair = await asyncio.to_thread(
+                        repair_sdk_metadata_from_bundle,
+                        data_dir=runtime_settings.data_dir,
+                        database_path=database_path,
+                    )
+                    if repair.vector_rows or repair.coding_rows:
+                        logger.info(
+                            "sdk_metadata_repair_completed mapped=%d vector=%d coding=%d",
+                            repair.mapped,
+                            repair.vector_rows,
+                            repair.coding_rows,
+                        )
+
+                async def start_write_drain() -> None:
+                    app.state.memory_write_drain_task = watched_task(
+                        asyncio.get_running_loop(),
+                        lambda: memory_write_drain.run_forever(),
+                        name="one-memory-durable-write-drain",
+                    )
+
+                async def start_raw_retention() -> None:
+                    app.state.sdk_memory_runtime.start_raw_retention()
+
+                async def replay_pending_dispatch() -> None:
+                    # A file's Evidence and its pending-dispatch row commit atomically,
+                    # but the callback that turns them into a task runs after the
+                    # transaction. A crash in that window leaves durable Evidence with
+                    # no in-memory timer left to notice it; drain those rows once on
+                    # startup through the same permission/debounce path as live work.
+                    if (
+                        runtime_settings.automatic_memory_processing
+                        and app.state.memory_authority is MemoryAuthority.LEGACY
+                    ):
+                        # Two-phase, like the live runner: enumerate the file
+                        # identities, read each without consuming its pending marker,
+                        # await the durable submit, and only then consume. A crash or
+                        # a failed/cancelled submit leaves the marker for the next
+                        # startup instead of dropping the committed Evidence. The
+                        # legacy `take_all_stable_records()` consumes while reading and
+                        # is deliberately no longer the startup path.
+                        for user_id, source_id, file_key in await asyncio.to_thread(
+                            app.state.evidence_store.list_pending_dispatch_files
+                        ):
+                            try:
+                                for dispatch in await asyncio.to_thread(
+                                    app.state.evidence_store.take_stable_file_dispatches,
+                                    user_id=user_id,
+                                    source_id=source_id,
+                                    file_key=file_key,
+                                ):
+                                    # Same intake as the live callback, so the crash
+                                    # window between Evidence commit and durable submit
+                                    # is closed by the same idempotent path rather than
+                                    # a second one.
+                                    token = live_sync_arrival.set(dispatch.priority == "live")
+                                    try:
+                                        await enqueue_stable_evidence(dispatch.record)
+                                    finally:
+                                        live_sync_arrival.reset(token)
+                            except Exception:
+                                # The submit did not succeed, so the pending marker is
+                                # deliberately left in place: the next startup will
+                                # replay this file. Startup continues for the other
+                                # files instead of failing the whole composition root.
+                                logger.warning(
+                                    "stable_evidence_startup_replay_deferred source=%s file=%s",
+                                    source_id,
+                                    file_key,
+                                    exc_info=True,
+                                )
+                                continue
+                            await asyncio.to_thread(
+                                app.state.evidence_store.consume_stable_file_records,
+                                user_id=user_id,
+                                source_id=source_id,
+                                file_key=file_key,
+                            )
+
+                async def resume_imports() -> None:
+                    app.state.import_supervisor.resume_interrupted()
+
+                async def start_live_sync() -> None:
+                    if runtime_settings.live_sync_enabled:
+                        app.state.live_sync_supervisor.start()
+                        if app.state.live_sync_watch is not None:
+                            app.state.live_sync_watch.start(prime=True)
+
+                async def start_legacy_catch_up() -> None:
+                    _start_backfill(app)
+                    _start_visibility_recompute(app)
+
+                # Yield once first so the HTTP server finishes binding before
+                # any of this asks the loop for time.
+                await asyncio.sleep(0)
+                try:
+                    sdk = app.state.memory_authority is MemoryAuthority.SDK
+                    if sdk:
+                        # Before the drain: the repair restores metadata the
+                        # queued writes are read back against.
+                        await step("sdk_metadata_repair", repair_sdk_metadata)
+                    await step("write_drain", start_write_drain)
+                    if sdk:
+                        await step("raw_retention", start_raw_retention)
+                    else:
+                        await step("pending_dispatch_replay", replay_pending_dispatch)
+                    await step("import_resume", resume_imports)
+                    await step("live_sync", start_live_sync)
+                    await step("source_reconcile", _reconcile_source_sync_from_config)
+                    if not sdk:
+                        await step("legacy_catch_up", start_legacy_catch_up)
+                finally:
+                    # Startup writes are done. Only now let the derived-content
+                    # rebuild take the single write checkout: it is a long
+                    # background job, and on a large library it would otherwise
+                    # hold the writer while the recovery above still needs it
+                    # (ISSUE-CONTENT-BACKFILL-BLOCKS-STARTUP).
+                    app.state.memory_governance_store.release_content_backfill_startup_gate()
+                app.state.recovery = "failed" if failed else "done"
+                diagnostic_event(
+                    level="warn" if failed else "info",
+                    component="core.recovery",
+                    event="core.recovery_finished",
+                    outcome="failed" if failed else "succeeded",
+                    duration_ms=elapsed_ms(recovery_started),
+                    details={"count": len(failed)},
+                )
+
+            app.state.recovery_task = None
             try:
-                # Startup writes are done. Only now let the derived-content
-                # rebuild take the single write checkout: it is a long
-                # background job, and on a large library it would otherwise
-                # hold the writer while the store initializations above still
-                # need it, so startup would wait out the write budget and fail
-                # with `database is locked`
-                # (ISSUE-CONTENT-BACKFILL-BLOCKS-STARTUP).
-                app.state.memory_governance_store.release_content_backfill_startup_gate()
                 diagnostic_event(
                     level="info",
                     component="core.lifecycle",
@@ -1240,6 +1326,11 @@ def create_app(
                     outcome="succeeded",
                     instance_id=runtime_settings.instance_id,
                     duration_ms=elapsed_ms(lifecycle_started),
+                )
+                app.state.recovery_task = watched_task(
+                    asyncio.get_running_loop(),
+                    recover_after_ready,
+                    name="one-memory-post-ready-recovery",
                 )
                 yield
             finally:
@@ -1251,6 +1342,14 @@ def create_app(
                     outcome="started",
                     instance_id=runtime_settings.instance_id,
                 )
+                # First: recovery may be about to start what is stopped below.
+                if app.state.recovery_task is not None:
+                    app.state.recovery_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await app.state.recovery_task
+                # Cancelled before it got that far, recovery never let the
+                # rebuild go; a held rebuild would hold shutdown below too.
+                app.state.memory_governance_store.release_content_backfill_startup_gate()
                 app.state.main_database_report.cancel()
                 app.state.loop_heartbeat.cancel()
                 with suppress(asyncio.CancelledError):
@@ -1278,8 +1377,9 @@ def create_app(
                 await app.state.live_sync_supervisor.shutdown()
                 await app.state.import_supervisor.shutdown()
                 app.state.memory_write_drain.stop()
-                with suppress(asyncio.CancelledError):
-                    await app.state.memory_write_drain_task
+                if app.state.memory_write_drain_task is not None:
+                    with suppress(asyncio.CancelledError):
+                        await app.state.memory_write_drain_task
                 await app.state.sdk_memory_runtime.shutdown()
                 await app.state.sdk_write_coordinator.close()
                 if app.state.sdk_client_handle is not None:
@@ -1497,6 +1597,8 @@ def create_app(
             content_candidate_backfill_failure=(
                 governance.content_candidate_backfill_failure() if governance is not None else None
             ),
+            recovery=getattr(app.state, "recovery", "pending"),
+            recovery_failed_steps=getattr(app.state, "recovery_failed_steps", ()),
         )
 
     @app.get("/health", response_model=HealthResponse, include_in_schema=False)

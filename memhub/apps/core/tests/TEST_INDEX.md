@@ -68,6 +68,7 @@
 | `test_conversation_search.py` | `integration` | Searching imported conversations before any generation model is configured. |
 | `test_conversation_seed_ids.py` | `contract` | 覆盖 seed ids read metadata only without hydrating、seed eligibility keeps person and memory content only、latest activity includes nonseed turns and import time fallback 等 13 个场景。 |
 | `test_conversation_turn_grouping.py` | `contract` | A proposal and the turn that adopts it must reach HY as one turn. |
+| `test_core_ready_before_recovery.py` | `integration` | Readiness never waits for picking up work an earlier run left unfinished. |
 | `test_core_test_reporting.py` | `contract` | 覆盖 report writes sanitized machine readable views、file and marker aggregates are stable、classification suggestions never guess unit contract or integration 等 6 个场景。 |
 | `test_credential_responsiveness.py` | `integration` | 覆盖 credentials do not block the event loop、disabled automatic processing does not digest onboarding、answering reads credentials off loop 等 5 个场景。 |
 | `test_cursor_default_root_windows.py` | `contract` | R-29 剩余：Cursor 默认根路径不能写死成 macOS。 |
@@ -302,4 +303,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 297 个测试文件。
+共 298 个测试文件。
