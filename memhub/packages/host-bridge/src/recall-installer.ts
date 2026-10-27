@@ -3091,6 +3091,16 @@ ${JSON.stringify(mcp, null, 2)}
 5. Restart or reload this Harness's MCP services if required. Run one real MemHub recall query and report whether the tool was discovered and the authenticated query succeeded. Do not report success merely because files were written.
 
 The pairing code is single-use. If pairing fails or the code has expired, stop and ask the user to generate a new Skill in MemHub. Do not guess codes, reuse another Harness's credential, disable authorization, or broaden permissions.
+
+## Using MemHub after connecting
+
+The MemHub MCP server exposes exactly three tools:
+
+- \`MemHub_recall\` (\`query\`): search the user's memories before answering anything that depends on their preferences, past decisions, constraints or earlier work. When the result has \`mode: "raw"\`, no generation model is configured or no memory exists yet, so MemHub searched the imported original conversations instead: treat those hits as conversation excerpts, not confirmed memories, and say which app they came from.
+- \`MemHub_write\` (\`text\`, optional \`request_id\`): save one memory, only when the user asks you to remember something or states a lasting preference, decision or constraint. Write a short conclusion, never a transcript or a secret. It is processed asynchronously; a returned \`pending\` or \`waiting_for_model\` state means it was accepted. Retry a failed call with the same \`request_id\`.
+- \`MemHub_diagnostic_trace\`: read the diagnostic steps of a MemHub call, only while the user is troubleshooting with detailed logging on.
+
+A tool you can see is not a tool you are allowed to use. Report a denial or an unavailable MemHub as such; never treat it as an empty result, retry around it, or broaden access.
 `;
 }
 
@@ -3138,6 +3148,10 @@ are not successful retrieval. Never invent revision, evidence, path or adoption 
 Context exit 4 reports unavailable/denied, exit 5 requires a runtime upgrade; do not
 retry with the legacy command or broaden access. The legacy command above is retained
 for explicitly memory-only queries and the installation self-check, not error fallback.
+When no generation model is configured or no memory exists yet, the legacy command
+searches the imported original conversations instead and labels its output as
+original-conversation excerpts: they are not confirmed memories. This host has no
+MemHub write path; do not claim to have saved a memory.
 
 - Replace \`查询内容\` with a concise description of the context you need,
   keeping the argument quoted and escaping shell metacharacters.
