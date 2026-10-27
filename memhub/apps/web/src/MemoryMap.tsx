@@ -1089,6 +1089,7 @@ export function MemoryMap(props: Props) {
       <MemoryEvidencePanel
         open={inspectorOpen && !!(activeId || visibleGroupNode)}
         suspended={overlaysSuspended}
+        scrollResetKey={activeId ?? visibleGroupNode?.node_id ?? "empty"}
         onClose={closeInspector}
       >
         <header className="map-inspector-heading">
