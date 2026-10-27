@@ -14,9 +14,9 @@ import {
   type ImportJob,
   type LiveSyncHealth,
   type ManualExtractReceipt,
+  type MemoryAddInput,
+  type MemoryAddReceipt,
   type MemoryGraphResponse,
-  type MemoryNoteInput,
-  type MemoryNoteReceipt,
   type MemoryProcessingSummary,
   type ModelCreationOperation,
   type ModelProbeOperationReceipt,
@@ -42,18 +42,19 @@ import {
 // stays here is the transport adapter: axios wiring, recovery clients, and the
 // UI-facing error mapping.
 import {
-  buildMemoryNoteSaveRequest,
+  buildMemoryAddRequest,
   buildModelProfileCreateRequest,
   buildModelProfileUpdateRequest,
   buildSourceImportRequest,
   buildSourceSyncRequest,
   classifyModelRemove,
   hasSourceSyncTarget,
+  memoryAddStatusPath,
   normalizeManualExtractEvidence,
   parseExtractionSettingsReceipt,
   parseGraphWidthDecisionReceipt,
   parseManualExtractReceipt,
-  parseMemoryNoteReceipt,
+  parseMemoryAddReceipt,
   parseModelProfileReceipt,
   SourceSyncInputError,
 } from "@one-memory/operations";
@@ -149,55 +150,29 @@ export async function getCallReferencesRequest(
 
 export type { HealthResponse };
 
-export async function saveMemoryNote(
-  note: MemoryNoteInput,
+/** Add one memory directly (`POST /api/v2/memories`). */
+export async function addMemory(
+  input: MemoryAddInput,
   traceId?: string,
-): Promise<MemoryNoteReceipt> {
-  const request = buildMemoryNoteSaveRequest(note);
-  const response = await client.post<MemoryNoteReceipt>(
+): Promise<MemoryAddReceipt> {
+  const request = buildMemoryAddRequest(input);
+  const response = await client.post<MemoryAddReceipt>(
     request.path,
     request.body,
     traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
   );
-  const receipt = parseMemoryNoteReceipt(response.data);
-  if (receipt === null) throw new Error("memory_note_receipt_invalid");
+  const receipt = parseMemoryAddReceipt(response.data);
+  if (receipt === null) throw new Error("memory_add_receipt_invalid");
   return receipt;
 }
 
-export async function getMemoryNotes(): Promise<MemoryNoteReceipt[]> {
-  const response = await client.get<unknown>("/api/v1/memory-notes");
-  if (!Array.isArray(response.data))
-    throw new Error("memory_note_receipt_invalid");
-  const notes = response.data.map(parseMemoryNoteReceipt);
-  if (notes.some((note) => note === null))
-    throw new Error("memory_note_receipt_invalid");
-  return notes as MemoryNoteReceipt[];
-}
-
-export async function getMemoryNoteOperation(
+/** Status of one addition, keyed by the request id it was submitted with. */
+export async function getMemoryAddStatus(
   requestId: string,
-): Promise<MemoryNoteReceipt> {
-  const response = await client.get<unknown>(
-    `/api/v1/memory-notes/operations/${encodeURIComponent(requestId)}`,
-  );
-  const receipt = parseMemoryNoteReceipt(response.data);
-  if (receipt === null) throw new Error("memory_note_receipt_invalid");
-  return receipt;
-}
-
-export async function processMemoryNote(
-  id: string,
-  traceId?: string,
-): Promise<MemoryNoteReceipt> {
-  const response = await client.post<MemoryNoteReceipt>(
-    `/api/v1/memory-notes/${encodeURIComponent(id)}/process`,
-    {},
-    // Starting processing is a write; carry the trace id so the ui.action /
-    // ui.result pair joins the kernel legs in one chain.
-    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
-  );
-  const receipt = parseMemoryNoteReceipt(response.data);
-  if (receipt === null) throw new Error("memory_note_receipt_invalid");
+): Promise<MemoryAddReceipt> {
+  const response = await client.get<unknown>(memoryAddStatusPath(requestId));
+  const receipt = parseMemoryAddReceipt(response.data);
+  if (receipt === null) throw new Error("memory_add_receipt_invalid");
   return receipt;
 }
 
@@ -1037,9 +1012,8 @@ export async function setExtractionWindow(
     { window_preset: windowPreset },
     traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
   );
-  // The CLI validates this receipt (`ui-write-flows-extended.ts`
-  // `executeExtractionWindowSet` -> `ui_write_receipt_invalid`); the Web stored
-  // the raw body, so a malformed 200 became a saved preset.
+  // The receipt is validated before it is trusted; the Web used to store the
+  // raw body, so a malformed 200 became a saved preset.
   const receipt = parseExtractionSettingsReceipt(response.data, windowPreset);
   if (receipt === null) throw new Error("extraction_settings_receipt_invalid");
   return receipt;

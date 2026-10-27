@@ -2,12 +2,12 @@
 
 Companion to `test_memory_server_unified_entry.py` (C2's adapter). That file
 proves the adapter works in isolation; this one pins the *wiring* in `api.py` /
-`memory_notes.py`, which is the C0-owned half:
+`memory_additions.py`, which is the C0-owned half:
 
   red state  - before the wiring, `on_stable_evidence` was the supervisor's
                `enqueue_evidence` and a committed record had no
                `memory_write_jobs` row;
-  positive   - after it, both the import callback and a manual note submit to
+  positive   - after it, both the import callback and a hand-added memory submit to
                the durable queue under `entry:<evidence_id>`;
   idempotent - replaying the same evidence returns the original job.
 """
@@ -173,8 +173,8 @@ def test_import_callback_goes_through_the_durable_intake(tmp_path) -> None:
             assert callback.__module__ == "one_memory.api"
             # The shared intake exists and is what the callback closes over.
             assert app.state.memory_write_intake.queue is not None
-            # Same object for the note path, so both entries share one queue.
-            assert app.state.memory_note_store.intake is app.state.memory_write_intake
+            # Same object for the memory-add path, so both entries share one queue.
+            assert app.state.memory_addition_store.intake is app.state.memory_write_intake
 
     asyncio.run(scenario())
 
@@ -225,7 +225,7 @@ def test_live_import_callback_submits_realtime_priority(tmp_path) -> None:
     asyncio.run(scenario())
 
 
-def test_manual_note_creates_one_durable_row_and_replays_idempotently(
+def test_memory_add_creates_one_durable_row_and_replays_idempotently(
     tmp_path,
 ) -> None:
     async def scenario():
@@ -237,10 +237,8 @@ def test_manual_note_creates_one_durable_row_and_replays_idempotently(
                 headers={"Authorization": "Bearer wire-test"},
             )
             request_id = str(uuid4())
-            created = await client.post(
-                "/api/v1/memory-notes",
-                json={"request_id": request_id, "text": "记住这条", "scope": "all-apps"},
-            )
+            body = {"request_id": request_id, "text": "记住这条", "scope": "all-apps"}
+            created = await client.post("/api/v2/memories", json=body)
             assert created.status_code == 201
             evidence_id = created.json()["evidence_id"]
             key = f"entry:{evidence_id}"
@@ -257,10 +255,12 @@ def test_manual_note_creates_one_durable_row_and_replays_idempotently(
                     break
             assert rows == [(key,)]
 
-            # Idempotent replay: a second /process must not add a second row.
-            assert (
-                await client.post(f"/api/v1/memory-notes/{evidence_id}/process")
-            ).status_code == 200
+            # Idempotent replay: the same request submitted again must not add
+            # a second row.
+            replay = await client.post("/api/v2/memories", json=body)
+            assert replay.status_code == 201
+            assert replay.json()["evidence_id"] == evidence_id
+            await asyncio.sleep(0.2)
             with sqlite3.connect(app.state.evidence_store.database_path) as db:
                 count = db.execute(
                     "SELECT COUNT(*) FROM memory_write_jobs WHERE idempotency_key=?",

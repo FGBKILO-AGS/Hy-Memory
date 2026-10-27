@@ -229,6 +229,10 @@ class HySdkMemoryPage(BaseModel):
             raise HySdkReadError("hy_memory_list_shape_unknown")
         if raw.get("scene") == "all":
             return cls._parse_all_scenes(raw, limit=limit, offset=offset, skip_invalid=skip_invalid)
+        if raw.get("scene") == "productivity":
+            return cls._parse_experiences(
+                raw, limit=limit, offset=offset, skip_invalid=skip_invalid
+            )
         rows: list[object] = []
         total = 0
         for bucket_name, rows_name in (("vdb", "memories"), ("graph", "nodes")):
@@ -322,6 +326,51 @@ class HySdkMemoryPage(BaseModel):
                 offset=offset,
                 totals=totals,
             ),
+            skipped,
+        )
+
+    @classmethod
+    def _parse_experiences(
+        cls,
+        raw: Mapping[str, object],
+        *,
+        limit: int,
+        offset: int,
+        skip_invalid: bool,
+    ) -> tuple[HySdkMemoryPage, int]:
+        """``list_memories(scene="working"|"coding")``: that scene's experiences.
+
+        The SDK names the scene once, in ``variant``; each row is a bare
+        experience, so the kind and variant are added before parsing.
+        """
+        rows = raw.get("experiences")
+        total = raw.get("total")
+        variant = raw.get("variant")
+        if (
+            not isinstance(rows, list)
+            or not isinstance(total, int)
+            or isinstance(total, bool)
+            or total < 0
+            or variant not in {"working", "coding"}
+        ):
+            raise HySdkReadError("hy_memory_list_shape_unknown")
+        memories: list[HySdkMemoryRecord] = []
+        skipped = 0
+        for row in rows:
+            try:
+                if not isinstance(row, Mapping):
+                    raise HySdkReadError("hy_memory_record_shape_unknown")
+                record = HySdkMemoryRecord.from_sdk(
+                    {**row, "kind": "experience", "variant": variant}
+                )
+            except HySdkReadError:
+                if not skip_invalid:
+                    raise
+                skipped += 1
+                continue
+            memories.append(record)
+        return (
+            cls(memories=tuple(memories), total=total, limit=limit, offset=offset),
             skipped,
         )
 

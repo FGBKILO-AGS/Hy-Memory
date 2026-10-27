@@ -109,8 +109,9 @@ Node、Host Bridge 或模型。用户显式执行 `memhub install` 后，CLI 才
 Python Core 和运行所需的 Python 依赖位于 MemHub 受管 Runtime，不写入系统 Python。
 MemHub 的 SQLite 数据默认位于 `~/.one-memory`，不在 npm 包或 Runtime 版本目录中。
 `npm uninstall` 只移除 npm CLI；`memhub uninstall` 移除服务、受管 Runtime 和 CLI 链接，
-默认保留 Memory。只有独立的 `memhub delete-data` 在 Runtime 停止且二次确认精确路径后
-才会删除数据。
+默认保留 Memory。只有独立的 `memhub delete-data` 在 Runtime 停止、显式加 `--yes` 并用
+`--confirm <数据目录>` 再写一遍同一个目录后才会删除数据（不加参数只预览要删除的目录）。`memhub stop` 停止受管服务时也会关闭
+登录自动启动，再次 `memhub start` 会恢复。
 
 当前平台能力和安装边界以源码、CI 与发布说明为准。未完成真机验收的平台不会仅凭跨平台
 测试宣称可用。

@@ -163,13 +163,13 @@ from one_memory.imports.supervisor import ImportSupervisor
 from one_memory.library_search_window import LibrarySearchWindows, window_key
 from one_memory.library_upgrade import LibraryUpgradeError, prepare_library
 from one_memory.loop_watchdog import LoopWatchdog
+from one_memory.memory_additions import (
+    LegacyMemoryAdditionReader,
+    MemoryAdditionStore,
+    memory_add_router,
+)
 from one_memory.memory_governance import (
     MemoryGovernanceStore,
-)
-from one_memory.memory_notes import (
-    LegacyMemoryNoteReader,
-    MemoryNoteStore,
-    memory_note_router,
 )
 from one_memory.memory_qa import MemoryAnswerError
 from one_memory.memory_queue import (
@@ -1050,10 +1050,10 @@ def create_app(
                         priority=priority,
                     )
 
-            app.state.memory_note_store = MemoryNoteStore(
+            app.state.memory_addition_store = MemoryAdditionStore(
                 app.state.evidence_store,
                 (
-                    LegacyMemoryNoteReader(
+                    LegacyMemoryAdditionReader(
                         app.state.memory_task_store,
                         app.state.memory_governance_store,
                     )
@@ -1460,7 +1460,7 @@ def create_app(
         Depends(local_api_guard(runtime_settings, valid_ui_session=ui_session_valid)),
         Depends(require_external_endpoint),
     ]
-    app.include_router(memory_note_router(protected))
+    app.include_router(memory_add_router(protected))
     app.include_router(file_import_router(protected))
     app.include_router(sdk_context_router(protected))
 
@@ -2856,11 +2856,14 @@ def create_app(
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=LIBRARY_PAGE_SIZE, ge=1, le=500),
         window_id: str | None = Query(default=None, min_length=1, max_length=64),
+        scene: Literal["all", "chat", "working", "coding"] = Query(default="all"),
     ) -> HySdkMemoryPage:
         """One page of memories across chat, working and coding.
 
         Without `query`: `list_memories(scene="all")`, newest update first;
-        `total` is the SDK's count across the three scenes.
+        `total` is the SDK's count across the three scenes. `scene` narrows
+        the page to one scene: chat lists the chat store, working/coding list
+        that scene's experiences (the SDK lists experiences only, all active).
 
         With `query`: keyword search over one SDK relevance window (see
         `_library_search_page`). The first request (no `window_id`) searches
@@ -2887,11 +2890,12 @@ def create_app(
                     offset=offset,
                     limit=limit,
                     window_id=window_id,
+                    scene=scene,
                 )
             raw = await asyncio.to_thread(
                 client.list_memories,
                 user_id="local",
-                scene="all",
+                scene=scene,
                 statuses=list(statuses),
                 include_sources=[source] if source else None,
                 offset=offset,
@@ -4540,6 +4544,7 @@ async def _library_search_page(
     offset: int,
     limit: int,
     window_id: str | None,
+    scene: str = "all",
 ) -> HySdkMemoryPage:
     """One page of a keyword search, cut from a cached result window.
 
@@ -4551,7 +4556,7 @@ async def _library_search_page(
     SDK so edits and deletes show. The whole library is never listed in Core.
     """
     windows = _library_search_windows(app)
-    key = window_key(query, source, statuses)
+    key = window_key(query, source, statuses, scene)
     window = windows.get(window_id, key) if window_id else None
     window_reset = window_id is not None and window is None
     if window is None:
@@ -4576,6 +4581,13 @@ async def _library_search_page(
             reader=HY_MEMORY_READER,
         )
         hits, held = library_keyword_hits(search_raw, query)
+        if scene != "all":
+            # One scene: keep that scene's matches from the same fused window.
+            hits = tuple(
+                hit
+                for hit in hits
+                if (hit.kind == "chat" if scene == "chat" else hit.variant == scene)
+            )
         window = windows.put(key, hits, fetch if held >= fetch else None)
         if window_reset:
             offset = 0

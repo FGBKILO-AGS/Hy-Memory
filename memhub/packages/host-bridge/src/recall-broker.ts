@@ -14,7 +14,7 @@ import type {
 import axios from "axios";
 import {
   type CallEventDeliveryRequest,
-  isMemoryNoteRequest,
+  isMemoryAddBrokerRequest,
 } from "./broker-client.js";
 import {
   authorizeContext,
@@ -41,7 +41,7 @@ const LOOPBACK_HOST = "127.0.0.1";
 const DEFAULT_PORT = 18_765;
 const MAX_BODY_BYTES = 64 * 1024;
 /** 12,000 characters, each of which JSON may escape to six bytes. */
-const MAX_MEMORY_NOTE_BODY_BYTES = 128 * 1024;
+const MAX_MEMORY_ADD_BODY_BYTES = 128 * 1024;
 const CONNECTION_DIAGNOSTIC_SUMMARY_MS = 5 * 60 * 1000;
 const DELIVERY_BINDING_TTL_MS = 60_000;
 const CALL_EVENT_ID =
@@ -319,8 +319,8 @@ export class RecallBroker {
       await this.proxyContext(request, response);
       return;
     }
-    if (request.url === "/memory-notes") {
-      await this.proxyMemoryNote(request, response);
+    if (request.url === "/memories") {
+      await this.proxyMemoryAdd(request, response);
       return;
     }
     if (request.url === "/diagnostics/trace") {
@@ -976,7 +976,7 @@ export class RecallBroker {
 
   /** The installation behind a request: authenticated, never tool-authorized.
    *
-   * Memory notes are not grant-governed, but only an installation MemHub
+   * Hand-added memories are not grant-governed, but only an installation MemHub
    * paired may write one. Without a grant store there is no identity, so no
    * write. */
   private async authenticateHost(
@@ -1005,9 +1005,9 @@ export class RecallBroker {
     }
   }
 
-  /** Core's memory-note entry, as a trusted local caller.
+  /** Core's memory-add entry, as a trusted local caller.
    *
-   * Core refuses `/api/v1/memory-notes` to requests that carry the external
+   * Core refuses `POST /api/v2/memories` to requests that carry the external
    * read envelope, and writes are not grant-governed. */
   private coreWriteHeaders(request: IncomingMessage): Record<string, string> {
     return {
@@ -1020,8 +1020,8 @@ export class RecallBroker {
   /** One hand-added memory, the same entry as the app's 添加记忆.
    *
    * The body is exactly `{request_id, text}`: a host cannot choose a scope or
-   * a source. The note is filed cross-app, as a hand-added memory. */
-  private async proxyMemoryNote(
+   * a source. The memory is filed cross-app, as a hand-added memory. */
+  private async proxyMemoryAdd(
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
@@ -1030,14 +1030,14 @@ export class RecallBroker {
       const body = await readJsonBody(
         request,
         undefined,
-        MAX_MEMORY_NOTE_BODY_BYTES,
+        MAX_MEMORY_ADD_BODY_BYTES,
       );
-      if (!isMemoryNoteRequest(body)) {
-        sendJson(response, 400, { error: "memory_note_invalid" });
+      if (!isMemoryAddBrokerRequest(body)) {
+        sendJson(response, 400, { error: "memory_add_invalid" });
         return;
       }
       const result = await axios.post<unknown>(
-        `${this.options.coreBaseUrl}/api/v1/memory-notes`,
+        `${this.options.coreBaseUrl}/api/v2/memories`,
         { request_id: body.request_id, text: body.text, scope: "all-apps" },
         {
           headers: this.coreWriteHeaders(request),
@@ -1052,11 +1052,11 @@ export class RecallBroker {
         return;
       }
       if (result.status === 409) {
-        sendJson(response, 409, { error: "memory_note_conflict" });
+        sendJson(response, 409, { error: "memory_add_conflict" });
         return;
       }
       if (result.status === 422) {
-        sendJson(response, 422, { error: "memory_note_invalid" });
+        sendJson(response, 422, { error: "memory_add_invalid" });
         return;
       }
       sendJson(response, 502, { error: "MemHub memory write is unavailable" });
@@ -1246,7 +1246,7 @@ function brokerOperation(url: string | undefined): string | null {
       "/recall": "recall",
       "/context": "context",
       "/call-events/delivery": "call_event_delivery",
-      "/memory-notes": "memory_note",
+      "/memories": "memory_add",
       "/source-changed": "source_notification",
       "/control/connections": "connection_control",
     }[url ?? ""] ?? null

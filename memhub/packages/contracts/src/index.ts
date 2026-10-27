@@ -1042,13 +1042,16 @@ export interface ManualExtractReceipt {
   batches_current: number;
 }
 
-export interface MemoryNoteInput {
+/** Body of `POST /api/v2/memories`: add one memory directly. */
+export interface MemoryAddInput {
   request_id: string;
   text: string;
   scope: "all-apps";
 }
 
-export interface MemoryNoteReceipt {
+/** Receipt of `POST /api/v2/memories` and
+ * `GET /api/v2/memories/additions/{request_id}`. */
+export interface MemoryAddReceipt {
   evidence_id: string;
   text: string;
   scope: "all-apps";
@@ -1066,7 +1069,6 @@ export interface MemoryNoteReceipt {
   error: string | null;
 }
 
-export type SavedMemoryNoteEvidence = MemoryEvidenceExcerpt;
 export type {
   BackupRestoreFailureCode,
   BackupRestoreRequest,

@@ -152,13 +152,13 @@
 | `test_measure_c1_import_scale.py` | `contract` | The import measurement must not report fabricated or conflated counters. |
 | `test_measure_c1_loop_blocking_contract.py` | `integration` | Contract guards for the C1 event-loop blocking measurement. |
 | `test_memhub_display_identity.py` | `contract` | Display name MemHub must not fork the technical identity. |
+| `test_memory_additions.py` | `integration` | Add one memory directly: `POST /api/v2/memories` and `GET /api/v2/memories/additions/{id}`. |
 | `test_memory_batch_extraction.py` | `contract` | 覆盖 batch extractor keeps only unique known evidence ids、batch extractor maps provider failure to machine error 场景。 |
 | `test_memory_citation_query_plan.py` | `contract` | Correlated citation checks must look links up by memory, not scan by 'active'. |
 | `test_memory_content_import.py` | `integration` | 覆盖 existing memory preview keeps unknown author and exact original、invalid existing memory records never leave a partial upload、memory content requires explicit mode and rejects vendor guessing 等 5 个场景。 |
 | `test_memory_evidence_freshness.py` | `contract` | 新鲜度拆除后：读路径恒为 current；证据修订 / 畸形 proof / segment ref 不再藏记忆或 503。 |
 | `test_memory_freshness_integration_review.py` | `integration` | Independent synthetic read-path review; no lifespan, model or user database. |
 | `test_memory_library_all_scenes.py` | `integration` | The v2 memory library across chat, working and coding memories. |
-| `test_memory_notes.py` | `integration` | 覆盖 empty library can save a note without a matter or configured model、note requires authentication explicit scope and nonempty content、saved note evidence returns raw and consent reference from same record 等 6 个场景。 |
 | `test_memory_qa.py` | `contract` | 覆盖 search terms keep meaningful single chinese character、streamed answer emits recall then incremental grounded text、governance change during generation stops the old answer 等 14 个场景。 |
 | `test_memory_qa_api.py` | `integration` | 覆盖 ask stream endpoint emits recall deltas and final、ask stream endpoint requires the local token 场景。 |
 | `test_memory_qa_permissions.py` | `contract` | 覆盖 initial refusal precedes all secret access and network、invalid authorization result fails before secret access、authorization receives exact question and only outbound grounding 等 16 个场景。 |

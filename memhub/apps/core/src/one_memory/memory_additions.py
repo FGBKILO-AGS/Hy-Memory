@@ -1,5 +1,13 @@
+"""Add one memory directly: `POST /api/v2/memories` and its status read.
+
+The public API has no "notes": a hand-added memory is filed as manual Evidence
+and turned into memories by the durable write queue. Storage keeps its
+pre-rename identifiers (`memory_note_requests`, source `one-memory-manual`,
+`input_mode=direct_memory_note`, conversation `note:<request_id>`) because they
+are persisted and feed evidence ids; renaming them would change stored data.
+"""
+
 import asyncio
-import json
 import sqlite3
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -28,7 +36,7 @@ from one_memory.memory_tasks import MemoryTaskStatus, MemoryTaskStore
 from one_memory.secrets import SecretStoreUnavailableError
 
 SOURCE_ID = "one-memory-manual"
-MemoryNoteState = Literal[
+MemoryAddState = Literal[
     "waiting_for_model",
     "waiting_for_permission",
     "pending",
@@ -39,7 +47,7 @@ MemoryNoteState = Literal[
 ]
 
 
-class MemoryNoteInput(BaseModel):
+class MemoryAddInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     request_id: UUID
@@ -50,25 +58,25 @@ class MemoryNoteInput(BaseModel):
     @classmethod
     def meaningful_text(cls, value: str) -> str:
         if not value.strip():
-            raise ValueError("memory_note_empty")
+            raise ValueError("memory_add_empty")
         return value
 
 
-class MemoryNoteReceipt(BaseModel):
+class MemoryAddReceipt(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     evidence_id: str
     text: str
     scope: Literal["all-apps"] = "all-apps"
     created_at: datetime
-    state: MemoryNoteState
+    state: MemoryAddState
     task_id: str | None = None
     memory_ids: list[str] = Field(default_factory=list)
     error: str | None = None
 
 
-class LegacyMemoryNoteReader:
-    """Read pre-cutover note receipts without retaining any write runtime."""
+class LegacyMemoryAdditionReader:
+    """Read pre-cutover addition receipts without retaining any write runtime."""
 
     def __init__(
         self,
@@ -79,7 +87,7 @@ class LegacyMemoryNoteReader:
         self.governance = governance
 
 
-class MemoryNoteStore:
+class MemoryAdditionStore:
     def __init__(
         self,
         evidence: EvidenceStore,
@@ -92,34 +100,34 @@ class MemoryNoteStore:
         self.evidence = evidence
         self.processor = processor
         # D52: the production composition root passes a UnifiedWriteIntake so a
-        # manual note reaches the durable queue like every other entry. It stays
+        # manual addition reaches the durable queue like every other entry. It stays
         # optional so isolated tests can keep constructing the store directly.
         self.intake = intake
         self.sdk_authority = sdk_authority
         self.write_queue = write_queue
 
-    def save(self, note: MemoryNoteInput) -> EvidenceRecord:
+    def save(self, addition: MemoryAddInput) -> EvidenceRecord:
         now = datetime.now(UTC)
         value = EvidenceInput(
             source_id=SOURCE_ID,
-            conversation_id=f"note:{note.request_id}",
-            message_id=str(note.request_id),
+            conversation_id=f"note:{addition.request_id}",
+            message_id=str(addition.request_id),
             role="user",
             written_by=WrittenBy.PERSON,
             created_at=now,
-            verbatim=note.text,
+            verbatim=addition.text,
             origin_meta={
                 EvidenceOrigin.MANUAL_IMPORT: OriginMetadata(
                     raw_meta={
                         "input_mode": "direct_memory_note",
-                        "recall_scope": note.scope,
+                        "recall_scope": addition.scope,
                     }
                 )
             },
         )
         if self.sdk_authority:
             if self.intake is None or self.write_queue is None:
-                raise RuntimeError("sdk_memory_note_intake_unavailable")
+                raise RuntimeError("sdk_memory_add_intake_unavailable")
             record = materialize_write_input(value, observed_at=now)
             with main_database(self.write_queue.database_path).read() as database:
                 existing = database.execute(
@@ -129,7 +137,7 @@ class MemoryNoteStore:
             if existing is not None:
                 current = self.require(record.evidence_id)
                 if current.verbatim != record.verbatim:
-                    raise ValueError("memory_note_request_conflict")
+                    raise ValueError("memory_add_conflict")
                 return current
             receipt = self.intake.submit_records(
                 (record,),
@@ -159,13 +167,13 @@ class MemoryNoteStore:
                 (SOURCE_ID,),
             ).fetchone()
             if grant and grant[0] is not None:
-                raise ValueError("memory_note_source_revoked")
+                raise ValueError("memory_add_source_revoked")
             existing = db.execute(
                 "SELECT verbatim FROM evidence WHERE evidence_id=?", (value.evidence_id,)
             ).fetchone()
             if existing:
-                if existing[0] != note.text:
-                    raise ValueError("memory_note_request_conflict")
+                if existing[0] != addition.text:
+                    raise ValueError("memory_add_conflict")
             else:
                 self.evidence.put(value, connection=db)
                 db.execute(
@@ -218,10 +226,10 @@ class MemoryNoteStore:
                 (SOURCE_ID,),
             ).fetchone()
         if grant is None or grant[0] is not None:
-            raise ValueError("memory_note_source_revoked")
+            raise ValueError("memory_add_source_revoked")
         return record
 
-    def receipt(self, evidence_id: str) -> MemoryNoteReceipt:
+    def receipt(self, evidence_id: str) -> MemoryAddReceipt:
         record = self.require(evidence_id)
         if self.sdk_authority:
             assert self.write_queue is not None
@@ -232,7 +240,7 @@ class MemoryNoteStore:
                 ).fetchone()[0]
             durable = self.write_queue.get(str(request_id))
             durable_state = durable.state if durable is not None else "failed"
-            mapped: MemoryNoteState = {
+            mapped: MemoryAddState = {
                 "pending": "pending",
                 "running": "running",
                 "waiting_for_model": "waiting_for_model",
@@ -241,7 +249,7 @@ class MemoryNoteStore:
                     "ready" if durable is not None and durable.sdk_memory_ids else "no_memories"
                 ),
             }.get(durable_state, "failed")
-            return MemoryNoteReceipt(
+            return MemoryAddReceipt(
                 evidence_id=evidence_id,
                 text=sanitize_model_input(record.verbatim),
                 created_at=record.created_at or record.imported_at,
@@ -250,7 +258,7 @@ class MemoryNoteStore:
                 error=durable.detail if durable is not None else "write_missing",
             )
         if self.processor is None:
-            raise RuntimeError("legacy_memory_note_processor_unavailable")
+            raise RuntimeError("legacy_memory_add_processor_unavailable")
         task = self.processor.tasks.task_for_evidence(evidence_id)
         memory_ids = []
         if task:
@@ -258,7 +266,7 @@ class MemoryNoteStore:
                 memory = self.processor.governance.get(output.memory_id, user_id="local")
                 if memory and memory.status is MemoryStatus.CONFIRMED:
                     memory_ids.append(memory.memory_id)
-        state: MemoryNoteState
+        state: MemoryAddState
         if task is None or task.status == MemoryTaskStatus.WAITING_FOR_MODEL:
             state = "waiting_for_model"
         elif task.status == MemoryTaskStatus.WAITING_FOR_PERMISSION:
@@ -274,7 +282,7 @@ class MemoryNoteStore:
         else:
             state = "failed"
         error = task.last_error_code if task else None
-        return MemoryNoteReceipt(
+        return MemoryAddReceipt(
             evidence_id=record.evidence_id,
             text=sanitize_model_input(record.verbatim),
             created_at=record.created_at or record.imported_at,
@@ -284,33 +292,7 @@ class MemoryNoteStore:
             error=error,
         )
 
-    def list(self) -> list[MemoryNoteReceipt]:
-        if self.sdk_authority:
-            assert self.write_queue is not None
-            with main_database(self.write_queue.database_path).read() as database:
-                ids = [
-                    str(row[0])
-                    for row in database.execute(
-                        "SELECT note_id FROM memory_note_requests ORDER BY created_at DESC LIMIT 50"
-                    )
-                ]
-            return [self.receipt(key) for key in ids]
-        with main_database(self.evidence.database_path).read() as db:
-            ids = [
-                row[0]
-                for row in db.execute(
-                    "SELECT e.evidence_id,o.raw_meta_json FROM evidence e "
-                    "JOIN source_grants g USING(user_id,source_id) "
-                    "JOIN evidence_origins o USING(evidence_id) WHERE e.user_id='local' "
-                    "AND e.source_id=? AND g.revoked_at IS NULL AND o.origin='manual_import' "
-                    "ORDER BY e.imported_at DESC,e.evidence_id LIMIT 50",
-                    (SOURCE_ID,),
-                )
-                if json.loads(row[1]).get("input_mode") == "direct_memory_note"
-            ]
-        return [self.receipt(key) for key in ids]
-
-    def receipt_for_request(self, request_id: UUID) -> MemoryNoteReceipt:
+    def receipt_for_request(self, request_id: UUID) -> MemoryAddReceipt:
         identity = str(request_id)
         if self.sdk_authority:
             probe = EvidenceInput(
@@ -338,107 +320,65 @@ class MemoryNoteStore:
         return self.receipt(str(row[0]))
 
 
-def memory_note_router(dependencies: Sequence[Depends]) -> APIRouter:
-    router = APIRouter(
-        prefix="/api/v1/memory-notes", tags=["memory-notes"], dependencies=dependencies
-    )
+def memory_add_router(dependencies: Sequence[Depends]) -> APIRouter:
+    """`POST /api/v2/memories` and `GET /api/v2/memories/additions/{request_id}`.
 
-    def store(request: Request) -> MemoryNoteStore:
-        return cast(MemoryNoteStore, request.app.state.memory_note_store)
+    Both paths are outside the single-segment `/api/v2/memories/{memory_id}`
+    routes; external (enveloped) callers are refused by
+    `require_external_endpoint` because neither is a broker read route.
+    """
+    router = APIRouter(prefix="/api/v2/memories", tags=["memories"], dependencies=dependencies)
 
-    async def schedule(
-        notes: MemoryNoteStore,
-        record: EvidenceRecord,
-        *,
-        readmit: bool = False,
-    ) -> MemoryNoteReceipt:
+    def store(request: Request) -> MemoryAdditionStore:
+        return cast(MemoryAdditionStore, request.app.state.memory_addition_store)
+
+    async def schedule(additions: MemoryAdditionStore, record: EvidenceRecord) -> None:
         try:
-            if notes.sdk_authority:
-                return await asyncio.to_thread(notes.receipt, record.evidence_id)
-            if notes.processor is None:
-                raise RuntimeError("legacy_memory_note_processor_unavailable")
-            if notes.intake is None:
+            if additions.sdk_authority:
+                return
+            if additions.processor is None:
+                raise RuntimeError("legacy_memory_add_processor_unavailable")
+            if additions.intake is None:
                 # Isolated tests construct the store without a queue.
-                await notes.processor.enqueue_conversation_off_thread(record)
+                await additions.processor.enqueue_conversation_off_thread(record)
             else:
-                # Production: submit to the durable queue first. The drain runs
-                # the same supervisor path, so create/process semantics are
-                # unchanged; replaying the same request returns the original
-                # `entry:<evidence_id>` job instead of a second HY call.
-                if readmit:
-                    # `/{evidence_id}/process` is the explicit retry signal.
-                    # It also revives pre-upgrade permission waiters.
-                    await asyncio.to_thread(notes.intake.queue.readmit_parked)
-                submitted = await asyncio.to_thread(
-                    notes.intake.submit_evidence,
+                # Production: submit to the durable queue. Replaying the same
+                # request returns the original `entry:<evidence_id>` job
+                # instead of a second HY call.
+                await asyncio.to_thread(
+                    additions.intake.submit_evidence,
                     record,
                     first_round=1,
                     last_round=1,
                     priority="live",
                 )
-                if readmit:
-                    await asyncio.to_thread(
-                        notes.intake.readmit_cancelled_evidence,
-                        record,
-                        job_id=submitted.record.job_id,
-                        first_round=1,
-                        last_round=1,
-                        priority="live",
-                    )
         except SecretStoreUnavailableError:
-            saved = await asyncio.to_thread(notes.receipt, record.evidence_id)
-            return saved.model_copy(
-                update={"state": "waiting_for_model", "error": "secure_storage_unavailable"}
-            )
-        return await asyncio.to_thread(notes.receipt, record.evidence_id)
+            # The receipt already reports the saved text; the queue retries
+            # once secure storage is back.
+            return
 
-    @router.post("", response_model=MemoryNoteReceipt, status_code=201)
-    async def create(
-        note: MemoryNoteInput,
+    @router.post("", response_model=MemoryAddReceipt, status_code=201)
+    async def add_memory(
+        addition: MemoryAddInput,
         request: Request,
         background: BackgroundTasks,
-    ) -> MemoryNoteReceipt:
-        notes = store(request)
+    ) -> MemoryAddReceipt:
+        additions = store(request)
         try:
-            record = await asyncio.to_thread(notes.save, note)
+            record = await asyncio.to_thread(additions.save, addition)
         except ValueError as error:
             raise HTTPException(409, str(error)) from error
-        saved = await asyncio.to_thread(notes.receipt, record.evidence_id)
-        background.add_task(schedule, notes, record)
+        saved = await asyncio.to_thread(additions.receipt, record.evidence_id)
+        background.add_task(schedule, additions, record)
         return saved
 
-    @router.get("", response_model=list[MemoryNoteReceipt])
-    def listing(request: Request) -> list[MemoryNoteReceipt]:
-        return store(request).list()
-
-    @router.get("/operations/{request_id}", response_model=MemoryNoteReceipt)
-    def operation(request_id: UUID, request: Request) -> MemoryNoteReceipt:
+    @router.get("/additions/{request_id}", response_model=MemoryAddReceipt)
+    def memory_add_status(request_id: UUID, request: Request) -> MemoryAddReceipt:
         try:
             return store(request).receipt_for_request(request_id)
         except KeyError as error:
-            raise HTTPException(404, "memory_note_operation_not_found") from error
-
-    @router.get("/{evidence_id}", response_model=MemoryNoteReceipt)
-    def get(evidence_id: str, request: Request) -> MemoryNoteReceipt:
-        try:
-            return store(request).receipt(evidence_id)
-        except KeyError as error:
-            raise HTTPException(404, "memory_note_not_found") from error
+            raise HTTPException(404, "memory_add_not_found") from error
         except ValueError as error:
             raise HTTPException(409, str(error)) from error
-
-    @router.post("/{evidence_id}/process", response_model=MemoryNoteReceipt)
-    async def process(evidence_id: str, request: Request) -> MemoryNoteReceipt:
-        notes = store(request)
-        try:
-            record = await asyncio.to_thread(notes.require, evidence_id)
-        except KeyError as error:
-            raise HTTPException(404, "memory_note_not_found") from error
-        except ValueError as error:
-            raise HTTPException(409, str(error)) from error
-        # This route is the explicit "the condition that parked it may have
-        # changed" signal (the person just granted consent or fixed the model),
-        # which is when `readmit_parked` is meant to run.
-        return await schedule(notes, record, readmit=True)
 
     return router

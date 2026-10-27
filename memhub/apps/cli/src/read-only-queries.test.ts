@@ -878,8 +878,11 @@ describe("CLI-21 memory reads", () => {
       layer: "L2_FACT",
       status: "active",
     });
-    expect(report.evidence).toEqual([]);
-    expect(report.history).toEqual([]);
+    // Schema 2, like add/update/delete; the v1-era always-empty
+    // `evidence`/`history` fields are gone.
+    expect(report.schema_version).toBe(2);
+    expect(report).not.toHaveProperty("evidence");
+    expect(report).not.toHaveProperty("history");
   });
 
   // Core registers /api/v2/memories/graph before /{memory_id}, and that static
@@ -1137,14 +1140,16 @@ describe("backup create target refusal is rejected, not usage_error", () => {
     let code: number;
     try {
       code = await run(
-        ["backup", "create", "--target", "/tmp/outside.db", "--yes", "--json"],
+        ["backup", "create", "--target", "/tmp/outside.db", "--json"],
         {},
       );
     } finally {
       streams.restore();
     }
     expect(code!).toBe(1);
-    const document = JSON.parse(streams.stderr());
+    // A result, on stdout like every --json document.
+    expect(streams.stderr()).toBe("");
+    const document = JSON.parse(streams.stdout());
     expect(document.status).not.toBe("usage_error");
     expect(document).toMatchObject({
       command: "backup",

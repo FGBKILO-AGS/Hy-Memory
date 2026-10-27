@@ -227,7 +227,7 @@ def _trailing_user_turn_is_open(turn: list[EvidenceRecord]) -> bool:
     return (
         _opens_turn(opener)
         and opener.content_kind is EvidenceContentKind.RAW_CONVERSATION
-        and not _is_memory_note(opener)
+        and not _is_hand_added_memory(opener)
     )
 
 
@@ -254,7 +254,7 @@ def _is_hy_input_turn(record: EvidenceRecord) -> bool:
     return _HOST_ENVELOPE.search(source[:2_000]) is None
 
 
-def _is_memory_note(record: EvidenceRecord) -> bool:
+def _is_hand_added_memory(record: EvidenceRecord) -> bool:
     meta = record.origin_meta.get(EvidenceOrigin.MANUAL_IMPORT)
     return (
         record.source_id == "one-memory-manual"

@@ -84,11 +84,11 @@ vi.mock("./api", async (importOriginal) => ({
   getModelProfiles: reads.profiles,
 }));
 vi.mock("./GraphWidthPrompt", () => ({ GraphWidthPrompt: () => null }));
-vi.mock("./MemoryNoteComposer", () => ({
-  MemoryNoteComposer: ({
+vi.mock("./MemoryAddComposer", () => ({
+  MemoryAddComposer: ({
     onPendingChange,
   }: {
-    onPendingChange?(note: {
+    onPendingChange?(addition: {
       evidenceId: string;
       text: string;
       state: string;
@@ -98,7 +98,7 @@ vi.mock("./MemoryNoteComposer", () => ({
       type="button"
       onClick={() =>
         onPendingChange?.({
-          evidenceId: "note-1",
+          evidenceId: "addition-1",
           text: "项目周会统一安排在周三上午。",
           state: "waiting_for_model",
         })
@@ -196,7 +196,7 @@ function setup() {
   reads.profiles.mockResolvedValue([]);
 }
 
-it("keeps a saved note visible while it waits for model processing", async () => {
+it("keeps an added memory visible while it waits for model processing", async () => {
   setup();
   render(<MemorySpace simplified onConfigureModel={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: "补充记忆" }));

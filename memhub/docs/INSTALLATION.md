@@ -39,7 +39,8 @@ memhub status
 4. 校验 HTTPS URL、重定向域名、文件大小与 SHA-256；
 5. 安全解压并交叉验证内部 manifest 的版本、build、commit、协议和逐文件哈希；
 6. 调用现有安装事务，注册用户级服务和受管 CLI 链接；
-7. 失败时回滚，并保留当前 Runtime 和 Memory 数据。
+7. 记忆数据迁移开始前失败会回滚，并保留当前 Runtime 和 Memory 数据；迁移开始后失败
+   保留新版本、拒绝启动（不会用旧版本打开数据），并输出迁移日志与反馈地址。
 
 不带 `--yes` 的 `memhub install` 只下载较小的 Release manifest 并展示计划；显式确认后才
 下载完整 Runtime。npm `postinstall` 不下载 Runtime、不注册服务、不修改 shell profile。

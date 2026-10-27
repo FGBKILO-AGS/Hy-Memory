@@ -1,20 +1,13 @@
-import type { MemoryNoteReceipt, ModelProfile } from "@one-memory/contracts";
-import { FilePlus2, RefreshCw, X } from "lucide-react";
+import type { MemoryAddReceipt, ModelProfile } from "@one-memory/contracts";
+import { FilePlus2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  getMemoryNoteOperation,
-  getMemoryNotes,
-  getModelProfiles,
-  processMemoryNote,
-  saveMemoryNote,
-} from "./api";
+import { addMemory, getMemoryAddStatus, getModelProfiles } from "./api";
 import { useMemoryLanguage } from "./memory-language";
 import { memoryWriteErrorText } from "./model-error-text";
 import { subscribePoll } from "./poll-scheduler";
 import { traceUiAction } from "./ui-trace";
-import { isDefiniteRefusal } from "./write-outcome";
 
-const states: Record<MemoryNoteReceipt["state"], string> = {
+const states: Record<MemoryAddReceipt["state"], string> = {
   waiting_for_model: "原话已保存，等待可用模型",
   waiting_for_permission: "正在等待整理",
   pending: "正在等待整理",
@@ -24,13 +17,87 @@ const states: Record<MemoryNoteReceipt["state"], string> = {
   no_memories: "原话已保存，未提取出可用记忆",
 };
 
-export interface PendingMemoryNote {
+export interface PendingMemoryAdd {
   evidenceId: string;
   text: string;
-  state: Exclude<MemoryNoteReceipt["state"], "ready" | "no_memories">;
+  state: Exclude<MemoryAddReceipt["state"], "ready" | "no_memories">;
 }
 
-export function MemoryNoteComposer({
+/** One addition this device made, with the request id its status is read by. */
+interface Addition {
+  requestId: string;
+  receipt: MemoryAddReceipt;
+}
+
+/** Core has no list of additions: this device remembers the request ids it
+ * submitted and reads each one's status from
+ * `GET /api/v2/memories/additions/{request_id}`. */
+export const RECENT_ADDITIONS_KEY = "memhub.memory-additions.recent";
+const RECENT_ADDITIONS_MAX = 20;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function readRecentAdditions(): string[] {
+  try {
+    const value: unknown = JSON.parse(
+      window.localStorage.getItem(RECENT_ADDITIONS_KEY) ?? "[]",
+    );
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((id): id is string => typeof id === "string" && UUID.test(id))
+      .slice(0, RECENT_ADDITIONS_MAX);
+  } catch {
+    return [];
+  }
+}
+
+function writeRecentAdditions(ids: string[]) {
+  try {
+    window.localStorage.setItem(
+      RECENT_ADDITIONS_KEY,
+      JSON.stringify(ids.slice(0, RECENT_ADDITIONS_MAX)),
+    );
+  } catch {
+    // Storage is a convenience for the recent list; the memory is saved.
+  }
+}
+
+function trackRecentAddition(requestId: string) {
+  writeRecentAdditions([
+    requestId,
+    ...readRecentAdditions().filter((id) => id !== requestId),
+  ]);
+}
+
+function isNotFound(reason: unknown): boolean {
+  return (
+    !!reason &&
+    typeof reason === "object" &&
+    (reason as { response?: { status?: unknown } }).response?.status === 404
+  );
+}
+
+/** Read the status of every remembered addition. Unknown ids (404) are
+ * forgotten; any other failure throws so the caller keeps its last state. */
+async function loadRecentAdditions(): Promise<Addition[]> {
+  const ids = readRecentAdditions();
+  const results = await Promise.allSettled(
+    ids.map((id) => getMemoryAddStatus(id)),
+  );
+  const additions: Addition[] = [];
+  const gone = new Set<string>();
+  results.forEach((result, index) => {
+    const requestId = ids[index] as string;
+    if (result.status === "fulfilled")
+      additions.push({ requestId, receipt: result.value });
+    else if (isNotFound(result.reason)) gone.add(requestId);
+    else throw result.reason;
+  });
+  if (gone.size)
+    writeRecentAdditions(readRecentAdditions().filter((id) => !gone.has(id)));
+  return additions;
+}
+
+export function MemoryAddComposer({
   onSaved,
   onOpenMemory,
   onConfigureModel,
@@ -40,13 +107,13 @@ export function MemoryNoteComposer({
   onSaved(): void;
   onOpenMemory(id: string): void;
   onConfigureModel(): void;
-  onPendingChange?(note: PendingMemoryNote | null): void;
+  onPendingChange?(addition: PendingMemoryAdd | null): void;
   suspended?: boolean;
 }) {
   const { text: copy } = useMemoryLanguage();
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
-  const [notes, setNotes] = useState<MemoryNoteReceipt[]>([]);
+  const [additions, setAdditions] = useState<Addition[]>([]);
   const [model, setModel] = useState<ModelProfile | null>(null);
   // Before the read settles, `model` is null for the same reason it is null
   // when nothing is configured. Showing the configured-model copy anyway made
@@ -58,7 +125,7 @@ export function MemoryNoteComposer({
   const [savedToast, setSavedToast] = useState("");
   const panel = useRef<HTMLElement>(null);
   const isOpen = useRef(false);
-  const notesRequest = useRef(0);
+  const additionsRequest = useRef(0);
   const intent = useRef<{ text: string; requestId: string } | null>(null);
   const completed = useRef(new Set<string>());
   const lastSaved = useRef<string | null>(null);
@@ -67,49 +134,52 @@ export function MemoryNoteComposer({
   const onPendingChangeRef = useRef(onPendingChange);
   onPendingChangeRef.current = onPendingChange;
 
-  const reportPending = useCallback((value: MemoryNoteReceipt[]) => {
-    const note = value.find(
-      (
-        item,
-      ): item is MemoryNoteReceipt & {
-        state: PendingMemoryNote["state"];
-      } => item.state !== "ready" && item.state !== "no_memories",
-    );
+  const reportPending = useCallback((value: Addition[]) => {
+    const pending = value
+      .map((item) => item.receipt)
+      .find(
+        (
+          item,
+        ): item is MemoryAddReceipt & {
+          state: PendingMemoryAdd["state"];
+        } => item.state !== "ready" && item.state !== "no_memories",
+      );
     onPendingChangeRef.current?.(
-      note
+      pending
         ? {
-            evidenceId: note.evidence_id,
-            text: note.text,
-            state: note.state,
+            evidenceId: pending.evidence_id,
+            text: pending.text,
+            state: pending.state,
           }
         : null,
     );
   }, []);
 
-  const refreshNotes = useCallback(
+  const refreshAdditions = useCallback(
     async (failure: string, notifyResults = false) => {
-      const request = ++notesRequest.current;
+      const request = ++additionsRequest.current;
       try {
-        const value = await getMemoryNotes();
-        if (!isOpen.current || request !== notesRequest.current) return;
-        setNotes(value);
+        const value = await loadRecentAdditions();
+        if (!isOpen.current || request !== additionsRequest.current) return;
+        setAdditions(value);
         reportPending(value);
         if (!notifyResults) return;
         const latest = value.find(
-          (note) => note.evidence_id === lastSaved.current,
+          (item) => item.receipt.evidence_id === lastSaved.current,
         );
-        if (latest) setNotice(states[latest.state]);
+        if (latest) setNotice(states[latest.receipt.state]);
         const newResults = value.filter(
-          (note) =>
-            note.state === "ready" && !completed.current.has(note.evidence_id),
+          ({ receipt }) =>
+            receipt.state === "ready" &&
+            !completed.current.has(receipt.evidence_id),
         );
         if (newResults.length) {
-          for (const note of newResults)
-            completed.current.add(note.evidence_id);
+          for (const { receipt } of newResults)
+            completed.current.add(receipt.evidence_id);
           onSavedRef.current();
         }
       } catch {
-        if (isOpen.current && request === notesRequest.current)
+        if (isOpen.current && request === additionsRequest.current)
           setError(failure);
       }
     },
@@ -122,7 +192,7 @@ export function MemoryNoteComposer({
     let cancelled = false;
     const before = document.activeElement;
     panel.current?.querySelector("textarea")?.focus();
-    void refreshNotes("最近添加的内容读取失败。");
+    void refreshAdditions("最近添加的内容读取失败。");
     setModelRead(false);
     getModelProfiles()
       .then((value) => {
@@ -138,14 +208,14 @@ export function MemoryNoteComposer({
     return () => {
       cancelled = true;
       isOpen.current = false;
-      notesRequest.current += 1;
+      additionsRequest.current += 1;
       if (before instanceof HTMLElement && before.isConnected) before.focus();
     };
-  }, [open, refreshNotes, suspended]);
+  }, [open, refreshAdditions, suspended]);
 
   useEffect(() => {
     if (open || suspended || !onPendingChange) return;
-    void getMemoryNotes()
+    void loadRecentAdditions()
       .then((value) => reportPending(value))
       .catch(() => {
         // The page already keeps the last known state when a background read
@@ -153,20 +223,20 @@ export function MemoryNoteComposer({
       });
   }, [open, onPendingChange, reportPending, suspended]);
 
-  const working = notes.some(
-    (note) => note.state === "pending" || note.state === "running",
+  const working = additions.some(
+    ({ receipt }) => receipt.state === "pending" || receipt.state === "running",
   );
   useEffect(() => {
     if (!open || suspended || !working) return;
     const stop = subscribePoll({
-      // The note list and the processing status are two surfaces; sharing one
-      // key would make one tick read the wrong endpoint for the other caller.
-      key: "note-processing",
+      // A key of its own: sharing one with another surface would make one
+      // tick read the wrong endpoint for the other caller.
+      key: "memory-add-processing",
       intervalMs: 1_500,
-      run: () => refreshNotes("整理状态暂时不可用，原话已保存。", true),
+      run: () => refreshAdditions("整理状态暂时不可用，原话已保存。", true),
     });
     return stop;
-  }, [open, working, refreshNotes, suspended]);
+  }, [open, working, refreshAdditions, suspended]);
 
   useEffect(() => {
     if (!savedToast) return;
@@ -177,15 +247,16 @@ export function MemoryNoteComposer({
   function close() {
     if (busy) return;
     isOpen.current = false;
-    notesRequest.current += 1;
+    additionsRequest.current += 1;
     setOpen(false);
   }
 
-  function remember(receipt: MemoryNoteReceipt) {
-    setNotes((current) => {
+  function remember(addition: Addition) {
+    trackRecentAddition(addition.requestId);
+    setAdditions((current) => {
       const next = [
-        receipt,
-        ...current.filter((note) => note.evidence_id !== receipt.evidence_id),
+        addition,
+        ...current.filter((item) => item.requestId !== addition.requestId),
       ];
       reportPending(next);
       return next;
@@ -196,28 +267,29 @@ export function MemoryNoteComposer({
     if (busy || !text.trim()) return;
     if (intent.current?.text !== text)
       intent.current = { text, requestId: crypto.randomUUID() };
+    const requestId = intent.current.requestId;
     setBusy(true);
     setError("");
     setNotice("");
     const trace = traceUiAction("memory", "submit");
-    const completeSave = (receipt: MemoryNoteReceipt) => {
-      remember(receipt);
+    const completeSave = (receipt: MemoryAddReceipt) => {
+      remember({ requestId, receipt });
       lastSaved.current = receipt.evidence_id;
       setText("");
       intent.current = null;
       setNotice("");
       setSavedToast("已保存，正在后台沉淀记忆");
       isOpen.current = false;
-      notesRequest.current += 1;
+      additionsRequest.current += 1;
       setOpen(false);
       onSaved();
     };
     try {
-      const receipt = await saveMemoryNote(
+      const receipt = await addMemory(
         {
           text,
           scope: "all-apps",
-          request_id: intent.current.requestId,
+          request_id: requestId,
         },
         trace.traceId,
       );
@@ -225,44 +297,17 @@ export function MemoryNoteComposer({
       trace.done("succeeded");
     } catch {
       try {
-        completeSave(await getMemoryNoteOperation(intent.current.requestId));
-        // The save landed but its response was lost; the note is still saved,
-        // so the interaction succeeded even though this attempt did not.
+        completeSave(await getMemoryAddStatus(requestId));
+        // The save landed but its response was lost; the memory is still
+        // saved, so the interaction succeeded even though this attempt did not.
         trace.done("succeeded", { reason: "recovered_from_operation" });
       } catch {
         setError("未能确认保存结果，输入已保留。重试不会重复添加。");
         // The copy already says the result is *unconfirmed*: neither the POST
-        // nor the receipt re-read came back. Only a definite refusal is a
+        // nor the status re-read came back. Only a definite refusal is a
         // failure, and here there is none, so the log must not claim one.
         trace.done("unknown", { reason: "save_result_unconfirmed" });
       }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function retry(note: MemoryNoteReceipt) {
-    if (busy) return;
-    setBusy(true);
-    setError("");
-    // Starting processing is a real write, so it needs its own chain.
-    const trace = traceUiAction("memory", "retry");
-    try {
-      remember(await processMemoryNote(note.evidence_id, trace.traceId));
-      trace.done("succeeded");
-    } catch (reason) {
-      const refused = isDefiniteRefusal(reason);
-      trace.done(refused ? "failed" : "unknown", {
-        reason: refused ? "note_process_failed" : "note_process_result_unknown",
-      });
-      // Only a definite refusal may be phrased as "did not start"; a timeout or
-      // 5xx means the outcome is unknown, and saying it failed would be a claim
-      // the UI cannot support.
-      setError(
-        refused
-          ? "整理未能开始，原话仍已保存。"
-          : "整理结果尚未确认，原话仍已保存。请刷新后核对。",
-      );
     } finally {
       setBusy(false);
     }
@@ -272,14 +317,14 @@ export function MemoryNoteComposer({
     <>
       <button
         type="button"
-        className="secondary memory-note-trigger"
-        data-tour-id="memory-note-trigger"
+        className="secondary memory-add-trigger"
+        data-tour-id="memory-add-trigger"
         onClick={() => setOpen(true)}
       >
         <FilePlus2 size={16} aria-hidden="true" /> {copy("添加记忆")}
       </button>
       {savedToast && (
-        <p className="memory-note-toast" role="status">
+        <p className="memory-add-toast" role="status">
           {copy(savedToast)}
         </p>
       )}
@@ -287,9 +332,9 @@ export function MemoryNoteComposer({
         <div className="consent-backdrop" hidden={suspended}>
           <section
             ref={panel}
-            className="consent-sheet memory-note-sheet"
+            className="consent-sheet memory-add-sheet"
             {...(suspended ? {} : { role: "dialog", "aria-modal": true })}
-            aria-labelledby="memory-note-title"
+            aria-labelledby="memory-add-title"
             onKeyDown={(event) => {
               if (suspended) return;
               if (event.key === "Escape") {
@@ -314,8 +359,8 @@ export function MemoryNoteComposer({
               }
             }}
           >
-            <header className="memory-note-heading">
-              <h2 id="memory-note-title">{copy("添加记忆")}</h2>
+            <header className="memory-add-heading">
+              <h2 id="memory-add-title">{copy("添加记忆")}</h2>
               <button
                 className="quiet"
                 type="button"
@@ -333,11 +378,11 @@ export function MemoryNoteComposer({
                 void save();
               }}
             >
-              <label className="memory-note-label" htmlFor="memory-note-text">
+              <label className="memory-add-label" htmlFor="memory-add-text">
                 {copy("记下这件事")}
               </label>
               <textarea
-                id="memory-note-text"
+                id="memory-add-text"
                 rows={5}
                 maxLength={12000}
                 value={text}
@@ -345,7 +390,7 @@ export function MemoryNoteComposer({
                 placeholder={copy("例如：项目周会不排在周五。")}
                 onChange={(event) => setText(event.target.value)}
               />
-              <p className="memory-note-model">
+              <p className="memory-add-model">
                 {copy("整理模型：")}
                 {model?.name ??
                   copy(modelRead ? "尚未配置，原话仍可保存" : "正在读取")}
@@ -375,58 +420,49 @@ export function MemoryNoteComposer({
                 </button>
               </div>
             </form>
-            {notes.length > 0 && (
+            {additions.length > 0 && (
               <section
-                className="memory-note-recent"
+                className="memory-add-recent"
                 aria-label={copy("最近添加")}
               >
                 <h3>{copy("最近添加")}</h3>
                 <ul>
-                  {notes.map((note) => (
-                    <li key={note.evidence_id}>
-                      <p>{note.text}</p>
-                      <small>{copy(states[note.state])}</small>
-                      {memoryWriteErrorText(note.error) && (
+                  {additions.map(({ requestId, receipt }) => (
+                    <li key={requestId}>
+                      <p>{receipt.text}</p>
+                      <small>{copy(states[receipt.state])}</small>
+                      {memoryWriteErrorText(receipt.error) && (
                         <p className="error-banner">
-                          {copy(memoryWriteErrorText(note.error) ?? "")}
+                          {copy(memoryWriteErrorText(receipt.error) ?? "")}
                         </p>
                       )}
-                      {note.error === "hy_memory_model_payment_required" && (
+                      {receipt.error === "hy_memory_model_payment_required" && (
                         <p className="error-banner">
                           {copy(
                             "模型服务要求检查余额或付款状态，原话仍已保存。",
                           )}
                         </p>
                       )}
-                      <div className="memory-note-actions">
-                        {note.memory_ids.map((id, index) => (
-                          <button
-                            key={id}
-                            type="button"
-                            className="quiet"
-                            onClick={() => {
-                              close();
-                              onOpenMemory(id);
-                            }}
-                          >
-                            {copy("查看记忆")}
-                            {note.memory_ids.length > 1 ? ` ${index + 1}` : ""}
-                          </button>
-                        ))}
-                        {(note.state === "failed" ||
-                          note.state === "waiting_for_model" ||
-                          note.state === "waiting_for_permission") && (
-                          <button
-                            type="button"
-                            className="quiet"
-                            disabled={busy}
-                            onClick={() => void retry(note)}
-                          >
-                            <RefreshCw size={14} aria-hidden="true" />
-                            {copy("重新整理")}
-                          </button>
-                        )}
-                      </div>
+                      {receipt.memory_ids.length > 0 && (
+                        <div className="memory-add-actions">
+                          {receipt.memory_ids.map((id, index) => (
+                            <button
+                              key={id}
+                              type="button"
+                              className="quiet"
+                              onClick={() => {
+                                close();
+                                onOpenMemory(id);
+                              }}
+                            >
+                              {copy("查看记忆")}
+                              {receipt.memory_ids.length > 1
+                                ? ` ${index + 1}`
+                                : ""}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>

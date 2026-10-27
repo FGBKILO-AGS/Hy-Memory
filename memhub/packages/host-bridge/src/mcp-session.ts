@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type { MemoryNoteReceipt, RecallRequest } from "@one-memory/contracts";
+import type { MemoryAddReceipt, RecallRequest } from "@one-memory/contracts";
 import {
   diagnosticTraceThroughBroker,
-  isMemoryNoteRequestId,
-  isMemoryNoteText,
-  MEMORY_NOTE_TEXT_MAX,
-  type MemoryNoteRequest,
-  memoryNoteThroughBroker,
+  isMemoryAddRequestId,
+  isMemoryAddText,
+  MEMORY_ADD_TEXT_MAX,
+  type MemoryAddBrokerRequest,
+  memoryAddThroughBroker,
   recallThroughBroker,
 } from "./broker-client.js";
 import { HOST_CONTEXT_TIMEOUT_MS } from "./context-protocol.js";
@@ -37,8 +37,8 @@ type Recall = (
 
 type Write = (
   discoveryPath: string,
-  request: MemoryNoteRequest,
-) => Promise<MemoryNoteReceipt>;
+  request: MemoryAddBrokerRequest,
+) => Promise<MemoryAddReceipt>;
 
 type DiagnosticTrace = (
   discoveryPath: string,
@@ -77,9 +77,9 @@ export class McpSession {
      * which is exactly the cross-project boundary the workspace design
      * draws. The host's own answer cannot be talked into being wrong. */
     private readonly workspacePath?: string,
-    /** One hand-added memory, through the broker to Core's memory notes —
+    /** One hand-added memory, through the broker to Core's `POST /api/v2/memories` —
      * the same entry the app's 添加记忆 uses. */
-    private readonly write: Write = memoryNoteThroughBroker,
+    private readonly write: Write = memoryAddThroughBroker,
     private readonly diagnosticTrace: DiagnosticTrace = diagnosticTraceThroughBroker,
     /** What the grant allows this installation to read.
      *
@@ -295,9 +295,9 @@ function recallToolDefinition() {
 
 /** One hand-added memory, the same entry as the app's 添加记忆.
  *
- * A conclusion, not a transcript: Core files it as a manual note and turns it
+ * A conclusion, not a transcript: Core files it as a hand-added memory and turns it
  * into memories asynchronously, in a lane ahead of history import. Neither
- * source nor scope is an argument; the note is always cross-app. */
+ * source nor scope is an argument; the memory is always cross-app. */
 function writeToolDefinition() {
   const title = "MemHub write";
   return {
@@ -319,7 +319,7 @@ function writeToolDefinition() {
         text: {
           type: "string",
           minLength: 1,
-          maxLength: MEMORY_NOTE_TEXT_MAX,
+          maxLength: MEMORY_ADD_TEXT_MAX,
           description: "The memory itself, in plain words. Must not be blank.",
         },
         request_id: {
@@ -334,7 +334,7 @@ function writeToolDefinition() {
       title,
       readOnlyHint: false,
       destructiveHint: false,
-      // Idempotent for a reused request_id: Core returns the original note.
+      // Idempotent for a reused request_id: Core returns the original addition.
       idempotentHint: true,
       openWorldHint: false,
     },
@@ -451,15 +451,12 @@ function parseWriteArgs(args: unknown):
       message:
         "MemHub_write accepts only text and request_id; source and scope are not arguments",
     };
-  if (!isMemoryNoteText(input.text))
+  if (!isMemoryAddText(input.text))
     return {
       ok: false,
-      message: `text must contain 1 to ${MEMORY_NOTE_TEXT_MAX} characters and not be blank`,
+      message: `text must contain 1 to ${MEMORY_ADD_TEXT_MAX} characters and not be blank`,
     };
-  if (
-    input.request_id !== undefined &&
-    !isMemoryNoteRequestId(input.request_id)
-  )
+  if (input.request_id !== undefined && !isMemoryAddRequestId(input.request_id))
     return { ok: false, message: "request_id must be a UUID" };
   return {
     ok: true,

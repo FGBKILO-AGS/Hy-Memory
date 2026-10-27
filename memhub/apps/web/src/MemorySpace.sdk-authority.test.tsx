@@ -35,7 +35,7 @@ vi.mock("./api", () => ({
   apiErrorCode: () => null,
 }));
 vi.mock("./GraphWidthPrompt", () => ({ GraphWidthPrompt: () => null }));
-vi.mock("./MemoryNoteComposer", () => ({ MemoryNoteComposer: () => null }));
+vi.mock("./MemoryAddComposer", () => ({ MemoryAddComposer: () => null }));
 vi.mock("./MemoryMap", () => ({
   MemoryMap: ({
     hidden,
