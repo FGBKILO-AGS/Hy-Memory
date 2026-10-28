@@ -1,3 +1,4 @@
+import re
 from pathlib import PurePosixPath
 
 from pydantic import JsonValue
@@ -23,7 +24,14 @@ from one_memory.imports.sources.parsing import (
     text_content,
     tool_blocks_evidence,
     tool_evidence_text,
+    tool_text_evidence,
 )
+
+#: Harness renames the session file when it bumps the record format, so the same
+#: envelope arrives as `session.jsonl`, `session.jsonl.zstd`, `session.v3.jsonl.zstd`,
+#: `session.v4.jsonl.zstd`, … Gating on the two original names dropped every
+#: session written by a newer Harness, silently and in bulk.
+SESSION_FILE_NAME = re.compile(r"^session(\.v[0-9]+)?\.jsonl(\.zstd)?$")
 
 DEEPSEEK_HARNESS_DESCRIPTOR = SourceDescriptor(
     source_id="deepseek-harness",
@@ -49,8 +57,8 @@ def create_deepseek_harness_adapter(
         grant=grant,
         parser=parse_deepseek_harness_record,
         source_version=source_version,
-        file_predicate=lambda source_file: (
-            source_file.relative_path.name in {"session.jsonl", "session.jsonl.zstd"}
+        file_predicate=lambda source_file: bool(
+            SESSION_FILE_NAME.match(source_file.relative_path.name)
         ),
         suffixes=frozenset({".jsonl", ".zstd"}),
         header_selector=_is_session_header,
@@ -153,6 +161,10 @@ def _tool_message(
     message = as_record(data.get("message"))
     if record.get("type") == "tool/result" and message is not None:
         text = tool_blocks_evidence(message.get("content"), block_types=frozenset({"tool-result"}))
+        if text is None:
+            # v4 dropped the wrapper: the same result arrives as plain text
+            # blocks, with `toolCallId`/`isError` moved onto the message.
+            text = tool_text_evidence(message.get("content"))
         message_id = first_string(message.get("id"), data.get("callId"))
     else:
         text = tool_evidence_text(data)

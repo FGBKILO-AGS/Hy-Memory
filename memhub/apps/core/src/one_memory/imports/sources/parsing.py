@@ -118,6 +118,19 @@ def tool_blocks_evidence(
     return _clip_tool_evidence("\n".join(lines)) if lines else None
 
 
+def tool_text_evidence(value: JsonValue | None) -> str | None:
+    """A tool result whose payload sits in plain `text` blocks.
+
+    Some hosts rewrite a structured `tool-result` block into an ordinary text
+    part on the result message. Without this the block carries no `content`,
+    `output` or `result` key, so the tool's answer would be dropped silently.
+    """
+    text = text_content(value, allowed_block_types=frozenset({"text"}))
+    if text is None:
+        return None
+    return _clip_tool_evidence(sanitize_model_input(text))
+
+
 def _clip_tool_evidence(text: str) -> str:
     if len(text) > TOOL_EVIDENCE_CHARACTERS:
         return text[:TOOL_EVIDENCE_CHARACTERS] + TOOL_EVIDENCE_TRUNCATED

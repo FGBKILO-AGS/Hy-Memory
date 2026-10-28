@@ -153,3 +153,204 @@ def test_the_adapter_has_two_independent_layers(tmp_path):
     assert not hasattr(parsed, "verbatim"), (
         "a record without the Harness data envelope must not become Evidence"
     )
+
+
+# Harness 0.2.x writes the same session envelope into a *versioned* file name
+# (`session.v3.jsonl.zstd` / `session.v4.jsonl.zstd`), and in v4 the tool output
+# left the `tool-result` block: `toolCallId`/`isError` moved onto the message and
+# the payload became a plain `text` block. Both changes were silent: the file name
+# gate dropped whole sessions, and the block gate dropped every tool result.
+V4_RECORDS = [
+    {
+        "type": "session",
+        "version": 4,
+        "id": "s4",
+        "cwd": "/private/project",
+        "isSeeded": False,
+        "delegationDepth": 0,
+    },
+    {
+        "type": "user/message",
+        "seq": 1,
+        "data": {
+            "id": "u4",
+            "role": "user",
+            "source": {"kind": "user"},
+            "content": [{"type": "text", "text": "v4 person turn"}],
+        },
+    },
+    {
+        "type": "tool/result",
+        "time": 1_700_000_000,
+        "data": {
+            "turn": "t1",
+            "step": "st1",
+            "message": {
+                "role": "user",
+                "source": {"kind": "tool"},
+                "toolCallId": "call_00_x",
+                "isError": False,
+                "id": "tr4",
+                "content": [{"type": "text", "text": "v4 tool output"}],
+            },
+        },
+    },
+]
+
+LEGACY_TOOL_RESULT_RECORDS = [
+    V4_RECORDS[0],
+    {
+        "type": "tool/result",
+        "time": 1_700_000_000,
+        "data": {
+            "turn": "t1",
+            "step": "st1",
+            "message": {
+                "role": "user",
+                "source": {"kind": "tool"},
+                "id": "tr4",
+                "content": [
+                    {
+                        "type": "tool-result",
+                        "toolCallId": "call_00_x",
+                        "content": "legacy tool output",
+                        "isError": False,
+                    }
+                ],
+            },
+        },
+    },
+]
+
+
+def write_zstd(root, relative: str, records: list[dict]) -> Path:
+    import zstandard
+
+    path = root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = "".join(json.dumps(record) + "\n" for record in records).encode()
+    path.write_bytes(zstandard.ZstdCompressor().compress(payload))
+    return path
+
+
+def test_a_rotated_copy_does_not_import(tmp_path):
+    """The name gate must stay anchored, not become a suffix match.
+
+    A real tree carries `session.jsonl.zstd.bak-<date>` beside the live file, and
+    the copy holds *older* turns — so de-duplication by message identity cannot
+    rescue a suffix match here: it would store a stale turn beside the live one.
+    The two files differ in message id on purpose; if they were identical this
+    test would pass for the wrong reason.
+    """
+    fixture = Source(tmp_path)
+    stale = {
+        "type": "user/message",
+        "seq": 1,
+        "data": {
+            "id": "stale-turn",
+            "role": "user",
+            "source": {"kind": "user"},
+            "content": [{"type": "text", "text": "stale turn from the backup copy"}],
+        },
+    }
+    fixture.write("live-run/session.jsonl", HEADLESS_RECORDS)
+    fixture.write("live-run/session.jsonl.zstd.bak-20260818-good", [HEADLESS_RECORDS[0], stale])
+
+    result = fixture.run()
+    assert result.status is ImportStatus.COMPLETED
+    assert result.stored == 1, (
+        f"a rotated `.bak-` copy must not import its older turn, got stored={result.stored}"
+    )
+    stored = [row.verbatim for row in fixture.evidence.list_extractable(limit=50)]
+    assert "stale turn from the backup copy" not in stored
+
+
+def test_the_versioned_session_file_name_imports(tmp_path):
+    """A v4 session must import by name, not be dropped as unknown.
+
+    Mutation: this is the `file_predicate` layer alone — the same records read
+    from `session.jsonl` already import, so a failure here is the name, not the
+    parser.
+    """
+    fixture = Source(tmp_path)
+    write_zstd(fixture.root, "v4-run/session.v4.jsonl.zstd", V4_RECORDS)
+
+    result = fixture.run()
+    assert result.status is ImportStatus.COMPLETED
+    assert result.stored == 2, (
+        f"a `session.v4.jsonl.zstd` must import its turns, got stored={result.stored}"
+    )
+    stored = [row.verbatim for row in fixture.evidence.list_extractable(limit=50)]
+    assert "v4 person turn" in stored
+
+
+def test_a_v4_tool_result_reaches_evidence(tmp_path):
+    """v4 moved the payload out of the `tool-result` block; it must not vanish.
+
+    Parsed directly, so the file-name gate cannot mask or cause this.
+    """
+    from one_memory.imports.sources.common import SourceRecordContext
+    from one_memory.imports.sources.deepseek_harness import (
+        parse_deepseek_harness_record,
+    )
+
+    context = SourceRecordContext(
+        file_key="k",
+        relative_path="v4-run/session.v4.jsonl.zstd",
+        ordinal="k:2",
+        header=V4_RECORDS[0],
+    )
+    parsed = parse_deepseek_harness_record(V4_RECORDS[2], context)
+    assert getattr(parsed, "verbatim", None) == "v4 tool output", (
+        "a v4 `tool/result` whose content is a plain text block must still become "
+        f"tool evidence, got {parsed!r}"
+    )
+
+    # The older shape must keep working, unchanged, beside it.
+    legacy = parse_deepseek_harness_record(
+        LEGACY_TOOL_RESULT_RECORDS[1],
+        SourceRecordContext(
+            file_key="k2",
+            relative_path="old-run/session.jsonl",
+            ordinal="k2:1",
+            header=LEGACY_TOOL_RESULT_RECORDS[0],
+        ),
+    )
+    assert "legacy tool output" in legacy.verbatim
+
+
+def test_one_session_split_across_two_files_stores_each_message_once(tmp_path):
+    """Harness upgraded mid-session, so one conversation lives in two files.
+
+    Widening the name gate must not mint a second Evidence row for the turn both
+    files carry: identity is `conversation_id + message_id`, not the file.
+    """
+    fixture = Source(tmp_path)
+    shared = {
+        "type": "user/message",
+        "seq": 1,
+        "data": {
+            "id": "shared-turn",
+            "role": "user",
+            "source": {"kind": "user"},
+            "content": [{"type": "text", "text": "turn written before the upgrade"}],
+        },
+    }
+    header = V4_RECORDS[0]
+    fixture.write("split-run/session.jsonl", [header, shared])
+    write_zstd(
+        fixture.root,
+        "split-run/session.v4.jsonl.zstd",
+        [header, shared, V4_RECORDS[1]],
+    )
+
+    result = fixture.run()
+    assert result.status is ImportStatus.COMPLETED
+    assert fixture.evidence.count() == 2, (
+        "two files, three records with a header and a turn each: the shared turn "
+        "must store once and the v4-only turn once, got "
+        f"{fixture.evidence.count()}"
+    )
+    stored = sorted(row.verbatim for row in fixture.evidence.list_extractable(limit=50))
+    assert stored.count("turn written before the upgrade") == 1
+    assert stored == sorted(["turn written before the upgrade", "v4 person turn"])
