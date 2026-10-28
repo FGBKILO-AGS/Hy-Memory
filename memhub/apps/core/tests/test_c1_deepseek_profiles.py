@@ -233,36 +233,32 @@ def write_zstd(root, relative: str, records: list[dict]) -> Path:
     return path
 
 
-def test_a_rotated_copy_does_not_import(tmp_path):
-    """The name gate must stay anchored, not become a suffix match.
+def test_a_multi_digit_version_bump_still_imports(tmp_path):
+    """The version segment is `v<digits>`, not a single digit.
 
-    A real tree carries `session.jsonl.zstd.bak-<date>` beside the live file, and
-    the copy holds *older* turns — so de-duplication by message identity cannot
-    rescue a suffix match here: it would store a stale turn beside the live one.
-    The two files differ in message id on purpose; if they were identical this
-    test would pass for the wrong reason.
+    This one is guarded by mutation: narrowing `[0-9]+` to `[0-9]` turns it red.
+    An earlier version of this test asserted that a rotated `session.jsonl.bak-…`
+    copy stays out; it kept passing under every loosening of the pattern (the
+    extension gate rejects that name before the file predicate runs, and
+    `re.match` anchors the head on its own), so it pinned nothing and was
+    dropped rather than kept as a green decoration.
     """
     fixture = Source(tmp_path)
-    stale = {
-        "type": "user/message",
-        "seq": 1,
-        "data": {
-            "id": "stale-turn",
-            "role": "user",
-            "source": {"kind": "user"},
-            "content": [{"type": "text", "text": "stale turn from the backup copy"}],
-        },
-    }
-    fixture.write("live-run/session.jsonl", HEADLESS_RECORDS)
-    fixture.write("live-run/session.jsonl.zstd.bak-20260818-good", [HEADLESS_RECORDS[0], stale])
+    # The envelope carries its own version, so a `v10` file name must not be
+    # paired with a `version: 4` header — that mismatch is a fixture bug, not a
+    # gate under test.
+    header10 = {**V4_RECORDS[0], "version": 10}
+    write_zstd(
+        fixture.root,
+        "future-run/session.v10.jsonl.zstd",
+        [header10, *V4_RECORDS[1:]],
+    )
 
     result = fixture.run()
     assert result.status is ImportStatus.COMPLETED
-    assert result.stored == 1, (
-        f"a rotated `.bak-` copy must not import its older turn, got stored={result.stored}"
+    assert result.stored == 2, (
+        f"a two-digit version bump must still be read, got stored={result.stored}"
     )
-    stored = [row.verbatim for row in fixture.evidence.list_extractable(limit=50)]
-    assert "stale turn from the backup copy" not in stored
 
 
 def test_the_versioned_session_file_name_imports(tmp_path):
